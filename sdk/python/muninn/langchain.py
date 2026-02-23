@@ -25,35 +25,17 @@ import concurrent.futures
 import textwrap
 from typing import Any, Dict, List, Optional
 
+# Import LangChain's BaseMemory only for the class hierarchy — so that
+# LangChain chains recognise MuninnDBMemory as a valid memory backend.
+# When LangChain is not installed the class still works for standalone use
+# (activation-only workflows, SDK demos); it just won't plug into chains.
 try:
-    from langchain_core.memory import BaseMemory
+    from langchain_core.memory import BaseMemory as _Base
 except ImportError:
     try:
-        from langchain.memory import BaseMemory  # type: ignore[no-redef]
+        from langchain.memory import BaseMemory as _Base  # type: ignore[no-redef]
     except ImportError:
-        try:
-            from pydantic import BaseModel as BaseMemory  # type: ignore[no-redef,assignment]
-        except ImportError:
-            # Neither LangChain nor Pydantic is installed. Provide a minimal
-            # stub so MuninnDBMemory can be imported and used standalone
-            # (activation-only workflows, SDK demos).
-            # Full LangChain chain integration requires:
-            #   pip install muninn-python[langchain]
-            class BaseMemory:  # type: ignore[no-redef]
-                """Minimal stub: accepts field kwargs and sets them as attributes."""
-                def __init__(self, **kwargs: object) -> None:
-                    # Apply class-level field defaults (skip properties, methods,
-                    # and descriptors which can't be set as instance attributes).
-                    _skip = (property, classmethod, staticmethod)
-                    for cls in reversed(type(self).__mro__):
-                        for name, value in vars(cls).items():
-                            if name.startswith("_"):
-                                continue
-                            if callable(value) or isinstance(value, _skip):
-                                continue
-                            object.__setattr__(self, name, value)
-                    for key, value in kwargs.items():
-                        object.__setattr__(self, key, value)
+        _Base = object  # type: ignore[assignment,misc]
 
 from .client import MuninnClient
 from .types import ActivationItem
@@ -75,7 +57,7 @@ def _run_sync(coro: Any) -> Any:
         return asyncio.run(coro)
 
 
-class MuninnDBMemory(BaseMemory):
+class MuninnDBMemory(_Base):  # type: ignore[misc]
     """LangChain memory backend powered by MuninnDB.
 
     Each conversation turn is stored as a single engram (human input + AI output).
@@ -83,9 +65,9 @@ class MuninnDBMemory(BaseMemory):
     input using semantic similarity, Hebbian association weights, and decay curves —
     returning only what is genuinely relevant right now, not a raw chat buffer.
 
-    Attributes:
+    Args:
         base_url:       MuninnDB server URL (default: http://localhost:8475)
-        token:          Optional Bearer token if MCP auth is enabled
+        token:          Optional Bearer token if vault auth is enabled
         vault:          Vault name to store memories in (default: "default")
         max_results:    Max memories to surface per activation (default: 10)
         memory_key:     Key injected into chain inputs (default: "history")
@@ -97,18 +79,27 @@ class MuninnDBMemory(BaseMemory):
                         Useful when you want to inspect scores or metadata.
     """
 
-    base_url: str = "http://localhost:8475"
-    token: Optional[str] = None
-    vault: str = "default"
-    max_results: int = 10
-    memory_key: str = "history"
-    input_key: Optional[str] = None
-    human_prefix: str = "Human"
-    ai_prefix: str = "AI"
-    return_docs: bool = False
-
-    class Config:
-        arbitrary_types_allowed = True
+    def __init__(
+        self,
+        base_url: str = "http://localhost:8475",
+        token: Optional[str] = None,
+        vault: str = "default",
+        max_results: int = 10,
+        memory_key: str = "history",
+        input_key: Optional[str] = None,
+        human_prefix: str = "Human",
+        ai_prefix: str = "AI",
+        return_docs: bool = False,
+    ) -> None:
+        self.base_url = base_url
+        self.token = token
+        self.vault = vault
+        self.max_results = max_results
+        self.memory_key = memory_key
+        self.input_key = input_key
+        self.human_prefix = human_prefix
+        self.ai_prefix = ai_prefix
+        self.return_docs = return_docs
 
     # ── Public LangChain interface ───────────────────────────────────────────
 
