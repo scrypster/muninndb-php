@@ -8,19 +8,20 @@ MuninnDB is a purpose-built cognitive database. It ships as a single Go binary. 
 
 ```
 Consumers (AI agents, applications, Claude, Cursor)
-    ↓ MBP / REST / MCP
+    ↓ MBP / REST / gRPC / MCP
 ┌─────────────────────────────────────────────────────┐
 │  Interface Layer                                     │
 │  8474: MBP (native binary protocol, TCP)            │
 │  8475: REST API (JSON)                              │
-│  8750: MCP (JSON-RPC)                               │
 │  8476: Web UI + health + metrics                    │
+│  8477: gRPC (protocol buffers, TCP)                 │
+│  8750: MCP (JSON-RPC)                               │
 └────────────────────────┬────────────────────────────┘
                          ↓
 ┌─────────────────────────────────────────────────────┐
 │  Plugin Layer (optional, zero required)             │
-│  • muninndb-embed: HNSW vectors + retroactive       │
-│  • muninndb-enrich: LLM summaries + entities        │
+│  • Embed: HNSW vectors + retroactive indexing       │
+│  • Enrich: LLM-powered semantic analysis            │
 └────────────────────────┬────────────────────────────┘
                          ↓
 ┌─────────────────────────────────────────────────────┐
@@ -48,7 +49,7 @@ Consumers (AI agents, applications, Claude, Cursor)
 └─────────────────────────────────────────────────────┘
 ```
 
-The plugin layer is intentionally optional. MuninnDB without any plugins is a fully functional cognitive database: full-text search, decay, Hebbian association, contradiction detection, Bayesian confidence updates, and graph traversal all work without an embedding model or LLM. The embed plugin adds vector search. The enrich plugin adds semantic contradiction detection and LLM-powered enrichment. Neither is required.
+The plugin layer is intentionally optional. MuninnDB without any plugins is a fully functional cognitive database: full-text search, decay, Hebbian association, contradiction detection, Bayesian confidence updates, and graph traversal all work without an embedding model or LLM. The embed plugin is configured via env vars (MUNINN_OLLAMA_URL, MUNINN_OPENAI_KEY, MUNINN_VOYAGE_KEY) and adds vector search. The enrich plugin is configured via MUNINN_ENRICH_URL and adds semantic contradiction detection and LLM-powered enrichment. Neither is required.
 
 ---
 
@@ -244,7 +245,7 @@ Thin indexes for lifecycle state, tag membership, and creator. Used for filter o
 
 ## 6. Wire Protocols
 
-Three protocols are currently active. All share the same underlying engine — they are interface adapters, not separate implementations.
+Four protocols are currently active. All share the same underlying engine — they are interface adapters, not separate implementations.
 
 ### MBP — Port 8474 (Muninn Binary Protocol)
 
@@ -258,12 +259,15 @@ MessagePack payload. The correlation ID enables pipelining — a client can send
 
 22 message types covering all CRUD operations, ACTIVATE, subscription management, and admin commands. This is the lowest-latency protocol. Use it for any client where you control the implementation.
 
+### gRPC — Port 8477
+
+Protocol buffers over HTTP/2. Streaming and unary RPCs for all core operations: Write, Read, Activate, Link, Forget, Stat, Subscribe. API key authentication via "authorization" Bearer token or "x-api-key" metadata header. Supports keepalive, automatic reconnection, and multiplexing over a single HTTP/2 connection. Medium latency; excellent for polyglot systems with gRPC tooling available.
+
 ### REST — Port 8475
 
 JSON over HTTP. Standard resource-oriented API:
 - `POST /api/engrams` — write
 - `GET /api/engrams/:id` — point read
-- `PUT /api/engrams/:id` — update
 - `DELETE /api/engrams/:id` — state transition (not hard delete by default)
 - `POST /api/activate` — activation query
 - `GET /api/admin/*` — administrative operations
@@ -304,7 +308,27 @@ Browser-based UI for browsing engrams, visualizing the association graph, and mo
 
 ---
 
-## 7. The Muninn Operation Log (MOL)
+## 7. Major Features and Subsystems
+
+**Cluster/HA** — Cortex/Lobe replication and consensus coordination via internal/replication/, enabling horizontal scaling and fault tolerance.
+
+**MQL Query Language** — Multi-vault query language in internal/query/mql/ for composing complex activation and link traversal queries.
+
+**Vault Plasticity** — Dynamic vault sizing and schema adaptability in internal/auth/plasticity.go, allowing vaults to grow and reshape without full rebuilds.
+
+**Novelty Detection** — Semantic change detection in internal/engine/novelty/, identifying engrams that represent genuinely new concepts.
+
+**Vault Coherence Score** — Consistency metric in internal/engine/coherence/, measuring the quality of association weights and contradiction resolution.
+
+**Episodic Store** — Temporal memory for session context and activation history in internal/episodic/, enabling time-aware retrieval.
+
+**Provenance Tracking** — Complete audit trail in internal/provenance/, recording the origin and transformation history of every engram.
+
+**Schema Versioning** — Multi-version schema support in internal/replication/schema_version.go, enabling rolling upgrades and backward compatibility.
+
+---
+
+## 8. The Muninn Operation Log (MOL)
 
 The MOL is MuninnDB's write-ahead log, backed by Pebble. Every write operation is logged and fsynced before the client ACK is sent.
 
@@ -316,7 +340,7 @@ Log entries are compacted once they have been confirmed present in the main KV s
 
 ---
 
-## 8. Performance Targets
+## 9. Performance Targets
 
 | Operation | Target | Notes |
 |---|---|---|
@@ -331,7 +355,7 @@ The write ACK target is a hard guarantee. The query targets are design targets �
 
 ---
 
-## 9. Scale Characteristics
+## 10. Scale Characteristics
 
 | Tier | Engrams | Disk | Deployment |
 |---|---|---|---|

@@ -88,70 +88,55 @@ Non-blocking async channel per subscriber. If the subscriber's channel is full b
 
 ## 5. Using Triggers
 
-### Basic Watch
+### Basic Subscribe (Go SDK)
 
 ```go
-client := muninn.New("localhost:8747")
-mem := client.Vault("my-project")
+client := muninn.NewClient("http://localhost:8475", token)
+pushCh, err := client.Subscribe(ctx, "my-project")
+if err != nil {
+    log.Fatal(err)
+}
 
-err := mem.Watch(ctx, "payment service architecture",
-    muninn.WithThreshold(0.7),
-    muninn.OnEngram(func(e muninn.Engram) {
-        fmt.Printf("[MEMORY] %s: %s\n", e.Concept, e.Content)
-    }),
-    muninn.OnContradiction(func(a, b muninn.Engram) {
-        fmt.Printf("[CONFLICT] %s contradicts %s\n", a.Concept, b.Concept)
-    }),
-)
+go func() {
+    for push := range pushCh {
+        fmt.Printf("[MEMORY] Trigger: %s, Score: %.2f\n", push.Trigger, push.Score)
+        if push.Engram != nil {
+            fmt.Printf("[ENGRAM] %s: %s\n", push.Engram.Concept, push.Engram.Content)
+        }
+    }
+}()
 ```
 
-The `Watch` call returns immediately. Delivery is via gRPC streaming. The callback fires on the trigger system's schedule, not yours.
+The `Subscribe` call opens a long-lived SSE (Server-Sent Events) connection via GET /api/subscribe. Delivery is push-based: the database sends events as they occur. The channel closes when the context is cancelled or the connection fails.
 
-### Trigger Class Filtering
+### Subscribe with Context and Threshold
 
 ```go
-// Only care about new writes, not score drift
-err := mem.Watch(ctx, "database architecture",
-    muninn.WithThreshold(0.8),
-    muninn.WithTriggerClasses(muninn.TriggerNewWrite, muninn.TriggerContradiction),
-    muninn.OnEngram(func(e muninn.Engram) {
-        // fired only on new_write and contradiction events
-    }),
-)
+// The Subscribe method connects to GET /api/subscribe with query parameters
+// to define semantic matching conditions
+q := url.Values{}
+q.Set("vault", "my-project")
+q.Set("context", "database architecture")
+q.Set("threshold", "0.8")
+q.Set("push_on_write", "true")
+
+url := "http://localhost:8475/api/subscribe?" + q.Encode()
+// Then use client.Subscribe(ctx, vault) which encapsulates this
+
+pushCh, err := client.Subscribe(ctx, "my-project")
+if err != nil {
+    log.Fatal(err)
+}
+
+// Process pushes as they arrive
+for push := range pushCh {
+    if push.Engram != nil && push.Score > 0.8 {
+        fmt.Printf("[MATCH] %s (score: %.2f)\n", push.Engram.Concept, push.Score)
+    }
+}
 ```
 
-### Multiple Contexts
-
-```go
-// One subscription, multiple context strings
-// Fires if the engram is relevant to any of them
-err := mem.Watch(ctx, []string{
-    "payment retry logic",
-    "idempotency key implementation",
-    "exponential backoff strategy",
-},
-    muninn.WithThreshold(0.65),
-    muninn.OnEngram(func(e muninn.Engram) {
-        // relevant to at least one context string above 0.65
-    }),
-)
-```
-
-### Vault Scope
-
-```go
-// Scoped to a single vault
-mem := client.Vault("payment-service")
-err := mem.Watch(ctx, "charge deduplication", muninn.WithThreshold(0.7), ...)
-
-// Cross-vault (global scope — use with a higher threshold)
-err := client.WatchGlobal(ctx, "payment system architecture",
-    muninn.WithThreshold(0.85),
-    muninn.OnEngram(func(e muninn.Engram) {
-        fmt.Printf("[VAULT: %s] %s\n", e.VaultID, e.Concept)
-    }),
-)
-```
+Multiple contexts are passed via repeated query params (context=value1&context=value2). The subscription fires when any context matches above the threshold.
 
 ---
 
@@ -160,33 +145,73 @@ err := client.WatchGlobal(ctx, "payment system architecture",
 The canonical integration for AI agents looks like this:
 
 ```go
-func RunAgent(ctx context.Context, task string) {
-    mem := client.Vault("agent-session")
+func RunAgent(ctx context.Context, task string) error {
+    client := muninn.NewClient("http://localhost:8475", token)
 
     // Subscribe at session start
     // The DB will push memories as they become relevant — no polling
-    mem.Watch(ctx, task,
-        muninn.WithThreshold(0.7),
-        muninn.OnEngram(func(e muninn.Engram) {
-            // Inject into the agent's context window before next LLM call
-            agent.InjectContext(e.Content)
-        }),
-        muninn.OnContradiction(func(a, b muninn.Engram) {
-            // Surface the conflict — let the agent reason about it
-            agent.InjectConflict(a.Content, b.Content)
-        }),
-    )
+    pushCh, err := client.Subscribe(ctx, "agent-session")
+    if err != nil {
+        return err
+    }
 
-    // Agent works; the DB handles what's relevant
-    agent.Run(ctx, task)
+    // Process pushes in a background goroutine
+    go func() {
+        for push := range pushCh {
+            if push.Engram == nil {
+                continue
+            }
+            // Inject into the agent's context window before next LLM call
+            agent.InjectContext(push.Engram.Content)
+
+            // Contradictions (push.Trigger == "contradiction_detected") get highest priority
+            if push.Trigger == "contradiction_detected" {
+                agent.InjectWarning("Contradiction detected: " + push.Why)
+            }
+        }
+    }()
+
+    // Agent works; the DB handles what's relevant and pushes to the channel
+    return agent.Run(ctx, task)
 }
+```
+
+### Python SDK Example
+
+```python
+import asyncio
+from muninn.client import MuninnClient
+
+async def run_agent(task: str):
+    async with MuninnClient("http://localhost:8475", token=token) as client:
+        # Subscribe to semantic triggers via SSE
+        stream = client.subscribe(vault="agent-session", push_on_write=True, threshold=0.7)
+
+        # Process pushes in a background task
+        async def handle_pushes():
+            async for push in stream:
+                if push.engram:
+                    # Inject into agent's context window
+                    agent.inject_context(push.engram.content)
+                    if push.trigger == "contradiction_detected":
+                        agent.inject_warning(f"Contradiction: {push.why}")
+
+        # Start push handler
+        handler = asyncio.create_task(handle_pushes())
+
+        try:
+            # Agent works while DB pushes relevant memories
+            await agent.run(task)
+        finally:
+            await stream.close()
+            handler.cancel()
 ```
 
 The session flow:
 
-1. **Session start** — Create a Watch subscription for the agent's task context. One call. Done.
+1. **Session start** — Open a Subscribe connection for the agent's task context. One call establishes the SSE stream.
 
-2. **As the agent works** — Memories relevant to the task are pushed automatically. The agent doesn't poll. It receives.
+2. **As the agent works** — Memories relevant to the task are pushed automatically to the stream. The agent doesn't poll. It receives.
 
 3. **Before each LLM call** — The agent's context window already contains the most relevant memories. No explicit retrieval query needed at each step.
 

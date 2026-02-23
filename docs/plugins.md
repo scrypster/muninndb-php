@@ -6,17 +6,19 @@
 
 ## 1. Three Tiers, One Guarantee
 
-MuninnDB's plugin system has a single non-negotiable constraint: **no plugin ever touches the synchronous read/write path.** Install the Embed plugin and your write latency doesn't change. Install the Enrich plugin and your ACTIVATE queries don't wait for LLM calls. All plugin work is async. All of it is retroactive. None of it is in your critical path.
+MuninnDB's plugin system has a single non-negotiable constraint: **no plugin ever touches the synchronous read/write path.** Enable the Embed plugin and your write latency doesn't change. Enable the Enrich plugin and your ACTIVATE queries don't wait for LLM calls. All plugin work is async. All of it is retroactive. None of it is in your critical path.
 
 The three tiers build on each other:
 
 | Tier | Plugin | Requires | What it adds |
 |------|--------|----------|--------------|
 | 1 | Core | nothing | Everything. Ships in the binary. |
-| 2 | Embed (`muninndb-embed`) | Tier 1 | Vector index, semantic recall, embedding providers |
-| 3 | Enrich (`muninndb-enrich`) | Tier 2 | LLM summaries, entity extraction, typed relationships, semantic contradiction detection |
+| 2 | Embed | Tier 1 | Vector index, semantic recall, embedding providers |
+| 3 | Enrich | Tier 2 | LLM summaries, entity extraction, typed relationships, semantic contradiction detection |
 
 Tier 1 is not a stripped-down version of the database. It is the complete cognitive database. Tiers 2 and 3 make it smarter.
+
+**Important:** Embed and Enrich are in-process plugins compiled into the MuninnDB binary. They are not separate executables or binaries. They are activated at startup via environment variables, not loaded dynamically.
 
 ---
 
@@ -57,15 +59,24 @@ With all three streams active, ACTIVATE finds engrams that match by text, engram
 
 ### Installation and Configuration
 
+Embed is activated by setting the `MUNINN_OLLAMA_URL`, `MUNINN_OPENAI_KEY`, or `MUNINN_VOYAGE_KEY` environment variable when starting the MuninnDB server:
+
 ```bash
 # Ollama — local, zero API cost, works offline
-muninndb-embed -provider=ollama -model=nomic-embed-text
+export MUNINN_OLLAMA_URL="http://localhost:11434/llama2"
+muninn server
 
 # OpenAI
-muninndb-embed -provider=openai -model=text-embedding-3-small
+export MUNINN_OPENAI_KEY="sk-..."
+muninn server
 
 # Voyage AI — optimized for retrieval tasks
-muninndb-embed -provider=voyage -model=voyage-3
+export MUNINN_VOYAGE_KEY="pa-..."
+muninn server
+
+# Bundled local model (if available from release assets)
+# Default behavior when MUNINN_LOCAL_EMBED is not explicitly set to "0"
+muninn server
 ```
 
 Provider comparison:
@@ -75,6 +86,7 @@ Provider comparison:
 | Ollama | Zero (local compute) | ~5–50ms | Full (local) | Development, sensitive data, offline |
 | OpenAI | Per token | ~50–200ms | API | General production |
 | Voyage AI | Per token | ~50–150ms | API | Retrieval-optimized production |
+| Bundled local | Zero (built-in) | ~10–100ms | Full (local) | Development, deployments without external APIs |
 
 ### Retroactive Enrichment
 
@@ -116,15 +128,22 @@ Enrich catches these. The LLM reads both engrams together, reasons about their c
 
 ### Installation and Configuration
 
+Enrich is activated by setting the `MUNINN_ENRICH_URL` environment variable (and optionally `MUNINN_ENRICH_API_KEY` or provider-specific keys) when starting the MuninnDB server:
+
 ```bash
 # Ollama — local, zero cost
-muninndb-enrich -provider=ollama -model=llama3.2
+export MUNINN_ENRICH_URL="ollama://localhost:11434/llama3.2"
+muninn server
 
 # OpenAI — gpt-4o-mini for cost, gpt-4o for quality
-muninndb-enrich -provider=openai -model=gpt-4o-mini
+export MUNINN_ENRICH_URL="openai://gpt-4o-mini"
+export MUNINN_ENRICH_API_KEY="sk-..."
+muninn server
 
 # Anthropic
-muninndb-enrich -provider=anthropic -model=claude-haiku-4-5
+export MUNINN_ENRICH_URL="anthropic://claude-haiku-4-5-20251001"
+export MUNINN_ANTHROPIC_KEY="sk-ant-..."
+muninn server
 ```
 
 Provider comparison:
@@ -139,20 +158,20 @@ Provider comparison:
 
 ### Retroactive Enrichment
 
-Same guarantee as Tier 2: install the plugin, walk away. The retroactive processor enriches existing engrams in the background — highest relevance first, zero impact on the read/write path.
+Same guarantee as Tier 2: enable the plugin, walk away. The retroactive processor enriches existing engrams in the background — highest relevance first, zero impact on the read/write path.
 
-Enrichment jobs are tracked. If an LLM call fails — rate limit, timeout, provider error — the engram is queued for retry with exponential backoff. Failed jobs can be inspected and manually triggered via the admin endpoint:
+Enrichment jobs are tracked. If an LLM call fails — rate limit, timeout, provider error — the engram is queued for retry with exponential backoff. Failed jobs can be manually triggered via the MCP tool `muninn_retry_enrich`:
 
 ```bash
-# Check enrichment queue status
-GET /api/admin/enrich/status
+# Retry enrichment for a specific engram (via MCP)
+# Tool name: muninn_retry_enrich
+# Arguments: vault="default", id="<engram-id>"
 
-# Trigger retry of all failed enrichment jobs
-POST /api/admin/enrich/retry
-
-# Retry enrichment for a specific engram
-POST /api/admin/enrich/retry?engram_id=<id>
+# Example (using MCP client):
+# Call muninn_retry_enrich with vault="default" and id="e1"
 ```
+
+You can also check enrichment status via the REST admin endpoint `/api/admin/embed/status`, which includes tier information and plugin registration status.
 
 The retry mechanism means a temporary provider outage does not result in permanently un-enriched engrams. When the provider recovers, the queue processes automatically.
 
@@ -184,15 +203,14 @@ The retroactive processor has four properties:
 
 ## 6. What You Never Have to Do
 
-When you add Tier 2 or Tier 3 to a running MuninnDB deployment:
+When you enable Tier 2 or Tier 3 on a running MuninnDB deployment:
 
 - You do not change your write code. `Remember()` is unchanged.
 - You do not change your activation queries. `ACTIVATE` automatically uses whichever retrieval streams are available.
 - You do not re-index existing data manually.
-- You do not restart your application.
 - You do not run a migration.
 - You do not update client configuration.
 
-The plugins are discovered by the MuninnDB core process at startup. If the plugin is present and configured, the additional retrieval streams activate. If the plugin is absent, the system operates in the previous tier. The client API is identical across all three tiers.
+Plugins are checked at startup by reading environment variables. If a plugin is configured (e.g., `MUNINN_ENRICH_URL` is set), the MuninnDB server initializes it and registers it for use. If the environment variable is not set, the system operates without that plugin's functionality. To enable or change a plugin, update the environment variables and restart the MuninnDB server. The client API is identical across all three tiers.
 
 This is the architectural consequence of the zero-blocking guarantee. Because all plugin work is async and all retrieval streams are optional fusions, the core system is never dependent on plugin state. Plugins enhance. They do not change the contract.

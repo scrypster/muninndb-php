@@ -23,7 +23,7 @@ The auth model is designed around this reality.
 
 ## Layer 1 — Admin credentials
 
-Admin users access the system operator layer: the web UI, the shell (`muninndb shell`), and vault management endpoints. They do not normally interact with vault data directly — that is what API keys are for.
+Admin users access the system operator layer: the web UI, the shell (`muninn shell`), and vault management endpoints. They do not normally interact with vault data directly — that is what API keys are for.
 
 **First run:** MuninnDB prints a generated root password on the first startup. Save it. Change it via the web UI afterward. The password is never printed again.
 
@@ -40,13 +40,13 @@ Admin users access the system operator layer: the web UI, the shell (`muninndb s
 
 Admin credentials authenticate to:
 - **Web UI** — session cookie, 24-hour TTL
-- **Shell** — prompted at `muninndb shell`, no session stored
+- **Shell** — prompted at `muninn shell`, no session stored
 
 ---
 
 ## Layer 2 — Vault API keys
 
-A vault is either **open** (no auth required, default) or **locked** (API key required). Vaults default to open so that existing installations work without changes.
+A vault is either **open** (no auth required) or **locked** (API key required, default). Unconfigured vaults default to fail-closed: they require an API key for any access. To allow unauthenticated access to a vault, explicitly configure it with `public: true` via SetVaultConfig.
 
 A vault can have multiple API keys — one per integration point. You might have:
 
@@ -139,15 +139,9 @@ Revocation is immediate. The token stops working on the next request.
 
 ## Vault configuration
 
-Lock a vault (require API key):
+### Vault access control
 
-```bash
-curl -X PUT http://localhost:8475/api/admin/vaults/config \
-  -H "Content-Type: application/json" \
-  -d '{"name":"default","public":false}'
-```
-
-Make a vault open (no auth required):
+Unconfigured vaults default to fail-closed and require an API key for all access. To allow unauthenticated (public) access:
 
 ```bash
 curl -X PUT http://localhost:8475/api/admin/vaults/config \
@@ -155,7 +149,80 @@ curl -X PUT http://localhost:8475/api/admin/vaults/config \
   -d '{"name":"default","public":true}'
 ```
 
-**Existing vaults default to open.** You opt in to locking. This preserves backwards compatibility.
+To require authentication (lock a vault):
+
+```bash
+curl -X PUT http://localhost:8475/api/admin/vaults/config \
+  -H "Content-Type: application/json" \
+  -d '{"name":"default","public":false}'
+```
+
+**Every unconfigured vault requires an API key.** You must explicitly opt in to public (unauthenticated) access via SetVaultConfig.
+
+### Per-vault plasticity configuration
+
+Plasticity controls the cognitive pipeline for a vault — how it learns, forgets, and traverses connections between engrams. Each vault can have its own plasticity settings independent of others.
+
+**Four preset profiles** are available: `default` (balanced Hebbian + decay), `reference` (preserves with strong Hebbian bonds), `scratchpad` (rapid decay, minimal history), and `knowledge-graph` (rich traversal, strong associative learning).
+
+Get the current plasticity configuration for a vault:
+
+```bash
+curl "http://localhost:8475/api/admin/vault/default/plasticity" \
+  -H "Authorization: Bearer <admin-session>"
+```
+
+Response includes both the saved configuration and the fully resolved values (preset merged with overrides):
+
+```json
+{
+  "config": {
+    "preset": "default",
+    "hebbian_enabled": true,
+    "decay_stability": 30
+  },
+  "resolved": {
+    "hebbian_enabled": true,
+    "decay_enabled": true,
+    "hop_depth": 2,
+    "semantic_weight": 0.6,
+    "fts_weight": 0.3,
+    "decay_floor": 0.05,
+    "decay_stability": 30,
+    "hebbian_weight": 0.5,
+    "decay_weight": 0.4,
+    "recency_weight": 0.3,
+    "traversal_profile": ""
+  }
+}
+```
+
+Update plasticity for a vault:
+
+```bash
+curl -X PUT "http://localhost:8475/api/admin/vault/default/plasticity" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <admin-session>" \
+  -d '{
+    "preset": "knowledge-graph",
+    "decay_stability": 60,
+    "traversal_profile": "causal"
+  }'
+```
+
+**Configuration fields:**
+
+| Field | Type | Range | Purpose |
+|-------|------|-------|---------|
+| `preset` | string | `default` \| `reference` \| `scratchpad` \| `knowledge-graph` | Base cognitive profile; overrides applied on top |
+| `hebbian_enabled` | bool | — | Enable/disable Hebbian weight updates (coactivation learning) |
+| `decay_enabled` | bool | — | Enable/disable time-based decay of access scores |
+| `hop_depth` | int | 0–8 | BFS hops for associative retrieval; higher = broader context |
+| `semantic_weight` | float | 0–1 | Multiplier for semantic similarity in fusion scoring |
+| `fts_weight` | float | 0–1 | Multiplier for full-text keyword match scoring |
+| `decay_floor` | float | 0–1 | Minimum stability score; prevents total decay |
+| `decay_stability` | float | >0 | Days before an engram reaches half-life |
+| `traversal_profile` | string | `default` \| `causal` \| `confirmatory` \| `adversarial` \| `structural` | Link traversal strategy; empty = auto-infer |
 
 ---
 
