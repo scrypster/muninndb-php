@@ -3,6 +3,7 @@ package ui_test
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,7 @@ import (
 	"github.com/scrypster/muninndb/internal/engine/trigger"
 	"github.com/scrypster/muninndb/internal/engine/vaultjob"
 	"github.com/scrypster/muninndb/internal/logging"
+	"github.com/scrypster/muninndb/internal/storage"
 	mbp "github.com/scrypster/muninndb/internal/transport/mbp"
 	"github.com/scrypster/muninndb/internal/transport/rest"
 	"github.com/scrypster/muninndb/internal/ui"
@@ -87,6 +89,12 @@ func (m *mockEngine) StartClone(ctx context.Context, sourceVault, newName string
 }
 func (m *mockEngine) StartMerge(ctx context.Context, sourceVault, targetVault string, deleteSource bool) (*vaultjob.Job, error) {
 	return &vaultjob.Job{ID: "mock-merge-job", Operation: "merge", Source: sourceVault, Target: targetVault}, nil
+}
+func (m *mockEngine) ExportVault(ctx context.Context, vaultName, embedderModel string, dimension int, resetMeta bool, w io.Writer) (*storage.ExportResult, error) {
+	return &storage.ExportResult{}, nil
+}
+func (m *mockEngine) StartImport(ctx context.Context, vaultName, embedderModel string, dimension int, resetMeta bool, r io.Reader) (*vaultjob.Job, error) {
+	return &vaultjob.Job{ID: "mock-import-job", Operation: "import", Target: vaultName}, nil
 }
 
 func makeMockFS() fs.FS {
