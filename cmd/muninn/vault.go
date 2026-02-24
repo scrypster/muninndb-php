@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -14,11 +15,13 @@ import (
 
 func runVault(args []string) {
 	if len(args) == 0 {
-		fmt.Println("Usage: muninn vault <delete|clear|clone|merge>")
+		fmt.Println("Usage: muninn vault <delete|clear|clone|merge|export|import>")
 		fmt.Println("  delete <name> [--yes] [--force]              Delete a vault and all its memories")
 		fmt.Println("  clear  <name> [--yes] [--force]              Remove all memories from a vault")
 		fmt.Println("  clone  <source> <new-name>                   Clone a vault into a new vault")
 		fmt.Println("  merge  <source> <target> [--delete-source] [--yes]  Merge source into target vault")
+		fmt.Println("  export --vault <name> [--output <file>] [--reset-metadata]  Export vault to .muninn archive")
+		fmt.Println("  import <file> --vault <name> [--reset-metadata]             Import .muninn archive into new vault")
 		return
 	}
 	switch args[0] {
@@ -30,9 +33,13 @@ func runVault(args []string) {
 		runVaultClone(args[1:])
 	case "merge":
 		runVaultMerge(args[1:])
+	case "export":
+		runVaultExport(args[1:])
+	case "import":
+		runVaultImport(args[1:])
 	default:
 		fmt.Printf("Unknown vault command: %q\n", args[0])
-		fmt.Println("Available: delete, clear, clone, merge")
+		fmt.Println("Available: delete, clear, clone, merge, export, import")
 	}
 }
 
@@ -397,4 +404,164 @@ func isTerminal() bool {
 		return false
 	}
 	return (fi.Mode() & os.ModeCharDevice) != 0
+}
+
+// ---------------------------------------------------------------------------
+// vault export
+// ---------------------------------------------------------------------------
+
+func runVaultExport(args []string) {
+	var vaultName, outputFile string
+	var resetMetadata bool
+
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--vault" || a == "-v":
+			if i+1 < len(args) {
+				i++
+				vaultName = args[i]
+			}
+		case strings.HasPrefix(a, "--vault="):
+			vaultName = strings.TrimPrefix(a, "--vault=")
+		case a == "--output" || a == "-o":
+			if i+1 < len(args) {
+				i++
+				outputFile = args[i]
+			}
+		case strings.HasPrefix(a, "--output="):
+			outputFile = strings.TrimPrefix(a, "--output=")
+		case a == "--reset-metadata":
+			resetMetadata = true
+		case !strings.HasPrefix(a, "-") && vaultName == "":
+			vaultName = a
+		}
+	}
+
+	if vaultName == "" {
+		fmt.Println("Usage: muninn vault export --vault <name> [--output <file>] [--reset-metadata]")
+		return
+	}
+
+	if outputFile == "" {
+		outputFile = vaultName + ".muninn"
+	}
+
+	exportURL := fmt.Sprintf("http://localhost:8475/api/admin/vaults/%s/export", url.PathEscape(vaultName))
+	if resetMetadata {
+		exportURL += "?reset_metadata=true"
+	}
+
+	fmt.Printf("Exporting vault %q to %q...\n", vaultName, outputFile)
+
+	client := &http.Client{Timeout: 30 * time.Minute}
+	resp, err := client.Get(exportURL)
+	if err != nil {
+		fmt.Printf("Error connecting to MuninnDB: %v\n", err)
+		fmt.Println("Is muninn running? Try: muninn status")
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		printHTTPError(resp)
+		return
+	}
+
+	f, err := os.Create(outputFile)
+	if err != nil {
+		fmt.Printf("Error creating output file: %v\n", err)
+		return
+	}
+	defer f.Close()
+
+	n, err := io.Copy(f, resp.Body)
+	if err != nil {
+		fmt.Printf("Error writing archive: %v\n", err)
+		return
+	}
+	fmt.Printf("  Exported %d bytes to %q\n", n, outputFile)
+}
+
+// ---------------------------------------------------------------------------
+// vault import
+// ---------------------------------------------------------------------------
+
+func runVaultImport(args []string) {
+	var filePath, vaultName string
+	var resetMetadata bool
+
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--vault" || a == "-v":
+			if i+1 < len(args) {
+				i++
+				vaultName = args[i]
+			}
+		case strings.HasPrefix(a, "--vault="):
+			vaultName = strings.TrimPrefix(a, "--vault=")
+		case a == "--reset-metadata":
+			resetMetadata = true
+		case !strings.HasPrefix(a, "-") && filePath == "":
+			filePath = a
+		}
+	}
+
+	if filePath == "" || vaultName == "" {
+		fmt.Println("Usage: muninn vault import <file> --vault <name> [--reset-metadata]")
+		return
+	}
+
+	f, err := os.Open(filePath)
+	if err != nil {
+		fmt.Printf("Error opening archive: %v\n", err)
+		return
+	}
+	defer f.Close()
+
+	stat, err := f.Stat()
+	if err != nil {
+		fmt.Printf("Error stat-ing archive: %v\n", err)
+		return
+	}
+
+	importURL := fmt.Sprintf("http://localhost:8475/api/admin/vaults/import?vault=%s", url.QueryEscape(vaultName))
+	if resetMetadata {
+		importURL += "&reset_metadata=true"
+	}
+
+	fmt.Printf("Importing %q into vault %q...\n", filePath, vaultName)
+
+	client := &http.Client{Timeout: 30 * time.Minute}
+	req, err := http.NewRequest("POST", importURL, f)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		return
+	}
+	req.ContentLength = stat.Size()
+	req.Header.Set("Content-Type", "application/octet-stream")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Printf("Error connecting to MuninnDB: %v\n", err)
+		fmt.Println("Is muninn running? Try: muninn status")
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusAccepted {
+		printHTTPError(resp)
+		return
+	}
+
+	var result struct {
+		JobID string `json:"job_id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil || result.JobID == "" {
+		fmt.Println("  Error: could not read job ID from response.")
+		return
+	}
+
+	pollProgressBar(result.JobID, vaultName)
 }
