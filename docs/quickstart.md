@@ -31,6 +31,16 @@ docker run -d \
   ghcr.io/scrypster/muninndb:latest
 ```
 
+**Windows (PowerShell):**
+
+```powershell
+irm https://muninndb.com/install.ps1 | iex
+```
+
+This downloads the latest release, extracts to `%LOCALAPPDATA%\muninn`, and adds it to your PATH automatically.
+
+> **Note (Windows):** The bundled local embedder requires the [Visual C++ Redistributable](https://aka.ms/vs/17/release/vc_redist.x64.exe). Most Windows machines already have it. If `muninn start` shows an ORT/DLL error, install the redistributable and restart.
+
 **Build from source:**
 
 ```bash
@@ -92,7 +102,7 @@ curl -sX POST http://localhost:8475/api/engrams \
   }' | jq .
 ```
 
-You'll get back an engram ID. That memory now exists in MuninnDB with a decay score, a Hebbian weight table, and a Bayesian confidence value — all initialised automatically.
+You'll get back an engram ID. That memory now exists in MuninnDB with a relevance score, a Hebbian weight table, and a Bayesian confidence value — all initialised automatically.
 
 ---
 
@@ -113,13 +123,15 @@ The Q3 incident surfaces — even though you queried about "retry logic," not "d
 
 ## 5. Connect Your AI Tools
 
-The interactive wizard detects Claude Desktop, Cursor, Windsurf, VS Code, and others:
+The interactive wizard detects Claude Desktop, Claude Code, Cursor, Codex, OpenClaw, Windsurf, VS Code, and others:
 
 ```bash
 muninn init
 ```
 
-It will ask which tools to configure, which embedder to use (local is recommended and works offline), and whether to use a token for MCP access (default vault is open — no token needed).
+It will ask which tools to configure, which embedder to use (local is recommended and works offline), a behavior mode (how proactively the AI should use memory), and whether to use a token for MCP access (default vault is open — no token needed).
+
+Once connected, the AI can call `muninn_guide` to get vault-aware instructions on how and when to use memory — no manual prompt engineering required.
 
 **Non-interactive (CI / scripts):**
 
@@ -140,8 +152,12 @@ The bundled local embedder (all-MiniLM-L6-v2, 384-dim) is included and works off
 |----------|--------|-------|
 | Local (bundled) | On by default — no config needed | Offline. ~80MB. Opt out with `MUNINN_LOCAL_EMBED=0`. |
 | Ollama | `MUNINN_OLLAMA_URL=ollama://localhost:11434/nomic-embed-text` | Self-hosted. |
-| OpenAI | `MUNINN_OPENAI_KEY=sk-...` | `text-embedding-3-small` by default. |
-| Voyage | `MUNINN_VOYAGE_KEY=pa-...` | High-quality, voyage-3 model. |
+| OpenAI | `MUNINN_OPENAI_KEY=sk-...` | `text-embedding-3-small`, 1536d. |
+| Voyage | `MUNINN_VOYAGE_KEY=pa-...` | voyage-3, 1024d. |
+| Cohere | `MUNINN_COHERE_KEY=...` | embed-v4, 1024d. |
+| Google | `MUNINN_GOOGLE_KEY=...` | text-embedding-004, 768d. |
+| Jina | `MUNINN_JINA_KEY=...` | jina-embeddings-v3, 1024d. |
+| Mistral | `MUNINN_MISTRAL_KEY=...` | mistral-embed, 1024d. |
 
 Set these as environment variables before `muninn start`, or configure them with `muninn init`.
 
@@ -213,9 +229,10 @@ muninn shell
 
 | | |
 |---|---|
-| [How Memory Works](how-memory-works.md) | Why decay + Hebbian + confidence produces genuine memory |
+| [How Memory Works](how-memory-works.md) | Why temporal priority + Hebbian + confidence + PAS produces genuine memory |
 | [Architecture](architecture.md) | The ERF format, 6-phase engine, four wire protocols |
 | [Auth & Vaults](auth.md) | Multiple vaults, API keys, full vs. observe mode |
 | [Semantic Triggers](semantic-triggers.md) | Subscribe to contexts; DB pushes when relevance changes |
 | [Plugins](plugins.md) | Embed and enrich — upgrade the database without touching your code |
-| [Cognitive Primitives](cognitive-primitives.md) | The math: Ebbinghaus decay, Hebbian weights, Bayesian confidence |
+| [Cognitive Primitives](cognitive-primitives.md) | The math: ACT-R temporal scoring, Hebbian weights, Bayesian confidence, PAS |
+| [Feature Reference](feature-reference.md) | Complete list of every feature, operation, and config option |

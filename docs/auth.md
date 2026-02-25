@@ -12,7 +12,7 @@ In MuninnDB, **reads are not transparent**. When you activate a memory:
 
 - Its access count increases, which raises its stability score
 - The Hebbian weights between co-activated engrams strengthen
-- Its decay timer resets — it becomes "recent" again
+- Its temporal score refreshes — it becomes "recent" again
 - RRF fusion scores shift for the next retrieval by anyone in that vault
 
 This is the cognitive model working correctly. A brain that remembers something is not the same brain it was before. But it means that a careless read-only consumer can silently reshape the vault's learned relevance for every other user.
@@ -61,7 +61,7 @@ vault: default
 
 | Mode | Reads | Cognitive state writes | Use case |
 |------|-------|------------------------|----------|
-| `full` | Yes | **Yes** — decay resets, Hebbian weights update, access counts increment | AI agents, primary integrations, anything that is *part of* the brain |
+| `full` | Yes | **Yes** — temporal scores refresh, Hebbian weights update, access counts increment | AI agents, primary integrations, anything that is *part of* the brain |
 | `observe` | Yes | **No** — scores are computed but nothing is persisted | Dashboards, analytics, read-only partners, exports |
 
 The `observe` mode exists because the vault's cognitive state is the thing of value. A dashboard reading engrams 1000 times a day should not inflate access counts and distort what the AI agent sees as relevant. `observe` keys see the brain; they don't affect it.
@@ -165,7 +165,7 @@ curl -X PUT http://localhost:8475/api/admin/vaults/config \
 
 Plasticity controls the cognitive pipeline for a vault — how it learns, forgets, and traverses connections between engrams. Each vault can have its own plasticity settings independent of others.
 
-**Four preset profiles** are available: `default` (balanced Hebbian + decay), `reference` (preserves with strong Hebbian bonds), `scratchpad` (rapid decay, minimal history), and `knowledge-graph` (rich traversal, strong associative learning).
+**Four preset profiles** are available: `default` (balanced Hebbian + temporal), `reference` (preserves with strong Hebbian bonds), `scratchpad` (rapid fading, minimal history), and `knowledge-graph` (rich traversal, strong associative learning).
 
 Get the current plasticity configuration for a vault:
 
@@ -181,18 +181,18 @@ Response includes both the saved configuration and the fully resolved values (pr
   "config": {
     "preset": "default",
     "hebbian_enabled": true,
-    "decay_stability": 30
+    "temporal_halflife": 30
   },
   "resolved": {
     "hebbian_enabled": true,
-    "decay_enabled": true,
+    "temporal_enabled": true,
     "hop_depth": 2,
     "semantic_weight": 0.6,
     "fts_weight": 0.3,
-    "decay_floor": 0.05,
-    "decay_stability": 30,
+    "relevance_floor": 0.05,
+    "temporal_halflife": 30,
     "hebbian_weight": 0.5,
-    "decay_weight": 0.4,
+    "temporal_weight": 0.4,
     "recency_weight": 0.3,
     "traversal_profile": ""
   }
@@ -207,7 +207,7 @@ curl -X PUT "http://localhost:8475/api/admin/vault/default/plasticity" \
   -H "Authorization: Bearer <admin-session>" \
   -d '{
     "preset": "knowledge-graph",
-    "decay_stability": 60,
+    "temporal_halflife": 60,
     "traversal_profile": "causal"
   }'
 ```
@@ -218,19 +218,21 @@ curl -X PUT "http://localhost:8475/api/admin/vault/default/plasticity" \
 |-------|------|-------|---------|
 | `preset` | string | `default` \| `reference` \| `scratchpad` \| `knowledge-graph` | Base cognitive profile; overrides applied on top |
 | `hebbian_enabled` | bool | — | Enable/disable Hebbian weight updates (coactivation learning) |
-| `decay_enabled` | bool | — | Enable/disable time-based decay of access scores |
+| `temporal_enabled` | bool | — | Enable/disable time-based temporal scoring |
 | `hop_depth` | int | 0–8 | BFS hops for associative retrieval; higher = broader context |
 | `semantic_weight` | float | 0–1 | Multiplier for semantic similarity in fusion scoring |
 | `fts_weight` | float | 0–1 | Multiplier for full-text keyword match scoring |
-| `decay_floor` | float | 0–1 | Minimum stability score; prevents total decay |
-| `decay_stability` | float | >0 | Days before an engram reaches half-life |
+| `relevance_floor` | float | 0–1 | Minimum relevance score; prevents memories from becoming invisible |
+| `temporal_halflife` | float | >0 | Days before an engram reaches half-life |
 | `traversal_profile` | string | `default` \| `causal` \| `confirmatory` \| `adversarial` \| `structural` | Link traversal strategy; empty = auto-infer |
+| `predictive_activation` | bool | — | Enable/disable Predictive Activation Signal (PAS); default: true |
+| `pas_max_injections` | int | 1–20 | Max transition candidates injected per activation; default: 5 |
 
 ---
 
 ## The one brain principle
 
-A vault is a single cognitive entity. All connections with `full` keys participate in that entity's learned state equally — there is no per-user relevance. The vault's access patterns, Hebbian weights, and decay scores reflect the collective behavior of every `full` connection.
+A vault is a single cognitive entity. All connections with `full` keys participate in that entity's learned state equally — there is no per-user relevance. The vault's access patterns, Hebbian weights, and temporal scores reflect the collective behavior of every `full` connection.
 
 This is a deliberate design decision:
 

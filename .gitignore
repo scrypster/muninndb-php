@@ -11,12 +11,28 @@
 # Embed assets — downloaded via `make fetch-assets`, not committed (too large)
 internal/plugin/embed/assets/*.dylib
 internal/plugin/embed/assets/*.so
+internal/plugin/embed/assets/*.dll
 internal/plugin/embed/assets/*.onnx
 internal/plugin/embed/assets/tokenizer.json
 
+# Binary artifacts — never commit
+*.muninn
+*.dylib
+*.so
+*.dll
+*.onnx
+*.exe
+
 # Local data directories
 muninndb-data/
+**/muninndb-data/
 /tmp/
+
+# Dependencies — install locally, never commit
+**/node_modules/
+**/.venv/
+**/venv/
+**/__pycache__/
 
 # macOS
 .DS_Store
@@ -37,5 +53,12 @@ testdata/bible/*.muninn
 # Planning and design docs — not committed
 docs/plans/
 
-# Built eval binary
+# Evaluation tools and results — internal development only
+cmd/eval*/
+eval-results/
+scripts/eval-*
 /eval-bible
+/eval-temporal
+/eval-expert
+/eval-paraphrase
+/eval

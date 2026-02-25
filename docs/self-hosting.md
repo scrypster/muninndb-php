@@ -161,7 +161,7 @@ MUNINN_ENRICH_API_KEY=sk-...
 muninn init
 ```
 
-`muninn init` detects Claude Desktop, Cursor, Windsurf, and VS Code and writes the MCP config automatically.
+`muninn init` detects Claude Desktop, Claude Code, Cursor, OpenClaw, Windsurf, and VS Code and writes the MCP config automatically.
 
 ### Manual setup
 
@@ -172,6 +172,7 @@ Add to your AI tool's MCP config:
 {
   "mcpServers": {
     "muninn": {
+      "type": "http",
       "url": "http://localhost:8750/mcp"
     }
   }
@@ -183,10 +184,23 @@ If you enabled MCP auth (token file at `~/.muninn/mcp.token`):
 {
   "mcpServers": {
     "muninn": {
+      "type": "http",
       "url": "http://localhost:8750/mcp",
       "headers": {
         "Authorization": "Bearer <your-token>"
       }
+    }
+  }
+}
+```
+
+**Claude Code / CLI** — `~/.claude.json`
+```json
+{
+  "mcpServers": {
+    "muninn": {
+      "type": "http",
+      "url": "http://localhost:8750/mcp"
     }
   }
 }
@@ -197,17 +211,19 @@ If you enabled MCP auth (token file at `~/.muninn/mcp.token`):
 {
   "mcpServers": {
     "muninn": {
+      "type": "http",
       "url": "http://localhost:8750/mcp"
     }
   }
 }
 ```
 
-**VS Code** — `.vscode/mcp.json` (workspace)
+**OpenClaw** — `~/.openclaw/mcp.json`
 ```json
 {
-  "servers": {
+  "mcpServers": {
     "muninn": {
+      "type": "http",
       "url": "http://localhost:8750/mcp"
     }
   }
@@ -219,6 +235,19 @@ If you enabled MCP auth (token file at `~/.muninn/mcp.token`):
 {
   "mcpServers": {
     "muninn": {
+      "type": "http",
+      "url": "http://localhost:8750/mcp"
+    }
+  }
+}
+```
+
+**VS Code** — `.vscode/mcp.json` (workspace)
+```json
+{
+  "servers": {
+    "muninn": {
+      "type": "http",
       "url": "http://localhost:8750/mcp"
     }
   }

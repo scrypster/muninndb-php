@@ -72,6 +72,60 @@ func (c *Client) Write(ctx context.Context, vault, concept, content string, tags
 	return resp.ID, nil
 }
 
+// WriteWithOptions writes an engram with full control over all fields.
+func (c *Client) WriteWithOptions(ctx context.Context, req WriteRequest) (*WriteResponse, error) {
+	if req.Confidence == 0 {
+		req.Confidence = 0.9
+	}
+	if req.Stability == 0 {
+		req.Stability = 0.5
+	}
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	var resp WriteResponse
+	if err := c.request(ctx, "POST", "/api/engrams", body, &resp); err != nil {
+		return nil, err
+	}
+
+	return &resp, nil
+}
+
+// WriteBatch writes multiple engrams in a single batch call. Maximum 50 per batch.
+func (c *Client) WriteBatch(ctx context.Context, vault string, engrams []WriteRequest) (*BatchWriteResponse, error) {
+	if len(engrams) == 0 {
+		return nil, fmt.Errorf("engrams list must not be empty")
+	}
+	if len(engrams) > 50 {
+		return nil, fmt.Errorf("batch size exceeds maximum of 50")
+	}
+
+	for i := range engrams {
+		if engrams[i].Vault == "" {
+			engrams[i].Vault = vault
+		}
+	}
+
+	payload := struct {
+		Engrams []WriteRequest `json:"engrams"`
+	}{Engrams: engrams}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	var resp BatchWriteResponse
+	if err := c.request(ctx, "POST", "/api/engrams/batch", body, &resp); err != nil {
+		return nil, err
+	}
+
+	return &resp, nil
+}
+
 // Read reads an engram by ID.
 func (c *Client) Read(ctx context.Context, id, vault string) (*Engram, error) {
 	q := url.Values{}

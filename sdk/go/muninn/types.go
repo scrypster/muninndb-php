@@ -2,36 +2,70 @@ package muninn
 
 // Engram represents a single memory unit in MuninnDB.
 type Engram struct {
-	ID          string    `json:"id"`
-	Concept     string    `json:"concept"`
-	Content     string    `json:"content"`
-	Confidence  float64   `json:"confidence"`
-	Relevance   float64   `json:"relevance"`
-	Stability   float64   `json:"stability"`
-	AccessCount int       `json:"access_count"`
-	Tags        []string  `json:"tags"`
-	State       int       `json:"state"`
-	CreatedAt   int64     `json:"created_at"`
-	UpdatedAt   int64     `json:"updated_at"`
-	LastAccess  *int64    `json:"last_access,omitempty"`
+	ID          string   `json:"id"`
+	Concept     string   `json:"concept"`
+	Content     string   `json:"content"`
+	Confidence  float64  `json:"confidence"`
+	Relevance   float64  `json:"relevance"`
+	Stability   float64  `json:"stability"`
+	AccessCount int      `json:"access_count"`
+	Tags        []string `json:"tags"`
+	State       int      `json:"state"`
+	CreatedAt   int64    `json:"created_at"`
+	UpdatedAt   int64    `json:"updated_at"`
+	LastAccess  *int64   `json:"last_access,omitempty"`
+	MemoryType  int      `json:"memory_type,omitempty"`
+	TypeLabel   string   `json:"type_label,omitempty"`
+}
+
+// InlineEntity is a caller-provided entity for inline enrichment.
+type InlineEntity struct {
+	Name string `json:"name"`
+	Type string `json:"type"`
+}
+
+// InlineRelationship is a caller-provided relationship for inline enrichment.
+type InlineRelationship struct {
+	TargetID string  `json:"target_id"`
+	Relation string  `json:"relation"`
+	Weight   float64 `json:"weight,omitempty"`
 }
 
 // WriteRequest represents a request to write an engram.
 type WriteRequest struct {
-	Vault       string             `json:"vault"`
-	Concept     string             `json:"concept"`
-	Content     string             `json:"content"`
-	Tags        []string           `json:"tags,omitempty"`
-	Confidence  float64            `json:"confidence,omitempty"`
-	Stability   float64            `json:"stability,omitempty"`
-	Embedding   []float64          `json:"embedding,omitempty"`
-	Associations map[string]interface{} `json:"associations,omitempty"`
+	Vault         string                 `json:"vault"`
+	Concept       string                 `json:"concept"`
+	Content       string                 `json:"content"`
+	Tags          []string               `json:"tags,omitempty"`
+	Confidence    float64                `json:"confidence,omitempty"`
+	Stability     float64                `json:"stability,omitempty"`
+	Embedding     []float64              `json:"embedding,omitempty"`
+	Associations  map[string]interface{} `json:"associations,omitempty"`
+	MemoryType    *int                   `json:"memory_type,omitempty"`
+	TypeLabel     string                 `json:"type_label,omitempty"`
+	Summary       string                 `json:"summary,omitempty"`
+	Entities      []InlineEntity         `json:"entities,omitempty"`
+	Relationships []InlineRelationship   `json:"relationships,omitempty"`
 }
 
 // WriteResponse represents a response from writing an engram.
 type WriteResponse struct {
 	ID        string `json:"id"`
 	CreatedAt int64  `json:"created_at"`
+	Hint      string `json:"hint,omitempty"`
+}
+
+// BatchWriteResult holds the result for a single item in a batch write.
+type BatchWriteResult struct {
+	Index  int    `json:"index"`
+	ID     string `json:"id,omitempty"`
+	Status string `json:"status"`
+	Error  string `json:"error,omitempty"`
+}
+
+// BatchWriteResponse holds the response from a batch write operation.
+type BatchWriteResponse struct {
+	Results []BatchWriteResult `json:"results"`
 }
 
 // ActivateRequest represents a request to activate memory.
@@ -55,6 +89,8 @@ type ActivationItem struct {
 	Why        *string  `json:"why,omitempty"`
 	HopPath    []string `json:"hop_path,omitempty"`
 	Dormant    bool     `json:"dormant,omitempty"`
+	MemoryType int      `json:"memory_type,omitempty"`
+	TypeLabel  string   `json:"type_label,omitempty"`
 }
 
 // BriefSentence represents a sentence extracted by brief mode.
@@ -79,7 +115,7 @@ type CoherenceResult struct {
 	OrphanRatio            float64 `json:"orphan_ratio"`
 	ContradictionDensity   float64 `json:"contradiction_density"`
 	DuplicationPressure    float64 `json:"duplication_pressure"`
-	DecayVariance          float64 `json:"decay_variance"`
+	TemporalVariance       float64 `json:"temporal_variance"`
 	TotalEngrams           int     `json:"total_engrams"`
 }
 

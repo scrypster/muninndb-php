@@ -62,7 +62,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("open pebble: %v", err)
 	}
-	store := storage.NewPebbleStore(db, 100_000)
+	store := storage.NewPebbleStore(db, storage.PebbleStoreConfig{CacheSize: 100_000})
 	ftsIdx := fts.New(db)
 
 	// hashEmbedder: deterministic word-hash vectors — distinct per text, no external calls.
@@ -76,20 +76,18 @@ func main() {
 	trigSystem := trigger.New(store, &ftsTrigAdapter{ftsIdx}, nil, embedder)
 
 	// Wire all cognitive workers so the benchmark reflects real activation side effects:
-	// Hebbian weight updates, Ebbinghaus decay, confidence accumulation, contradiction detection.
+	// Hebbian weight updates, confidence accumulation, contradiction detection.
 	hebbianWorker := cognitive.NewHebbianWorker(&benchHebbianAdapter{store})
-	decayWorker := cognitive.NewDecayWorker(&benchDecayAdapter{store})
 	contradictWorker := cognitive.NewContradictWorker(&benchContradictAdapter{store})
 	confidenceWorker := cognitive.NewConfidenceWorker(&benchConfidenceAdapter{store})
 
-	// Start decay, contradict, confidence workers (Hebbian starts its own goroutine internally).
+	// Start contradict, confidence workers (Hebbian starts its own goroutine internally).
 	benchCtx, benchCancel := context.WithCancel(context.Background())
-	go decayWorker.Worker.Run(benchCtx)
 	go contradictWorker.Worker.Run(benchCtx)
 	go confidenceWorker.Worker.Run(benchCtx)
 
 	eng := engine.NewEngine(store, nil, ftsIdx, actEngine, trigSystem,
-		hebbianWorker, decayWorker,
+		hebbianWorker,
 		contradictWorker.Worker, confidenceWorker.Worker,
 		embedder, nil,
 	)

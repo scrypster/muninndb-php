@@ -22,7 +22,7 @@ func main() {
 	}
 	defer db.Close()
 
-	store := storage.NewPebbleStore(db, 1000)
+	store := storage.NewPebbleStore(db, storage.PebbleStoreConfig{CacheSize: 1000})
 	ws := store.VaultPrefix("test")
 	fmt.Printf("vault prefix for 'test': %x\n", ws)
 

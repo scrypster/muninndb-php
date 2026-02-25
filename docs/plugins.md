@@ -30,16 +30,16 @@ No configuration required. Ships as a single binary (~15MB on Alpine). Zero exte
 
 - Full-text search via BM25 inverted index
 - Association graph with Hebbian learning (co-activation strengthens edges)
-- Ebbinghaus decay — memory relevance falls off over time, predictably
+- Temporal priority — memories you use stay sharp, memories you ignore fade naturally
 - Bayesian confidence scoring
 - Structural contradiction detection
 - Semantic triggers — `new_write`, `threshold_crossed`, `contradiction_detected`
 - All four wire protocols: MBP (binary), gRPC, REST, MCP
 - Web UI with graph visualization
 
-**ACTIVATE in Tier 1** runs two parallel retrieval streams: FTS recall and decay pool retrieval. Results are fused using RRF (Reciprocal Rank Fusion). Cognitively, this means the system finds engrams that match by text and engrams that are currently active in the decay model — then fuses the two ranked lists into a single result set.
+**ACTIVATE in Tier 1** runs two parallel retrieval streams: FTS recall and temporal pool retrieval. Results are fused using RRF (Reciprocal Rank Fusion). Cognitively, this means the system finds engrams that match by text and engrams that are currently active in the temporal model — then fuses the two ranked lists into a single result set.
 
-This is not a degraded mode. For structured knowledge bases, technical documentation, explicit concept recall, and anything where terminology is consistent, FTS + decay is excellent. Recall is roughly 60% on paraphrases — you'll miss "preventing duplicate charges" when the memory says "idempotency keys for payments." But within consistent vocabulary, Tier 1 is fully capable.
+This is not a degraded mode. For structured knowledge bases, technical documentation, explicit concept recall, and anything where terminology is consistent, FTS + temporal scoring is excellent. Recall is roughly 60% on paraphrases — you'll miss "preventing duplicate charges" when the memory says "idempotency keys for payments." But within consistent vocabulary, Tier 1 is fully capable.
 
 The choice to add Tier 2 is a recall calibration decision, not a requirement.
 
@@ -49,19 +49,23 @@ The choice to add Tier 2 is a recall calibration decision, not a requirement.
 
 ### What It Adds
 
-The Embed plugin adds a third retrieval stream to ACTIVATE: vector similarity via an HNSW index. The three streams — FTS, HNSW, and decay pool — are fused with weighted RRF (FTS weight 60, HNSW weight 40, Decay weight 120).
+The Embed plugin adds a third retrieval stream to ACTIVATE: vector similarity via an HNSW index. The three streams — FTS, HNSW, and temporal pool — are fused with weighted RRF (FTS weight 60, HNSW weight 40, Temporal weight 120).
 
 With all three streams active, ACTIVATE finds engrams that match by text, engrams that match by semantic meaning, and engrams that are currently cognitively active — then produces a single ranked result set from the fusion.
 
-**The recall jump:** FTS + decay achieves roughly 60% recall on paraphrases and semantic drift. FTS + HNSW + decay achieves 95%+. The gap is "idempotency keys for payments" vs. "preventing duplicate charges in the payment service." Same concept, different words. FTS misses it. Vectors catch it.
+**The recall jump:** FTS + temporal scoring achieves roughly 60% recall on paraphrases and semantic drift. FTS + HNSW + temporal scoring achieves 95%+. The gap is "idempotency keys for payments" vs. "preventing duplicate charges in the payment service." Same concept, different words. FTS misses it. Vectors catch it.
 
 **Trigger system upgrade:** Subscription scoring gains vector similarity. Semantic triggers become significantly more capable — a subscription context of "payment reliability" will now surface memories about retry budgets, circuit breakers, and idempotency even when those exact words aren't in the context string.
 
 ### Installation and Configuration
 
-Embed is activated by setting the `MUNINN_OLLAMA_URL`, `MUNINN_OPENAI_KEY`, or `MUNINN_VOYAGE_KEY` environment variable when starting the MuninnDB server:
+Embed is activated by setting an embedding provider environment variable when starting the MuninnDB server:
 
 ```bash
+# Bundled local model — on by default, no config needed
+# Disable with MUNINN_LOCAL_EMBED=0
+muninn server
+
 # Ollama — local, zero API cost, works offline
 export MUNINN_OLLAMA_URL="http://localhost:11434/llama2"
 muninn server
@@ -74,19 +78,35 @@ muninn server
 export MUNINN_VOYAGE_KEY="pa-..."
 muninn server
 
-# Bundled local model — on by default, no config needed
-# Disable with MUNINN_LOCAL_EMBED=0
+# Cohere
+export MUNINN_COHERE_KEY="..."
+muninn server
+
+# Google (Gemini)
+export MUNINN_GOOGLE_KEY="..."
+muninn server
+
+# Jina
+export MUNINN_JINA_KEY="..."
+muninn server
+
+# Mistral
+export MUNINN_MISTRAL_KEY="..."
 muninn server
 ```
 
 Provider comparison:
 
-| Provider | Cost | Latency | Privacy | Best for |
-|----------|------|---------|---------|---------|
-| Ollama | Zero (local compute) | ~5–50ms | Full (local) | Development, sensitive data, offline |
-| OpenAI | Per token | ~50–200ms | API | General production |
-| Voyage AI | Per token | ~50–150ms | API | Retrieval-optimized production |
-| Bundled local | Zero (built-in) | ~10–100ms | Full (local) | Development, deployments without external APIs |
+| Provider | Env Var | Model (default) | Dimensions | Cost | Privacy |
+|----------|---------|-----------------|------------|------|---------|
+| Bundled local | On by default | all-MiniLM-L6-v2 | 384 | Zero | Full (local) |
+| Ollama | `MUNINN_OLLAMA_URL` | configurable | varies | Zero (local) | Full (local) |
+| OpenAI | `MUNINN_OPENAI_KEY` | text-embedding-3-small | 1536 | Per token | API |
+| Voyage AI | `MUNINN_VOYAGE_KEY` | voyage-3 | 1024 | Per token | API |
+| Cohere | `MUNINN_COHERE_KEY` | embed-v4 | 1024 | Per token | API |
+| Google | `MUNINN_GOOGLE_KEY` | text-embedding-004 | 768 | Per token | API |
+| Jina | `MUNINN_JINA_KEY` | jina-embeddings-v3 | 1024 | Per token | API |
+| Mistral | `MUNINN_MISTRAL_KEY` | mistral-embed | 1024 | Per token | API |
 
 ### Retroactive Enrichment
 

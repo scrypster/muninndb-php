@@ -9,7 +9,7 @@ Every time you write an engram, MuninnDB computes a Jaccard fingerprint of the n
 
 ## Why it matters
 
-Duplicate and near-duplicate memories are a real problem in cognitive systems. Without detection, you end up with memory fragmentation: the same fact stored slightly differently across dozens of engrams, each accumulating separate Hebbian boost, each independently decaying. Near-duplicate detection creates explicit links between related memories so activation can traverse the cluster, and duplication pressure shows up in the vault coherence score as a signal to consolidate.
+Duplicate and near-duplicate memories are a real problem in cognitive systems. Without detection, you end up with memory fragmentation: the same fact stored slightly differently across dozens of engrams, each accumulating separate Hebbian boost, each independently fading. Near-duplicate detection creates explicit links between related memories so activation can traverse the cluster, and duplication pressure shows up in the vault coherence score as a signal to consolidate.
 
 ## How it works
 

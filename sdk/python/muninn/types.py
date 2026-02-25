@@ -16,6 +16,28 @@ class WriteRequest:
     stability: float = 0.5
     embedding: list[float] | None = None
     associations: dict[str, Any] | None = None
+    memory_type: int | None = None
+    type_label: str | None = None
+    summary: str | None = None
+    entities: list[dict] | None = None  # each: {"name": str, "type": str}
+    relationships: list[dict] | None = None  # each: {"target_id": str, "relation": str, "weight": float}
+
+
+@dataclass
+class BatchWriteResult:
+    """Result for a single engram in a batch write."""
+
+    index: int
+    id: str
+    status: str
+    error: str | None = None
+
+
+@dataclass
+class BatchWriteResponse:
+    """Response from a batch write operation."""
+
+    results: list[BatchWriteResult]
 
 
 @dataclass
@@ -24,6 +46,7 @@ class WriteResponse:
 
     id: str
     created_at: int
+    hint: str | None = None
 
 
 @dataclass
@@ -51,6 +74,8 @@ class ActivationItem:
     why: str | None = None
     hop_path: list[str] | None = None
     dormant: bool = False
+    memory_type: int = 0
+    type_label: str = ""
 
 
 @dataclass
@@ -100,7 +125,7 @@ class CoherenceResult:
     orphan_ratio: float
     contradiction_density: float
     duplication_pressure: float
-    decay_variance: float
+    temporal_variance: float
     total_engrams: int
 
 
