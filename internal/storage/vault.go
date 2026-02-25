@@ -25,7 +25,7 @@ func (ps *PebbleStore) WriteVaultName(wsPrefix [8]byte, name string) error {
 		closer.Close()
 		// Mark as written so future calls skip this check.
 		ps.vaultNameWritten.Store(wsPrefix, struct{}{})
-		ps.vaultPrefixCache.Store(name, wsPrefix)
+		ps.vaultPrefixCache.Add(name, wsPrefix)
 		return nil
 	}
 	batch := ps.db.NewBatch()
@@ -37,7 +37,7 @@ func (ps *PebbleStore) WriteVaultName(wsPrefix [8]byte, name string) error {
 		return err
 	}
 	ps.vaultNameWritten.Store(wsPrefix, struct{}{})
-	ps.vaultPrefixCache.Store(name, wsPrefix)
+	ps.vaultPrefixCache.Add(name, wsPrefix)
 	return nil
 }
 
@@ -45,8 +45,8 @@ func (ps *PebbleStore) WriteVaultName(wsPrefix [8]byte, name string) error {
 // Uses an in-memory cache to avoid Pebble reads on the common hot path.
 func (ps *PebbleStore) ResolveVaultPrefix(name string) [8]byte {
 	// Hot path: in-memory cache (populated by WriteVaultName and prior lookups).
-	if v, ok := ps.vaultPrefixCache.Load(name); ok {
-		return v.([8]byte)
+	if ws, ok := ps.vaultPrefixCache.Get(name); ok {
+		return ws
 	}
 	// Cold path: read from Pebble (once per vault name per process lifetime).
 	idxKey := keys.VaultNameIndexKey(name)
@@ -56,13 +56,13 @@ func (ps *PebbleStore) ResolveVaultPrefix(name string) [8]byte {
 		if len(val) == 8 {
 			var ws [8]byte
 			copy(ws[:], val)
-			ps.vaultPrefixCache.Store(name, ws)
+			ps.vaultPrefixCache.Add(name, ws)
 			return ws
 		}
 	}
 	// Fall back to computing the SipHash and cache it.
 	ws := keys.VaultPrefix(name)
-	ps.vaultPrefixCache.Store(name, ws)
+	ps.vaultPrefixCache.Add(name, ws)
 	return ws
 }
 

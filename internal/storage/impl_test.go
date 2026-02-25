@@ -23,7 +23,7 @@ func TestWriteEngramWritesBucketKey(t *testing.T) {
 	}
 	defer db.Close()
 
-	store := NewPebbleStore(db, 100)
+	store := NewPebbleStore(db, PebbleStoreConfig{CacheSize: 100})
 	ws := store.VaultPrefix("test")
 	ctx := context.Background()
 
@@ -82,7 +82,7 @@ func TestUpdateRelevanceMovesKey(t *testing.T) {
 	}
 	defer db.Close()
 
-	store := NewPebbleStore(db, 100)
+	store := NewPebbleStore(db, PebbleStoreConfig{CacheSize: 100})
 	ws := store.VaultPrefix("test")
 	ctx := context.Background()
 
@@ -167,7 +167,7 @@ func TestRecentActiveUsesIndex(t *testing.T) {
 	}
 	defer db.Close()
 
-	store := NewPebbleStore(db, 100)
+	store := NewPebbleStore(db, PebbleStoreConfig{CacheSize: 100})
 	ws := store.VaultPrefix("test")
 	ctx := context.Background()
 
@@ -255,7 +255,7 @@ func TestWriteEngramCallsWAL(t *testing.T) {
 	gc := wal.NewGroupCommitter(mol, db)
 
 	// Create PebbleStore and set WAL
-	store := NewPebbleStore(db, 100)
+	store := NewPebbleStore(db, PebbleStoreConfig{CacheSize: 100})
 	store.SetWAL(mol, gc)
 
 	ws := store.VaultPrefix("test")
@@ -302,7 +302,7 @@ func TestSetWALOptional(t *testing.T) {
 	}
 	defer db.Close()
 
-	store := NewPebbleStore(db, 100)
+	store := NewPebbleStore(db, PebbleStoreConfig{CacheSize: 100})
 	ws := store.VaultPrefix("test")
 	ctx := context.Background()
 
@@ -342,7 +342,7 @@ func TestGetAssocWeight(t *testing.T) {
 	}
 	defer db.Close()
 
-	store := NewPebbleStore(db, 100)
+	store := NewPebbleStore(db, PebbleStoreConfig{CacheSize: 100})
 	ws := store.VaultPrefix("test")
 	ctx := context.Background()
 
@@ -406,7 +406,7 @@ func TestUpdateAssocWeight(t *testing.T) {
 	}
 	defer db.Close()
 
-	store := NewPebbleStore(db, 100)
+	store := NewPebbleStore(db, PebbleStoreConfig{CacheSize: 100})
 	ws := store.VaultPrefix("test")
 	ctx := context.Background()
 
@@ -461,7 +461,7 @@ func TestGetConfidence(t *testing.T) {
 	}
 	defer db.Close()
 
-	store := NewPebbleStore(db, 100)
+	store := NewPebbleStore(db, PebbleStoreConfig{CacheSize: 100})
 	ws := store.VaultPrefix("test")
 	ctx := context.Background()
 
@@ -502,7 +502,7 @@ func TestUpdateConfidence(t *testing.T) {
 	}
 	defer db.Close()
 
-	store := NewPebbleStore(db, 100)
+	store := NewPebbleStore(db, PebbleStoreConfig{CacheSize: 100})
 	ws := store.VaultPrefix("test")
 	ctx := context.Background()
 
@@ -549,7 +549,7 @@ func TestGetConceptAssociations(t *testing.T) {
 	}
 	defer db.Close()
 
-	store := NewPebbleStore(db, 100)
+	store := NewPebbleStore(db, PebbleStoreConfig{CacheSize: 100})
 	ws := store.VaultPrefix("test")
 	ctx := context.Background()
 
@@ -629,7 +629,7 @@ func TestFlagContradiction(t *testing.T) {
 	}
 	defer db.Close()
 
-	store := NewPebbleStore(db, 100)
+	store := NewPebbleStore(db, PebbleStoreConfig{CacheSize: 100})
 	ws := store.VaultPrefix("test")
 	ctx := context.Background()
 
@@ -690,7 +690,7 @@ func TestUpdateAssocWeightNoDuplicateEdges(t *testing.T) {
 	}
 	defer db.Close()
 
-	store := NewPebbleStore(db, 100)
+	store := NewPebbleStore(db, PebbleStoreConfig{CacheSize: 100})
 	ws := store.VaultPrefix("test")
 	ctx := context.Background()
 
@@ -741,7 +741,7 @@ func TestListByState(t *testing.T) {
 	}
 	defer db.Close()
 
-	store := NewPebbleStore(db, 100)
+	store := NewPebbleStore(db, PebbleStoreConfig{CacheSize: 100})
 	ws := store.VaultPrefix("test")
 	ctx := context.Background()
 
@@ -794,7 +794,7 @@ func TestListByStateLimitRespected(t *testing.T) {
 	}
 	defer db.Close()
 
-	store := NewPebbleStore(db, 100)
+	store := NewPebbleStore(db, PebbleStoreConfig{CacheSize: 100})
 	ws := store.VaultPrefix("test")
 	ctx := context.Background()
 
@@ -832,7 +832,7 @@ func TestWriteReadCoherence(t *testing.T) {
 	}
 	defer db.Close()
 
-	store := NewPebbleStore(db, 100)
+	store := NewPebbleStore(db, PebbleStoreConfig{CacheSize: 100})
 	ws := store.VaultPrefix("coh-vault")
 
 	// Write a known 7-element array.
@@ -869,7 +869,7 @@ func TestReadCoherenceMissReturnsNotFound(t *testing.T) {
 	}
 	defer db.Close()
 
-	store := NewPebbleStore(db, 100)
+	store := NewPebbleStore(db, PebbleStoreConfig{CacheSize: 100})
 	ws := store.VaultPrefix("never-written")
 
 	_, ok, err := store.ReadCoherence(ws)

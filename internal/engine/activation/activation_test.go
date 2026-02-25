@@ -2,6 +2,7 @@ package activation_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -106,6 +107,22 @@ func (s *stubStore) VaultPrefix(_ string) [8]byte {
 
 func (s *stubStore) EngramLastAccessNs(_ [8]byte, _ storage.ULID) int64 {
 	return 0
+}
+
+func (s *stubStore) EngramIDsByCreatedRange(_ context.Context, _ [8]byte, since, until time.Time, limit int) ([]storage.ULID, error) {
+	var ids []storage.ULID
+	for _, id := range s.recent {
+		if meta, ok := s.metas[id]; ok {
+			if (since.IsZero() || meta.CreatedAt.After(since) || meta.CreatedAt.Equal(since)) &&
+				(until.IsZero() || meta.CreatedAt.Before(until)) {
+				ids = append(ids, id)
+				if limit > 0 && len(ids) >= limit {
+					break
+				}
+			}
+		}
+	}
+	return ids, nil
 }
 
 // stubFTS implements activation.FTSIndex using a fixed scored list.
@@ -510,7 +527,7 @@ func TestActivationWithRealPebble(t *testing.T) {
 	}
 	defer db.Close()
 
-	store := storage.NewPebbleStore(db, 1000)
+	store := storage.NewPebbleStore(db, storage.PebbleStoreConfig{CacheSize: 1000})
 
 	eng := activation.New(store, nil, nil, nil)
 
@@ -698,6 +715,32 @@ func TestPositiveFTSScoreYieldsNormalizedFTR(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Test 10.5: CalcCandidatesPerIndex scales dynamically with vault size
+// ---------------------------------------------------------------------------
+
+func TestCalcCandidatesPerIndex(t *testing.T) {
+	tests := []struct {
+		vaultSize int64
+		want      int
+	}{
+		{0, 30},
+		{-1, 30},
+		{100, 30},   // sqrt(100)=10, below floor
+		{900, 30},   // sqrt(900)=30, exactly floor
+		{1000, 31},  // sqrt(1000)≈31
+		{10000, 100},
+		{40000, 200}, // sqrt(40000)=200, hits ceiling
+		{100000, 200}, // above ceiling, clamped
+	}
+	for _, tt := range tests {
+		got := activation.CalcCandidatesPerIndex(tt.vaultSize)
+		if got != tt.want {
+			t.Errorf("CalcCandidatesPerIndex(%d) = %d, want %d", tt.vaultSize, got, tt.want)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Test 11: ProfileUsed is set to the explicitly requested profile name
 // ---------------------------------------------------------------------------
 
@@ -765,5 +808,62 @@ func TestProfileUsed_DefaultFallback(t *testing.T) {
 	}
 	if result.ProfileUsed != "default" {
 		t.Errorf("ProfileUsed = %q, want %q", result.ProfileUsed, "default")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Test 13: HNSW search error degrades gracefully (FTS path still works)
+// ---------------------------------------------------------------------------
+
+// errorHNSW implements activation.HNSWIndex but always returns an error from Search.
+type errorHNSW struct{}
+
+func (h *errorHNSW) Search(_ context.Context, _ [8]byte, _ []float32, _ int) ([]activation.ScoredID, error) {
+	return nil, fmt.Errorf("hnsw: index not ready")
+}
+
+func TestActivation_HNSWError_GracefulDegradation(t *testing.T) {
+	store := newStubStore()
+
+	eng1 := &storage.Engram{
+		Concept:    "graceful degradation",
+		Content:    "system continues operating despite vector index failure",
+		Confidence: 1.0,
+		Stability:  30.0,
+		Relevance:  0.8,
+	}
+	store.writeEngram(eng1)
+
+	// FTS returns the engram so the FTS path can surface it even when HNSW fails.
+	fts := &stubFTS{results: []activation.ScoredID{
+		{ID: eng1.ID, Score: 0.9},
+	}}
+
+	// Inject the error-returning HNSW stub.
+	eng := activation.New(store, fts, &errorHNSW{}, &stubEmbedder{})
+	defer eng.Close()
+
+	result, err := eng.Run(context.Background(), &activation.ActivateRequest{
+		Context:    []string{"graceful degradation"},
+		Threshold:  0.0,
+		MaxResults: 10,
+	})
+
+	// Must not return an error even though HNSW failed.
+	if err != nil {
+		t.Fatalf("Run returned error on HNSW failure: %v", err)
+	}
+
+	// Result must be non-nil.
+	if result == nil {
+		t.Fatal("expected non-nil result on HNSW failure")
+	}
+
+	// Activations slice must be non-nil and contain at least the FTS result.
+	if result.Activations == nil {
+		t.Fatal("expected non-nil Activations slice on HNSW failure")
+	}
+	if len(result.Activations) == 0 {
+		t.Error("expected at least 1 activation via FTS path when HNSW fails")
 	}
 }

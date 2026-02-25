@@ -293,15 +293,22 @@ func AssocFwdPrefixForID(ws [8]byte, id [16]byte) []byte {
 	return key
 }
 
+// AssocRevPrefixForID returns a 25-byte scan prefix covering all reverse
+// association index entries where the given engram is the target
+// (0x04 | ws(8) | dstID(16)).
+func AssocRevPrefixForID(ws [8]byte, id [16]byte) []byte {
+	key := make([]byte, 1+8+16)
+	key[0] = 0x04
+	copy(key[1:9], ws[:])
+	copy(key[9:25], id[:])
+	return key
+}
+
 // VaultCountKey constructs the vault engram count key (0x15 prefix).
 // Key: 0x15 | wsPrefix(8) = 9 bytes
 // Value: BigEndian int64 total engram count for the vault.
 //
-// TODO(key-schema): VaultCountKey (9-byte) and EpisodeKey (25-byte) share the 0x15
-// prefix. The count key is a prefix of all episode keys. This is safe because Pebble
-// stores them as distinct entries, but any prefix scan using VaultCountKey as a lower
-// bound will walk into episode data. Assign EpisodeKey a dedicated prefix (e.g., 0x18)
-// before episodic memory is used in multi-tenant production.
+// 0x15 is the sole user of this prefix. EpisodeKey uses 0x1A.
 func VaultCountKey(ws [8]byte) []byte {
 	key := make([]byte, 1+8)
 	key[0] = 0x15
@@ -358,21 +365,21 @@ func ProvenanceSuffixKey(ws [8]byte, id [16]byte, ts uint64, seq uint32) []byte 
 	return key
 }
 
-// EpisodeKey constructs the key for an episode record (0x15 prefix).
-// Key: 0x15 | wsPrefix(8) | episodeID(16) = 25 bytes
+// EpisodeKey constructs the key for an episode record (0x1A prefix).
+// Key: 0x1A | wsPrefix(8) | episodeID(16) = 25 bytes
 func EpisodeKey(ws [8]byte, id [16]byte) []byte {
 	key := make([]byte, 1+8+16)
-	key[0] = 0x15
+	key[0] = 0x1A
 	copy(key[1:9], ws[:])
 	copy(key[9:25], id[:])
 	return key
 }
 
-// EpisodeFrameKey constructs the key for an episode frame (0x15 prefix, with 0xFF separator).
-// Key: 0x15 | wsPrefix(8) | episodeID(16) | 0xFF | position(4) = 30 bytes
+// EpisodeFrameKey constructs the key for an episode frame (0x1A prefix, with 0xFF separator).
+// Key: 0x1A | wsPrefix(8) | episodeID(16) | 0xFF | position(4) = 30 bytes
 func EpisodeFrameKey(ws [8]byte, episodeID [16]byte, position uint32) []byte {
 	key := make([]byte, 1+8+16+1+4)
-	key[0] = 0x15
+	key[0] = 0x1A
 	copy(key[1:9], ws[:])
 	copy(key[9:25], episodeID[:])
 	key[25] = 0xFF
@@ -387,6 +394,49 @@ func BucketMigrationKey(ws [8]byte) []byte {
 	key := make([]byte, 1+8)
 	key[0] = 0x17
 	copy(key[1:9], ws[:])
+	return key
+}
+
+// EmbeddingKey constructs the standalone embedding key (0x18 prefix) for ERF v2.
+// Stores: 8-byte quantize params + N×int8 quantized bytes.
+// Key: 0x18 | wsPrefix(8) | ulid(16) = 25 bytes
+func EmbeddingKey(ws [8]byte, id [16]byte) []byte {
+	key := make([]byte, 1+8+16)
+	key[0] = 0x18
+	copy(key[1:9], ws[:])
+	copy(key[9:25], id[:])
+	return key
+}
+
+// FTSVersionKey constructs the FTS schema version key (0x1B prefix).
+// Key: 0x1B | wsPrefix(8) = 9 bytes
+// Value: uint8 — 0 = legacy (unstemmed), 1 = re-indexed with Porter stemming.
+// Once set to 1, dual-path query fallback is skipped (all tokens are stemmed).
+func FTSVersionKey(ws [8]byte) []byte {
+	key := make([]byte, 1+8)
+	key[0] = 0x1B
+	copy(key[1:9], ws[:])
+	return key
+}
+
+// TransitionKey constructs the PAS transition table key (0x1C prefix).
+// Key: 0x1C | wsPrefix(8) | srcID(16) | dstID(16) = 41 bytes
+func TransitionKey(ws [8]byte, src [16]byte, dst [16]byte) []byte {
+	key := make([]byte, 1+8+16+16)
+	key[0] = 0x1C
+	copy(key[1:9], ws[:])
+	copy(key[9:25], src[:])
+	copy(key[25:41], dst[:])
+	return key
+}
+
+// TransitionPrefixForSrc returns a 25-byte scan prefix covering all transition
+// targets from a given source engram (0x1C | ws(8) | src(16)).
+func TransitionPrefixForSrc(ws [8]byte, src [16]byte) []byte {
+	key := make([]byte, 1+8+16)
+	key[0] = 0x1C
+	copy(key[1:9], ws[:])
+	copy(key[9:25], src[:])
 	return key
 }
 

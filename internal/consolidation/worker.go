@@ -71,11 +71,9 @@ func (w *Worker) RunOnce(ctx context.Context, vault string) (*ConsolidationRepor
 		report.Errors = append(report.Errors, "phase3_schema_promotion: "+err.Error())
 	}
 
-	// Phase 4: Decay Acceleration
-	if err := w.runPhase4DecayAcceleration(ctx, store, wsPrefix, report); err != nil {
-		slog.Warn("consolidation: phase 4 (decay acceleration) failed", "vault", vault, "error", err)
-		report.Errors = append(report.Errors, "phase4_decay_acceleration: "+err.Error())
-	}
+	// Phase 4: Decay Acceleration — disabled. ACT-R computes temporal priority
+	// at query time from AccessCount + LastAccess. Background mutation of stored
+	// Relevance contradicts the total-recall promise and is no longer needed.
 
 	// Phase 5: Transitive Association Inference
 	if err := w.runPhase5TransitiveInference(ctx, store, wsPrefix, report); err != nil {

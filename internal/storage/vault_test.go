@@ -8,7 +8,7 @@ import (
 // vault name and ListVaultNames returns it.
 func TestWriteVaultNameListVaultNamesRoundtrip(t *testing.T) {
 	db := openTestPebble(t)
-	store := NewPebbleStore(db, 100)
+	store := NewPebbleStore(db, PebbleStoreConfig{CacheSize: 100})
 
 	ws := store.VaultPrefix("my-vault")
 
@@ -37,7 +37,7 @@ func TestWriteVaultNameListVaultNamesRoundtrip(t *testing.T) {
 // for the same vault does not cause errors or duplicate entries.
 func TestWriteVaultNameIdempotent(t *testing.T) {
 	db := openTestPebble(t)
-	store := NewPebbleStore(db, 100)
+	store := NewPebbleStore(db, PebbleStoreConfig{CacheSize: 100})
 
 	ws := store.VaultPrefix("idem-vault")
 
@@ -67,7 +67,7 @@ func TestWriteVaultNameIdempotent(t *testing.T) {
 // ResolveVaultPrefix returns the same prefix used to write.
 func TestResolveVaultPrefixReturnsCorrectPrefix(t *testing.T) {
 	db := openTestPebble(t)
-	store := NewPebbleStore(db, 100)
+	store := NewPebbleStore(db, PebbleStoreConfig{CacheSize: 100})
 
 	vaultName := "resolve-test-vault"
 	ws := store.VaultPrefix(vaultName)
@@ -88,7 +88,7 @@ func TestResolveVaultPrefixColdPath(t *testing.T) {
 	db := openTestPebble(t)
 
 	// Write vault name using first store instance.
-	store1 := NewPebbleStore(db, 100)
+	store1 := NewPebbleStore(db, PebbleStoreConfig{CacheSize: 100})
 	vaultName := "cold-path-vault"
 	ws := store1.VaultPrefix(vaultName)
 	if err := store1.WriteVaultName(ws, vaultName); err != nil {
@@ -97,7 +97,7 @@ func TestResolveVaultPrefixColdPath(t *testing.T) {
 
 	// Create second store instance (no in-memory cache warm-up).
 	// Both share the same underlying DB; openTestPebble's cleanup handles Close.
-	store2 := NewPebbleStore(db, 100)
+	store2 := NewPebbleStore(db, PebbleStoreConfig{CacheSize: 100})
 	resolved := store2.ResolveVaultPrefix(vaultName)
 	if resolved != ws {
 		t.Errorf("cold path ResolveVaultPrefix: got %x, want %x", resolved, ws)
@@ -108,7 +108,7 @@ func TestResolveVaultPrefixColdPath(t *testing.T) {
 // returned by ListVaultNames.
 func TestListVaultNamesMultipleVaults(t *testing.T) {
 	db := openTestPebble(t)
-	store := NewPebbleStore(db, 100)
+	store := NewPebbleStore(db, PebbleStoreConfig{CacheSize: 100})
 
 	vaults := []string{"vault-alpha", "vault-beta", "vault-gamma"}
 	for _, name := range vaults {

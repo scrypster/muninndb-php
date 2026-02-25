@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"sync"
 
@@ -52,6 +53,7 @@ func (s *Server) Serve(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", s.addr, err)
 	}
+	slog.Info("mbp: listening", "addr", ln.Addr().String())
 	s.listener = ln
 
 	// Accept connections in a goroutine

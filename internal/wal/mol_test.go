@@ -13,6 +13,74 @@ import (
 	"github.com/cockroachdb/pebble"
 )
 
+// TestGroupCommitterStopDrainsQueue verifies that cancelling the context causes
+// Run() to drain the pending channel and flush all queued entries before exiting.
+func TestGroupCommitterStopDrainsQueue(t *testing.T) {
+	dir := t.TempDir()
+	mol, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer mol.Close()
+
+	db, err := pebble.Open(filepath.Join(dir, "pebble"), &pebble.Options{})
+	if err != nil {
+		t.Fatalf("pebble.Open failed: %v", err)
+	}
+	defer db.Close()
+
+	// batchSize = 100 so 20 entries won't trigger an auto-flush via the pending
+	// drain path inside the regular pw case (maxGroupSize guard).
+	gc := &GroupCommitter{
+		pending:      make(chan *PendingWrite, 4096),
+		mol:          mol,
+		db:           db,
+		maxGroupSize: 100,
+		maxWait:      DefaultMaxWait,
+		done:         make(chan struct{}),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- gc.Run(ctx)
+	}()
+
+	// Submit 20 fire-and-forget entries via AppendAsync.
+	const numEntries = 20
+	for i := 0; i < numEntries; i++ {
+		entry := &MOLEntry{
+			OpType:  OpEngramWrite,
+			VaultID: 1,
+			Payload: []byte(fmt.Sprintf("entry %d", i)),
+		}
+		AppendAsync(gc, entry)
+	}
+
+	// Give entries time to land in the pending channel before cancelling.
+	time.Sleep(1 * time.Millisecond)
+
+	// Cancel context — Run() should drain pending and return.
+	cancel()
+
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Fatalf("Run returned error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return within timeout after context cancel")
+	}
+
+	// mol.nextSeq is incremented by Append on each successful write.
+	// After flushing all 20 entries it should equal 20.
+	written := mol.nextSeq.Load()
+	if written != numEntries {
+		t.Errorf("expected %d entries written (mol.nextSeq=%d), got %d", numEntries, written, written)
+	}
+}
+
 // TestGroupCommitterRunCancels tests that Run(ctx) returns nil when context is canceled
 func TestGroupCommitterRunCancels(t *testing.T) {
 	dir := t.TempDir()

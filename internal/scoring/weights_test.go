@@ -215,3 +215,105 @@ func TestDefaultWeights_Valid(t *testing.T) {
 		t.Errorf("default weights sum = %v, want ~1.0", sum)
 	}
 }
+
+// TestSoftmax_NaNInput verifies that a NaN in the input produces no NaN in the output.
+// The implementation falls back to a uniform distribution when NaN is detected.
+func TestSoftmax_NaNInput(t *testing.T) {
+	w := [NumDims]float64{math.NaN(), 1.0, 0.0, 0.0, 0.0, 0.0}
+	result := Softmax(w)
+
+	for i, v := range result {
+		if math.IsNaN(v) {
+			t.Errorf("result[%d] = NaN, expected finite value", i)
+		}
+	}
+
+	// Result must still be a valid probability distribution.
+	sum := 0.0
+	for _, v := range result {
+		sum += v
+	}
+	if math.Abs(sum-1.0) > 1e-9 {
+		t.Errorf("softmax(NaN input) sum = %v, want ~1.0", sum)
+	}
+}
+
+// TestSoftmax_InfInput verifies that +Inf in the input is handled gracefully.
+// The +Inf element should dominate and receive weight ~1.0; the rest ~0.0.
+func TestSoftmax_InfInput(t *testing.T) {
+	w := [NumDims]float64{math.Inf(1), 1.0, 0.0, 0.0, 0.0, 0.0}
+	result := Softmax(w)
+
+	for i, v := range result {
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			t.Errorf("result[%d] = %v, expected finite value", i, v)
+		}
+	}
+
+	// Result must be a valid probability distribution.
+	sum := 0.0
+	for _, v := range result {
+		sum += v
+	}
+	if math.Abs(sum-1.0) > 1e-9 {
+		t.Errorf("softmax(Inf input) sum = %v, want ~1.0", sum)
+	}
+}
+
+// TestSoftmax_AllZero verifies that all-zero input yields a uniform distribution.
+func TestSoftmax_AllZero(t *testing.T) {
+	w := [NumDims]float64{0, 0, 0, 0, 0, 0}
+	result := Softmax(w)
+
+	// All elements should be equal.
+	expected := 1.0 / float64(NumDims)
+	for i, v := range result {
+		if math.Abs(v-expected) > 1e-9 {
+			t.Errorf("result[%d] = %v, want %v (uniform)", i, v, expected)
+		}
+	}
+
+	sum := 0.0
+	for _, v := range result {
+		sum += v
+	}
+	if math.Abs(sum-1.0) > 1e-9 {
+		t.Errorf("softmax(all-zero) sum = %v, want ~1.0", sum)
+	}
+}
+
+// TestUpdate_NaNGradient verifies that a NaN gradient value is skipped and
+// does not propagate NaN into stored weights.
+func TestUpdate_NaNGradient(t *testing.T) {
+	vw := &VaultWeights{
+		VaultPrefix:  [8]byte{0x01},
+		Weights:      DefaultWeights(),
+		LearningRate: 0.1,
+		UpdatedAt:    time.Now(),
+	}
+
+	// ScoreVector containing NaN — gradient = lr * direction * NaN = NaN.
+	signal := FeedbackSignal{
+		EngramID:  [16]byte{0x01},
+		Accessed:  true,
+		Timestamp: time.Now(),
+		ScoreVector: [NumDims]float64{
+			math.NaN(), math.NaN(), math.NaN(), math.NaN(), math.NaN(), math.NaN(),
+		},
+	}
+
+	// Must not panic.
+	vw.Update(signal)
+
+	// Weights must remain finite and still sum to ~1.
+	sum := 0.0
+	for i, v := range vw.Weights {
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			t.Errorf("weight[%d] = %v after NaN gradient, expected finite value", i, v)
+		}
+		sum += v
+	}
+	if math.Abs(sum-1.0) > 1e-9 {
+		t.Errorf("weights sum = %v after NaN gradient update, want ~1.0", sum)
+	}
+}

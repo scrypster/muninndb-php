@@ -4,8 +4,9 @@ package mbp
 // Increment when adding features that require new message types or payload changes.
 //
 // Version history:
-//   0 = legacy (pre-versioned binaries)
-//   1 = initial versioned release
+//
+//	0 = legacy (pre-versioned binaries)
+//	1 = initial versioned release
 const CurrentProtocolVersion uint16 = 1
 
 // MinSupportedProtocolVersion is the oldest protocol version this binary will

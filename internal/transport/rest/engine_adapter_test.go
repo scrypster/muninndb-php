@@ -3,6 +3,7 @@ package rest
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/scrypster/muninndb/internal/cognitive"
 	"github.com/scrypster/muninndb/internal/engine/trigger"
@@ -149,11 +150,108 @@ func TestRESTEngineWrapperListEngrams_NoLimit(t *testing.T) {
 	}
 }
 
+func TestCoerceFilterValues_RFC3339String(t *testing.T) {
+	input := []mbp.Filter{
+		{Field: "created_after", Op: "gte", Value: "2026-01-01T00:00:00Z"},
+	}
+	out := coerceFilterValues(input)
+	got, ok := out[0].Value.(time.Time)
+	if !ok {
+		t.Fatalf("expected time.Time, got %T", out[0].Value)
+	}
+	want := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	if !got.Equal(want) {
+		t.Errorf("expected %v, got %v", want, got)
+	}
+	// Original slice must not be mutated.
+	if _, isStr := input[0].Value.(string); !isStr {
+		t.Error("original filter value was mutated")
+	}
+}
+
+func TestCoerceFilterValues_DateOnlyString(t *testing.T) {
+	input := []mbp.Filter{
+		{Field: "created_before", Op: "lte", Value: "2026-06-15"},
+	}
+	out := coerceFilterValues(input)
+	got, ok := out[0].Value.(time.Time)
+	if !ok {
+		t.Fatalf("expected time.Time, got %T", out[0].Value)
+	}
+	want := time.Date(2026, 6, 15, 0, 0, 0, 0, time.UTC)
+	if !got.Equal(want) {
+		t.Errorf("expected %v, got %v", want, got)
+	}
+}
+
+func TestCoerceFilterValues_AlreadyTimeTime(t *testing.T) {
+	ts := time.Date(2025, 3, 10, 12, 0, 0, 0, time.UTC)
+	input := []mbp.Filter{
+		{Field: "created_after", Op: "gte", Value: ts},
+	}
+	out := coerceFilterValues(input)
+	got, ok := out[0].Value.(time.Time)
+	if !ok {
+		t.Fatalf("expected time.Time, got %T", out[0].Value)
+	}
+	if !got.Equal(ts) {
+		t.Errorf("expected value unchanged: %v, got %v", ts, got)
+	}
+}
+
+func TestCoerceFilterValues_UnparsableStringLeftAlone(t *testing.T) {
+	input := []mbp.Filter{
+		{Field: "created_after", Op: "gte", Value: "not-a-date"},
+	}
+	out := coerceFilterValues(input)
+	if _, isStr := out[0].Value.(string); !isStr {
+		t.Errorf("expected unparsable string to remain a string, got %T", out[0].Value)
+	}
+}
+
+func TestCoerceFilterValues_NonTemporalFieldUntouched(t *testing.T) {
+	input := []mbp.Filter{
+		{Field: "concept", Op: "eq", Value: "2026-01-01T00:00:00Z"},
+	}
+	out := coerceFilterValues(input)
+	if _, isStr := out[0].Value.(string); !isStr {
+		t.Errorf("expected non-temporal field value to remain a string, got %T", out[0].Value)
+	}
+}
+
+func TestCoerceFilterValues_DoesNotMutateOriginal(t *testing.T) {
+	original := []mbp.Filter{
+		{Field: "created_after", Op: "gte", Value: "2026-01-01T00:00:00Z"},
+		{Field: "concept", Op: "eq", Value: "memory"},
+	}
+	_ = coerceFilterValues(original)
+	if _, isStr := original[0].Value.(string); !isStr {
+		t.Error("coerceFilterValues mutated the original slice")
+	}
+}
+
 func TestRESTEngineWrapperStat_HNSWNilDoesNotPopulateIndexSize(t *testing.T) {
 	// When hnswReg is nil, IndexSize should remain as returned by the engine.
 	w := &RESTEngineWrapper{engine: nil, hnswReg: nil}
 	// We verify via the struct state — hnswReg nil means the if-branch is skipped.
 	if w.hnswReg != nil {
 		t.Error("expected hnswReg to be nil")
+	}
+}
+
+func TestCoerceFilterValues_IntValue(t *testing.T) {
+	input := []mbp.Filter{
+		{Field: "created_after", Op: "gte", Value: 12345},
+	}
+	out := coerceFilterValues(input)
+	if _, ok := out[0].Value.(int); !ok {
+		t.Fatalf("expected int value to remain an int, got %T", out[0].Value)
+	}
+}
+
+func TestCoerceFilterValues_EmptySlice(t *testing.T) {
+	out := coerceFilterValues([]mbp.Filter{})
+	if len(out) != 0 {
+		t.Errorf("expected output length 0 for empty input, got %d", len(out))
 	}
 }

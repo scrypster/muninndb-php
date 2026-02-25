@@ -348,6 +348,13 @@ func TestHandlePlugins_EmptyRegistry(t *testing.T) {
 // newTestCoordinator creates a minimal ClusterCoordinator backed by an in-memory pebble DB.
 func newTestCoordinator(t *testing.T) *replication.ClusterCoordinator {
 	t.Helper()
+	return newTestCoordinatorWithSecret(t, "")
+}
+
+// newTestCoordinatorWithSecret creates a minimal ClusterCoordinator with an optional
+// cluster secret. Pass a non-empty secret to test cluster auth middleware behaviour.
+func newTestCoordinatorWithSecret(t *testing.T, secret string) *replication.ClusterCoordinator {
+	t.Helper()
 	db, err := pebble.Open("", &pebble.Options{FS: vfs.NewMem()})
 	if err != nil {
 		t.Fatalf("open pebble: %v", err)
@@ -361,12 +368,13 @@ func newTestCoordinator(t *testing.T) *replication.ClusterCoordinator {
 		t.Fatalf("new epoch store: %v", err)
 	}
 	cfg := &config.ClusterConfig{
-		Enabled:     true,
-		NodeID:      "test-node",
-		BindAddr:    "127.0.0.1:0",
-		Role:        "primary",
-		LeaseTTL:    10,
-		HeartbeatMS: 1000,
+		Enabled:       true,
+		NodeID:        "test-node",
+		BindAddr:      "127.0.0.1:0",
+		Role:          "primary",
+		LeaseTTL:      10,
+		HeartbeatMS:   1000,
+		ClusterSecret: secret,
 	}
 	coord := replication.NewClusterCoordinator(cfg, repLog, applier, epochStore)
 	t.Cleanup(func() { coord.Stop() })
@@ -395,11 +403,13 @@ func TestReplicationStatus_ClusterDisabled(t *testing.T) {
 
 // TestReplicationStatus_WithCoordinator verifies real data is returned.
 func TestReplicationStatus_WithCoordinator(t *testing.T) {
+	const testSecret = "test-cluster-secret"
 	srv := newTestServer(t, nil)
-	coord := newTestCoordinator(t)
+	coord := newTestCoordinatorWithSecret(t, testSecret)
 	srv.SetCoordinator(coord)
 
 	req := httptest.NewRequest("GET", "/v1/replication/status", nil)
+	req.Header.Set("Authorization", "Bearer "+testSecret)
 	w := httptest.NewRecorder()
 	srv.mux.ServeHTTP(w, req)
 
@@ -439,11 +449,13 @@ func TestReplicationLag_ClusterDisabled(t *testing.T) {
 
 // TestReplicationLag_WithCoordinator verifies lag data is returned.
 func TestReplicationLag_WithCoordinator(t *testing.T) {
+	const testSecret = "test-cluster-secret"
 	srv := newTestServer(t, nil)
-	coord := newTestCoordinator(t)
+	coord := newTestCoordinatorWithSecret(t, testSecret)
 	srv.SetCoordinator(coord)
 
 	req := httptest.NewRequest("GET", "/v1/replication/lag", nil)
+	req.Header.Set("Authorization", "Bearer "+testSecret)
 	w := httptest.NewRecorder()
 	srv.mux.ServeHTTP(w, req)
 
@@ -477,11 +489,13 @@ func TestReplicationPromote_ClusterDisabled(t *testing.T) {
 
 // TestReplicationPromote_WithCoordinator verifies election is triggered.
 func TestReplicationPromote_WithCoordinator(t *testing.T) {
+	const testSecret = "test-cluster-secret"
 	srv := newTestServer(t, nil)
-	coord := newTestCoordinator(t)
+	coord := newTestCoordinatorWithSecret(t, testSecret)
 	srv.SetCoordinator(coord)
 
 	req := httptest.NewRequest("POST", "/v1/replication/promote", nil)
+	req.Header.Set("Authorization", "Bearer "+testSecret)
 	w := httptest.NewRecorder()
 	srv.mux.ServeHTTP(w, req)
 

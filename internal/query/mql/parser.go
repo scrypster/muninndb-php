@@ -81,7 +81,7 @@ func (p *Parser) Parse() (Query, error) {
 	case TokenWorkingMemory:
 		return p.parseWorkingMemory()
 	default:
-		return nil, p.error(fmt.Sprintf("expected statement keyword, got %s", tok.Type))
+		return nil, p.error(fmt.Sprintf("unexpected %q: expected one of: ACTIVATE, RECALL, TRAVERSE, CONSOLIDATE, WORKING_MEMORY", tok.Value))
 	}
 }
 
@@ -175,7 +175,7 @@ func (p *Parser) parseActivate() (*ActivateQuery, error) {
 			p.advance()
 
 		default:
-			return nil, p.error(fmt.Sprintf("unexpected token %s", p.current().Type))
+			return nil, p.error(fmt.Sprintf("unexpected %q in ACTIVATE clause", p.current().Value))
 		}
 	}
 
@@ -425,7 +425,7 @@ func (p *Parser) parsePrimary() (Predicate, error) {
 		}
 	}
 
-	return nil, p.error(fmt.Sprintf("unexpected token in predicate: %s", tok.Type))
+	return nil, p.error(fmt.Sprintf("unexpected %q in predicate", tok.Value))
 }
 
 // parseRecallEpisode parses a RECALL EPISODE query.
@@ -470,7 +470,7 @@ func (p *Parser) parseRecallEpisode() (*RecallEpisodeQuery, error) {
 	}
 
 	if p.current().Type != TokenEOF {
-		return nil, p.error(fmt.Sprintf("unexpected token after RECALL EPISODE: %s", p.current().Type))
+		return nil, p.error(fmt.Sprintf("unexpected %q after RECALL EPISODE", p.current().Value))
 	}
 
 	return query, nil
@@ -535,7 +535,7 @@ func (p *Parser) parseTraverse() (*TraverseQuery, error) {
 	}
 
 	if p.current().Type != TokenEOF {
-		return nil, p.error(fmt.Sprintf("unexpected token after TRAVERSE: %s", p.current().Type))
+		return nil, p.error(fmt.Sprintf("unexpected %q after TRAVERSE", p.current().Value))
 	}
 
 	return query, nil
@@ -574,7 +574,7 @@ func (p *Parser) parseConsolidate() (*ConsolidateQuery, error) {
 	}
 
 	if p.current().Type != TokenEOF {
-		return nil, p.error(fmt.Sprintf("unexpected token after CONSOLIDATE: %s", p.current().Type))
+		return nil, p.error(fmt.Sprintf("unexpected %q after CONSOLIDATE", p.current().Value))
 	}
 
 	return query, nil
@@ -602,7 +602,7 @@ func (p *Parser) parseWorkingMemory() (*WorkingMemoryQuery, error) {
 	p.advance()
 
 	if p.current().Type != TokenEOF {
-		return nil, p.error(fmt.Sprintf("unexpected token after WORKING_MEMORY: %s", p.current().Type))
+		return nil, p.error(fmt.Sprintf("unexpected %q after WORKING_MEMORY", p.current().Value))
 	}
 
 	return &WorkingMemoryQuery{SessionID: sessionID}, nil

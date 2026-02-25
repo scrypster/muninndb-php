@@ -608,7 +608,7 @@ func TestP3Integration_RollingUpgrade(t *testing.T) {
 	nodeA.coord.UpdateReplicaSeq("node-C", cortexSeq)
 
 	// Wire mock flushers for graceful handoff.
-	nodeA.coord.SetCognitiveFlushers(&p2MockFlusher{}, &p2MockFlusher{})
+	nodeA.coord.SetCognitiveFlushers(&p2MockFlusher{})
 
 	// Graceful failover A -> B.
 	ctx := context.Background()
@@ -653,7 +653,7 @@ func TestP3Integration_RollingUpgrade(t *testing.T) {
 	newBaseSeq := baseSeq + 20
 	nodeB.coord.UpdateReplicaSeq("node-A", newBaseSeq)
 	nodeB.coord.UpdateReplicaSeq("node-C", newBaseSeq)
-	nodeB.coord.SetCognitiveFlushers(&p2MockFlusher{}, &p2MockFlusher{})
+	nodeB.coord.SetCognitiveFlushers(&p2MockFlusher{})
 
 	// Graceful failover B -> C.
 	if err := nodeB.coord.GracefulFailover(ctx, "node-C"); err != nil {

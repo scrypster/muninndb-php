@@ -3,7 +3,22 @@ package brief
 import (
 	"strings"
 	"testing"
+
+	"github.com/scrypster/muninndb/internal/index/fts"
 )
+
+// makeQueryTerms builds a queryTerms map by tokenizing (and stemming) each word
+// via fts.Tokenize, matching how scoreText processes text tokens.
+func makeQueryTerms(t *testing.T, words ...string) map[string]bool {
+	t.Helper()
+	m := make(map[string]bool)
+	for _, w := range words {
+		for _, tok := range fts.Tokenize(w) {
+			m[tok] = true
+		}
+	}
+	return m
+}
 
 // TestSplitSentences tests sentence splitting on various input patterns.
 func TestSplitSentences(t *testing.T) {
@@ -112,68 +127,51 @@ func TestScoreText(t *testing.T) {
 		expectedMin float64 // minimum score (since stop words are filtered)
 	}{
 		{
-			name: "exact match single term",
-			text: "The database contains memory",
-			queryTerms: map[string]bool{
-				"database": true,
-			},
+			name:        "exact match single term",
+			text:        "The database contains memory",
+			queryTerms:  makeQueryTerms(t, "database"),
 			expectedMin: 1.0,
 		},
 		{
-			name: "multiple matching terms",
-			text: "The database memory system",
-			queryTerms: map[string]bool{
-				"database": true,
-				"memory":   true,
-				"system":   true,
-			},
+			name:        "multiple matching terms",
+			text:        "The database memory system",
+			queryTerms:  makeQueryTerms(t, "database", "memory", "system"),
 			expectedMin: 3.0,
 		},
 		{
-			name: "no match returns zero",
-			text: "The quick brown fox",
-			queryTerms: map[string]bool{
-				"database": true,
-			},
+			name:        "no match returns zero",
+			text:        "The quick brown fox",
+			queryTerms:  makeQueryTerms(t, "database"),
 			expectedMin: 0.0,
 		},
 		{
-			name: "repeated terms count multiple times",
-			text: "memory memory memory",
-			queryTerms: map[string]bool{
-				"memory": true,
-			},
+			name:        "repeated terms count multiple times",
+			text:        "memory memory memory",
+			queryTerms:  makeQueryTerms(t, "memory"),
 			expectedMin: 3.0,
 		},
 		{
-			name: "case insensitive",
-			text: "Database MEMORY System",
-			queryTerms: map[string]bool{
-				"database": true,
-				"memory":   true,
-			},
+			name:        "case insensitive",
+			text:        "Database MEMORY System",
+			queryTerms:  makeQueryTerms(t, "database", "memory"),
 			expectedMin: 2.0,
 		},
 		{
-			name: "empty query terms",
-			text: "Some text here",
-			queryTerms: map[string]bool{},
+			name:        "empty query terms",
+			text:        "Some text here",
+			queryTerms:  map[string]bool{},
 			expectedMin: 0.0,
 		},
 		{
-			name: "empty text",
-			text: "",
-			queryTerms: map[string]bool{
-				"database": true,
-			},
+			name:        "empty text",
+			text:        "",
+			queryTerms:  makeQueryTerms(t, "database"),
 			expectedMin: 0.0,
 		},
 		{
-			name: "stop words ignored",
-			text: "the database and the system",
-			queryTerms: map[string]bool{
-				"the": true, // stop word, should be filtered
-			},
+			name:        "stop words ignored",
+			text:        "the database and the system",
+			queryTerms:  makeQueryTerms(t, "the"), // stop word, should be filtered
 			expectedMin: 0.0,
 		},
 	}
@@ -455,27 +453,21 @@ func TestScoreTextEdgeCases(t *testing.T) {
 		wantMin float64
 	}{
 		{
-			name: "very long text",
-			text: strings.Repeat("memory data system ", 100),
-			terms: map[string]bool{
-				"memory": true,
-				"data":   true,
-			},
+			name:    "very long text",
+			text:    strings.Repeat("memory data system ", 100),
+			terms:   makeQueryTerms(t, "memory", "data"),
 			wantMin: 200.0, // expect at least 100 of each
 		},
 		{
-			name: "special characters stripped",
-			text: "memory!!!data???system",
-			terms: map[string]bool{
-				"memory": true,
-				"data":   true,
-			},
+			name:    "special characters stripped",
+			text:    "memory!!!data???system",
+			terms:   makeQueryTerms(t, "memory", "data"),
 			wantMin: 2.0,
 		},
 		{
 			name:    "single character text",
 			text:    "a",
-			terms:   map[string]bool{"a": true},
+			terms:   makeQueryTerms(t, "a"),
 			wantMin: 0.0, // single char tokens are filtered by Tokenize
 		},
 	}

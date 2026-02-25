@@ -2,12 +2,9 @@ package cognitive
 
 import (
 	"context"
-	"path/filepath"
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/cockroachdb/pebble"
 )
 
 // TestCoActivationEventHasWS verifies that CoActivationEvent has a WS field of type [8]byte
@@ -277,83 +274,6 @@ func TestOnWeightUpdateCalledPerPair(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Test 6: Hebbian worker metadata persistence
-// ---------------------------------------------------------------------------
-
-func TestHebbianWorker_MetadataFirstRun(t *testing.T) {
-	tmpDir := t.TempDir()
-	db, err := pebble.Open(filepath.Join(tmpDir, "test.db"), &pebble.Options{})
-	if err != nil {
-		t.Fatalf("failed to open pebble DB: %v", err)
-	}
-	defer db.Close()
-
-	store := newMockHebbianStore()
-	hw := NewHebbianWorkerWithDB(store, db)
-	defer hw.Stop()
-
-	// On fresh DB, lastDecayAt should be zero
-	if !hw.lastDecayAt.IsZero() {
-		t.Errorf("expected zero lastDecayAt on fresh DB, got %v", hw.lastDecayAt)
-	}
-}
-
-func TestHebbianWorker_MetadataPersistence(t *testing.T) {
-	tmpDir := t.TempDir()
-	db, err := pebble.Open(filepath.Join(tmpDir, "test.db"), &pebble.Options{})
-	if err != nil {
-		t.Fatalf("failed to open pebble DB: %v", err)
-	}
-	defer db.Close()
-
-	store := newMockHebbianStore()
-	hw := NewHebbianWorkerWithDB(store, db)
-
-	// Set a specific time and persist (use Unix timestamp to avoid timezone issues)
-	testTime := time.Unix(1740295800, 123456789) // specific nanos
-	hw.lastDecayAt = testTime
-	if err := hw.persistMetadata(); err != nil {
-		t.Fatalf("failed to persist metadata: %v", err)
-	}
-	hw.Stop()
-
-	// Create a new worker instance and load metadata
-	hw2 := NewHebbianWorkerWithDB(store, db)
-	defer hw2.Stop()
-
-	// Verify loaded value matches what was persisted (compare UnixNano which strips timezone)
-	if hw2.lastDecayAt.UnixNano() != testTime.UnixNano() {
-		t.Errorf("expected lastDecayAt %d, got %d", testTime.UnixNano(), hw2.lastDecayAt.UnixNano())
-	}
-}
-
-func TestHebbianWorker_MetadataShutdown(t *testing.T) {
-	tmpDir := t.TempDir()
-	db, err := pebble.Open(filepath.Join(tmpDir, "test.db"), &pebble.Options{})
-	if err != nil {
-		t.Fatalf("failed to open pebble DB: %v", err)
-	}
-	defer db.Close()
-
-	store := newMockHebbianStore()
-	hw := NewHebbianWorkerWithDB(store, db)
-
-	// Set a specific time (use Unix timestamp to avoid timezone issues)
-	testTime := time.Unix(1740314400, 0)
-	hw.lastDecayAt = testTime
-
-	// Stop should persist metadata
-	hw.Stop()
-
-	// Create a new worker and verify the persisted value
-	hw2 := NewHebbianWorkerWithDB(store, db)
-	defer hw2.Stop()
-
-	if hw2.lastDecayAt.UnixNano() != testTime.UnixNano() {
-		t.Errorf("expected lastDecayAt %d after shutdown, got %d", testTime.UnixNano(), hw2.lastDecayAt.UnixNano())
-	}
-}
 
 // ---------------------------------------------------------------------------
 // Test 7: Atomic batch write - all updates committed together

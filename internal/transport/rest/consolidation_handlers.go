@@ -33,13 +33,13 @@ func (s *Server) handleConsolidate() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		vault := r.PathValue("vault")
 		if vault == "" {
-			s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "vault name is required")
+			s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "vault name is required")
 			return
 		}
 
 		var req consolidationRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "invalid request body")
+			s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "invalid request body")
 			return
 		}
 
@@ -53,7 +53,7 @@ func (s *Server) handleConsolidate() http.HandlerFunc {
 
 		report, err := worker.RunOnce(ctx, vault)
 		if err != nil {
-			s.sendError(w, http.StatusInternalServerError, ErrStorageError, err.Error())
+			s.sendError(r, w, http.StatusInternalServerError, ErrStorageError, err.Error())
 			return
 		}
 

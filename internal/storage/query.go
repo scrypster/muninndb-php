@@ -324,6 +324,65 @@ func (ps *PebbleStore) ListByCreatorInRange(ctx context.Context, wsPrefix [8]byt
 	return ids, nil
 }
 
+
+// EngramIDsByCreatedRange returns engram IDs created between since and until,
+// ordered by creation time (ULID order). Returns at most limit IDs.
+// This is used for time-bounded candidate injection in the activation pipeline
+// when since/before filters are present.
+func (ps *PebbleStore) EngramIDsByCreatedRange(ctx context.Context, wsPrefix [8]byte, since, until time.Time, limit int) ([]ULID, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+
+	// Build lower and upper ULID bounds from timestamps.
+	minID := ulidMinFromTime(since)
+	maxID := ulidMaxFromTime(until)
+
+	// Build scan bounds within the vault 0x01 key range.
+	// Lower: 0x01 | wsPrefix | minID
+	// Upper: 0x01 | wsPrefix | maxID
+	lowerKey := keys.EngramKey(wsPrefix, [16]byte(minID))
+
+	// For upper bound, we need the next ULID after maxID, or just use maxID + epsilon.
+	// Using the maxID directly works because pebble's UpperBound is exclusive.
+	maxIDBytes := [16]byte(maxID)
+	// Increment maxID by 1 to make it exclusive
+	for i := 15; i >= 0; i-- {
+		maxIDBytes[i]++
+		if maxIDBytes[i] != 0 {
+			break
+		}
+	}
+	upperKey := keys.EngramKey(wsPrefix, maxIDBytes)
+
+	iter, err := ps.db.NewIter(&pebble.IterOptions{
+		LowerBound: lowerKey,
+		UpperBound: upperKey,
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+
+	var ids []ULID
+	for valid := iter.First(); valid && len(ids) < limit; valid = iter.Next() {
+		key := iter.Key()
+		if len(key) < 25 { // 1 prefix + 8 ws + 16 ulid
+			continue
+		}
+
+		// Extract ULID from key: key[9:25]
+		var id ULID
+		copy(id[:], key[9:25])
+		ids = append(ids, id)
+	}
+
+	if err := iter.Error(); err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
 // MigrateBuckets migrates the relevance bucket index from the old 10-bucket scheme
 // to the new 100-bucket scheme. Safe to call multiple times (idempotent).
 // Uses cursor-based chunking so a crash mid-migration can resume safely.
@@ -450,4 +509,56 @@ func (ps *PebbleStore) MigrateBuckets(ctx context.Context, wsPrefix [8]byte) err
 		return fmt.Errorf("migrate buckets iter: %w", err)
 	}
 	return flushMigrationChunk(true)
+}
+
+// LowestRelevanceIDs returns up to topK engram IDs with the lowest relevance in the vault.
+// Scans the 0x10 relevance bucket index in reverse order (bucket 9 = lowest relevance first).
+// Used by the vault pruning sweep to identify candidates for eviction under MaxEngrams policy.
+func (ps *PebbleStore) LowestRelevanceIDs(ctx context.Context, wsPrefix [8]byte, topK int) ([]ULID, error) {
+	if topK <= 0 {
+		return nil, nil
+	}
+
+	// Build scan bounds: 0x10 | wsPrefix | [0x00..0xFF]
+	// Lower: 0x10 | wsPrefix | 0x00 | {0...}
+	lowerBound := make([]byte, 1+8+1+16)
+	lowerBound[0] = 0x10
+	copy(lowerBound[1:9], wsPrefix[:])
+	// bucket byte and id bytes remain 0x00 — minimum key in wsPrefix bucket space
+
+	// Upper: 0x10 | wsPrefix | 0xFF | {FF...}
+	upperBound := make([]byte, 1+8+1+16)
+	upperBound[0] = 0x10
+	copy(upperBound[1:9], wsPrefix[:])
+	upperBound[9] = 0xFF
+	for i := 10; i < 26; i++ {
+		upperBound[i] = 0xFF
+	}
+
+	iter, err := ps.db.NewIter(&pebble.IterOptions{
+		LowerBound: lowerBound,
+		UpperBound: upperBound,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("lowest relevance iter: %w", err)
+	}
+	defer iter.Close()
+
+	// Scan in reverse order: highest storedBucket byte first (= lowest relevance).
+	var ids []ULID
+	seen := make(map[ULID]struct{})
+	for valid := iter.Last(); valid && len(ids) < topK; valid = iter.Prev() {
+		key := iter.Key()
+		// Key format: 0x10 | wsPrefix(8) | storedBucket(1) | id(16) = 26 bytes
+		if len(key) < 26 {
+			continue
+		}
+		var id ULID
+		copy(id[:], key[10:26])
+		if _, dup := seen[id]; !dup {
+			seen[id] = struct{}{}
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
 }

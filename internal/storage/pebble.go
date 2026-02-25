@@ -36,10 +36,10 @@ func OpenPebble(path string, opts *Options) (*pebble.DB, error) {
 	}
 
 	pebbleOpts := &pebble.Options{
-		MaxOpenFiles:      opts.MaxOpenFiles,
-		MemTableSize:      opts.MemTableSize,
-		LBaseMaxBytes:     opts.LBaseMaxBytes,
-		DisableWAL:        opts.DisableWAL,
+		MaxOpenFiles:  opts.MaxOpenFiles,
+		MemTableSize:  opts.MemTableSize,
+		LBaseMaxBytes: opts.LBaseMaxBytes,
+		DisableWAL:    opts.DisableWAL,
 	}
 
 	pebbleOpts.L0CompactionThreshold = opts.L0CompactionThreshold

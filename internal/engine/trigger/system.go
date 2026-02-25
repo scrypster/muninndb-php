@@ -448,9 +448,13 @@ func (ts *TriggerSystem) Subscribe(sub *Subscription) error {
 	if ts.embedder != nil && len(sub.Context) > 0 {
 		if vec, ok := ts.embedCache.Get(sub.Context); ok {
 			sub.embedding = vec
-		} else if vec, err := ts.embedder.Embed(context.Background(), sub.Context); err == nil {
-			sub.embedding = vec
-			ts.embedCache.Set(sub.Context, vec)
+		} else {
+			embedCtx, embedCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer embedCancel()
+			if vec, err := ts.embedder.Embed(embedCtx, sub.Context); err == nil {
+				sub.embedding = vec
+				ts.embedCache.Set(sub.Context, vec)
+			}
 		}
 	}
 

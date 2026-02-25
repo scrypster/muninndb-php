@@ -27,7 +27,7 @@ func cacheKeyFor(ws [8]byte, id ULID) string {
 // cacheEntry wraps an engram with access tracking.
 type cacheEntry struct {
 	eng        *Engram
-	lastAccess atomic.Int64   // Unix nanoseconds
+	lastAccess atomic.Int64 // Unix nanoseconds
 }
 
 // NewL1Cache creates a new L1 cache with the specified max size.
@@ -146,4 +146,3 @@ func (c *L1Cache) evict() {
 		}
 	}
 }
-

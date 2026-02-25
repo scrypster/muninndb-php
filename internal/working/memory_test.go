@@ -3,6 +3,7 @@ package working
 import (
 	"context"
 	"math"
+	"sync"
 	"testing"
 	"time"
 
@@ -556,5 +557,52 @@ func TestConcurrentGetAndRemove(t *testing.T) {
 	// Should have ~20 items left (30 - 10 removed)
 	if len(wm.Items) < 15 || len(wm.Items) > 30 {
 		t.Logf("expected around 20 items, got %d (expected variance due to concurrency)", len(wm.Items))
+	}
+}
+
+// TestWorkingMemory_ConcurrentCreateSameSession verifies that concurrent calls to
+// Create() with the same session ID all return the same *WorkingMemory pointer and
+// that exactly one session is stored in the manager.
+func TestWorkingMemory_ConcurrentCreateSameSession(t *testing.T) {
+	manager := NewManager()
+	const numGoroutines = 50
+	const sessionID = "concurrent-session"
+
+	results := make([]*WorkingMemory, numGoroutines)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	wg.Add(numGoroutines)
+	for i := 0; i < numGoroutines; i++ {
+		i := i
+		go func() {
+			defer wg.Done()
+			wm := manager.Create(sessionID)
+			mu.Lock()
+			results[i] = wm
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+
+	// All returned pointers must be identical.
+	first := results[0]
+	if first == nil {
+		t.Fatal("Create returned nil")
+	}
+	for i, wm := range results {
+		if wm != first {
+			t.Errorf("goroutine %d: expected pointer %p, got %p", i, first, wm)
+		}
+	}
+
+	// Manager must contain exactly one session.
+	count := 0
+	manager.sessions.Range(func(_, _ interface{}) bool {
+		count++
+		return true
+	})
+	if count != 1 {
+		t.Errorf("expected exactly 1 session in manager, got %d", count)
 	}
 }
