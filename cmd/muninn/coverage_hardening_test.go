@@ -1147,6 +1147,16 @@ func TestRunVault_ClearDispatch(t *testing.T) {
 }
 
 func TestRunVault_ExportDispatch(t *testing.T) {
+	cleanup := withMockVaultServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/api/auth/login") {
+			http.SetCookie(w, &http.Cookie{Name: "muninn_session", Value: "s"})
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+	defer cleanup()
+
 	out := captureStdout(func() {
 		runVault([]string{"export"})
 	})
@@ -1156,6 +1166,16 @@ func TestRunVault_ExportDispatch(t *testing.T) {
 }
 
 func TestRunVault_ImportDispatch(t *testing.T) {
+	cleanup := withMockVaultServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/api/auth/login") {
+			http.SetCookie(w, &http.Cookie{Name: "muninn_session", Value: "s"})
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+	defer cleanup()
+
 	out := captureStdout(func() {
 		runVault([]string{"import"})
 	})
@@ -1165,6 +1185,16 @@ func TestRunVault_ImportDispatch(t *testing.T) {
 }
 
 func TestRunVault_ReindexFTSDispatch(t *testing.T) {
+	cleanup := withMockVaultServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/api/auth/login") {
+			http.SetCookie(w, &http.Cookie{Name: "muninn_session", Value: "s"})
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+	defer cleanup()
+
 	out := captureStdout(func() {
 		runVault([]string{"reindex-fts"})
 	})
@@ -1174,6 +1204,16 @@ func TestRunVault_ReindexFTSDispatch(t *testing.T) {
 }
 
 func TestRunVault_CloneDispatch(t *testing.T) {
+	cleanup := withMockVaultServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/api/auth/login") {
+			http.SetCookie(w, &http.Cookie{Name: "muninn_session", Value: "s"})
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+	defer cleanup()
+
 	out := captureStdout(func() {
 		runVault([]string{"clone"})
 	})
@@ -1183,6 +1223,16 @@ func TestRunVault_CloneDispatch(t *testing.T) {
 }
 
 func TestRunVault_MergeDispatch(t *testing.T) {
+	cleanup := withMockVaultServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/api/auth/login") {
+			http.SetCookie(w, &http.Cookie{Name: "muninn_session", Value: "s"})
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+	defer cleanup()
+
 	out := captureStdout(func() {
 		runVault([]string{"merge"})
 	})
