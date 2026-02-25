@@ -726,6 +726,7 @@ func TestRunVault_ListDispatch(t *testing.T) {
 func TestRunNonInteractiveInit(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("MUNINNDB_DATA", filepath.Join(home, "data"))
 
 	out := captureStdout(func() {
@@ -1034,6 +1035,7 @@ func TestConfigureTools_ManualAndVSCode(t *testing.T) {
 func TestConfigureTools_AllNumbered(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 
 	out := captureStdout(func() {
 		errs := configureTools([]int{1, 2, 3, 4, 5}, "http://localhost:8750/mcp", "tok")
@@ -1049,6 +1051,7 @@ func TestConfigureTools_AllNumbered(t *testing.T) {
 func TestConfigureNamedTools_AllNames(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 
 	out := captureStdout(func() {
 		errs := configureNamedTools([]string{
@@ -1354,6 +1357,7 @@ func TestConfigureClaudeCode_Full(t *testing.T) {
 func TestRunNonInteractiveInit_WithTools(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("MUNINNDB_DATA", filepath.Join(home, "data"))
 
 	out := captureStdout(func() {
@@ -1365,6 +1369,7 @@ func TestRunNonInteractiveInit_WithTools(t *testing.T) {
 func TestRunNonInteractiveInit_WithToken(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("MUNINNDB_DATA", filepath.Join(home, "data"))
 
 	out := captureStdout(func() {
@@ -1378,6 +1383,7 @@ func TestRunNonInteractiveInit_WithToken(t *testing.T) {
 func TestRunNonInteractiveInit_GenerateToken(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	os.MkdirAll(filepath.Join(home, ".muninn", "data"), 0700)
 	t.Setenv("MUNINNDB_DATA", filepath.Join(home, ".muninn", "data"))
 
@@ -1744,6 +1750,8 @@ func TestLatestVersion_MockAPI(t *testing.T) {
 func TestConfigureClaudeMD_NewFile_Hardened(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("USERPROFILE", home)
 
 	err := configureClaudeMD()
 	if err != nil {
@@ -1761,6 +1769,8 @@ func TestConfigureClaudeMD_NewFile_Hardened(t *testing.T) {
 func TestConfigureClaudeMD_ExistingNoBlock(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("USERPROFILE", home)
 	claudeDir := filepath.Join(home, ".claude")
 	os.MkdirAll(claudeDir, 0700)
 	os.WriteFile(filepath.Join(claudeDir, "CLAUDE.md"), []byte("existing content\n"), 0644)
@@ -1781,6 +1791,8 @@ func TestConfigureClaudeMD_ExistingNoBlock(t *testing.T) {
 func TestConfigureClaudeMD_AlreadyHasBlock(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("USERPROFILE", home)
 	claudeDir := filepath.Join(home, ".claude")
 	os.MkdirAll(claudeDir, 0700)
 	os.WriteFile(filepath.Join(claudeDir, "CLAUDE.md"), []byte("# Memory\nmuninn_remember\n"), 0644)
@@ -1848,6 +1860,7 @@ func TestConfirmVaultAction_Mismatch(t *testing.T) {
 func TestConfigureNamedTools_OpenClaw(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 
 	out := captureStdout(func() {
 		errs := configureNamedTools([]string{"openclaw"}, "http://localhost:8750/mcp", "tok")
@@ -1863,6 +1876,7 @@ func TestConfigureNamedTools_OpenClaw(t *testing.T) {
 func TestConfigureTools_ClaudeDesktop_Path(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	captureStdout(func() {
 		configureTools([]int{1}, "http://localhost:8750/mcp", "tok")
 	})
@@ -1871,6 +1885,7 @@ func TestConfigureTools_ClaudeDesktop_Path(t *testing.T) {
 func TestConfigureTools_Cursor_Path(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	captureStdout(func() {
 		configureTools([]int{2}, "http://localhost:8750/mcp", "tok")
 	})
@@ -1879,6 +1894,7 @@ func TestConfigureTools_Cursor_Path(t *testing.T) {
 func TestConfigureTools_Windsurf_Path(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	captureStdout(func() {
 		configureTools([]int{4}, "http://localhost:8750/mcp", "tok")
 	})
@@ -2106,6 +2122,7 @@ func TestRunStatus_Stopped(t *testing.T) {
 func TestPromptClaudeMD_Yes(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 
 	r, w, _ := os.Pipe()
 	oldStdin := os.Stdin
@@ -2128,6 +2145,7 @@ func TestPromptClaudeMD_Yes(t *testing.T) {
 func TestPromptClaudeMD_No(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 
 	r, w, _ := os.Pipe()
 	oldStdin := os.Stdin
@@ -2150,6 +2168,7 @@ func TestPromptClaudeMD_No(t *testing.T) {
 func TestPromptClaudeMD_Empty(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 
 	r, w, _ := os.Pipe()
 	oldStdin := os.Stdin

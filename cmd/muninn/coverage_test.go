@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -1105,8 +1106,13 @@ func TestTailLog_FileNotExist(t *testing.T) {
 }
 
 func TestTailLog_ExistingFile(t *testing.T) {
-	dir := t.TempDir()
-	logPath := dir + "/test.log"
+	// Use os.MkdirTemp instead of t.TempDir because tailLog holds the file
+	// open indefinitely, and Windows cannot delete open files during cleanup.
+	dir, err := os.MkdirTemp("", "taillog-existing-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(dir, "test.log")
 	os.WriteFile(logPath, []byte("line1\nline2\n"), 0644)
 
 	var out syncBuilder
@@ -1130,8 +1136,11 @@ func TestTailLog_ExistingFile(t *testing.T) {
 }
 
 func TestTailLog_WithLevelFilter(t *testing.T) {
-	dir := t.TempDir()
-	logPath := dir + "/test.log"
+	dir, err := os.MkdirTemp("", "taillog-level-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(dir, "test.log")
 	os.WriteFile(logPath, []byte("INFO starting\nERROR failed\n"), 0644)
 
 	var out syncBuilder

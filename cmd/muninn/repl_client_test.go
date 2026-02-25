@@ -412,10 +412,9 @@ func TestMcpHealthCheckDifferentStatuses(t *testing.T) {
 
 // TestLoadDefaultVaultInvalidJSON tests loadDefaultVault with invalid JSON.
 func TestLoadDefaultVaultInvalidJSON(t *testing.T) {
-	origHome := os.Getenv("HOME")
 	tmpDir := t.TempDir()
-	os.Setenv("HOME", tmpDir)
-	defer os.Setenv("HOME", origHome)
+	t.Setenv("HOME", tmpDir)
+	t.Setenv("USERPROFILE", tmpDir) // os.UserHomeDir() checks USERPROFILE on Windows
 
 	// Create config dir
 	configDir := filepath.Join(tmpDir, ".muninn")

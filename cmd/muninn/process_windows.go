@@ -28,6 +28,9 @@ func stopProcess(proc *os.Process) error {
 // isProcessRunning checks whether a process with the given PID exists on Windows.
 // The Unix signal-0 trick is not available, so we query the system task list.
 func isProcessRunning(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
 	out, err := exec.Command(
 		"tasklist", "/FI", fmt.Sprintf("PID eq %d", pid), "/NH", "/FO", "CSV",
 	).Output()

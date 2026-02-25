@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -49,10 +50,12 @@ func TestLoadOrGenerateToken_NewToken(t *testing.T) {
 	if strings.TrimSpace(string(b)) != tok {
 		t.Errorf("token file content mismatch")
 	}
-	// Verify file permissions
-	info, _ := os.Stat(tokenFile)
-	if info.Mode().Perm() != 0600 {
-		t.Errorf("token file should be 0600, got %o", info.Mode().Perm())
+	// Verify file permissions (Windows doesn't support Unix permissions)
+	if runtime.GOOS != "windows" {
+		info, _ := os.Stat(tokenFile)
+		if info.Mode().Perm() != 0600 {
+			t.Errorf("token file should be 0600, got %o", info.Mode().Perm())
+		}
 	}
 }
 
@@ -303,10 +306,14 @@ func withTempHome(t *testing.T) (string, func()) {
 	// Also set APPDATA for Windows tests
 	origAPPDATA := os.Getenv("APPDATA")
 	os.Setenv("APPDATA", tmp)
+	// os.UserHomeDir() on Windows checks USERPROFILE, not HOME
+	origUP := os.Getenv("USERPROFILE")
+	os.Setenv("USERPROFILE", tmp)
 	return tmp, func() {
 		os.Setenv("HOME", orig)
 		os.Setenv("XDG_CONFIG_HOME", origXDG)
 		os.Setenv("APPDATA", origAPPDATA)
+		os.Setenv("USERPROFILE", origUP)
 	}
 }
 

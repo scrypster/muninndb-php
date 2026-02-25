@@ -218,7 +218,13 @@ func TestRunLogsPositionalArg(t *testing.T) {
 
 // TestTailLogShowsHistory verifies that tailLog prints last N lines before tailing.
 func TestTailLogShowsHistory(t *testing.T) {
-	f, err := os.CreateTemp(t.TempDir(), "muninn-*.log")
+	// Use os.MkdirTemp instead of t.TempDir because tailLog holds the file
+	// open indefinitely, and Windows cannot delete open files during cleanup.
+	tmpDir, err := os.MkdirTemp("", "taillog-history-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.CreateTemp(tmpDir, "muninn-*.log")
 	if err != nil {
 		t.Fatal(err)
 	}

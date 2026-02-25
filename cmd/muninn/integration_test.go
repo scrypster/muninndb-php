@@ -407,6 +407,13 @@ func TestMCPTemporalFilter(t *testing.T) {
 		t.Fatalf("failed to get IDs: %v %v %v", r1, r2, r3)
 	}
 
+	// Wait for all 3 memories to be indexed before testing temporal queries.
+	waitForIDs(t, token, map[string]any{
+		"vault":   "default",
+		"context": []string{"event"},
+		"limit":   20,
+	}, []string{id1, id2, id3}, 10*time.Second)
+
 	// since=7d ago: should return recent (3d) + current, NOT ancient (30d).
 	result := mcpTool(t, token, "muninn_recall", map[string]any{
 		"vault":   "default",
