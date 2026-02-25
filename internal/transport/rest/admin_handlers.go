@@ -18,6 +18,20 @@ import (
 
 // These handlers are mounted at /api/admin/ and require admin session auth.
 
+// countingWriter wraps http.ResponseWriter and tracks how many bytes have been written.
+// It is used by the export handler to detect whether streaming has begun before
+// deciding how to handle an error from ExportVault.
+type countingWriter struct {
+	http.ResponseWriter
+	n int64
+}
+
+func (cw *countingWriter) Write(p []byte) (int, error) {
+	n, err := cw.ResponseWriter.Write(p)
+	cw.n += int64(n)
+	return n, err
+}
+
 // isValidVaultName returns true if name is a valid vault name: 1–64 characters,
 // containing only lowercase letters, digits, hyphens, and underscores.
 func isValidVaultName(name string) bool {
@@ -40,27 +54,27 @@ func (s *Server) handleCreateAPIKey(authStore *auth.Store) http.HandlerFunc {
 			Mode  string `json:"mode"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "invalid request body")
+			s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "invalid request body")
 			return
 		}
 		if req.Vault == "" {
 			req.Vault = "default"
 		}
 		if !isValidVaultName(req.Vault) {
-			s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "invalid vault name")
+			s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "invalid vault name")
 			return
 		}
 		if len(req.Label) > 256 {
-			s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "label too long")
+			s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "label too long")
 			return
 		}
 		if req.Mode != "" && req.Mode != "full" && req.Mode != "observe" {
-			s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "mode must be 'full' or 'observe'")
+			s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "mode must be 'full' or 'observe'")
 			return
 		}
 		token, key, err := authStore.GenerateAPIKey(req.Vault, req.Label, req.Mode)
 		if err != nil {
-			s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, err.Error())
+			s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, err.Error())
 			return
 		}
 		s.sendJSON(w, http.StatusCreated, map[string]interface{}{
@@ -77,12 +91,16 @@ func (s *Server) handleListAPIKeys(authStore *auth.Store) http.HandlerFunc {
 			vault = "default"
 		}
 		if !isValidVaultName(vault) {
-			s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "invalid vault name")
+			s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "invalid vault name")
 			return
 		}
 		keys, err := authStore.ListAPIKeys(vault)
 		if err != nil {
-			s.sendError(w, http.StatusInternalServerError, ErrStorageError, err.Error())
+			if errors.Is(err, engine.ErrVaultNotFound) {
+				s.sendError(r, w, http.StatusNotFound, ErrVaultNotFound, fmt.Sprintf("vault %q not found", vault))
+				return
+			}
+			s.sendError(r, w, http.StatusInternalServerError, ErrStorageError, "failed to list API keys")
 			return
 		}
 		s.sendJSON(w, http.StatusOK, map[string]interface{}{"keys": keys})
@@ -97,11 +115,11 @@ func (s *Server) handleRevokeAPIKey(authStore *auth.Store) http.HandlerFunc {
 			vault = "default"
 		}
 		if !isValidVaultName(vault) {
-			s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "invalid vault name")
+			s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "invalid vault name")
 			return
 		}
 		if err := authStore.RevokeAPIKey(vault, id); err != nil {
-			s.sendError(w, http.StatusNotFound, ErrEngramNotFound, err.Error())
+			s.sendError(r, w, http.StatusNotFound, ErrEngramNotFound, err.Error())
 			return
 		}
 		s.sendJSON(w, http.StatusOK, map[string]interface{}{"revoked": id})
@@ -115,15 +133,15 @@ func (s *Server) handleChangeAdminPassword(authStore *auth.Store) http.HandlerFu
 			NewPassword string `json:"new_password"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "invalid request body")
+			s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "invalid request body")
 			return
 		}
 		if req.NewPassword == "" {
-			s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "new_password is required")
+			s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "new_password is required")
 			return
 		}
 		if err := authStore.ChangeAdminPassword(req.Username, req.NewPassword); err != nil {
-			s.sendError(w, http.StatusInternalServerError, ErrStorageError, err.Error())
+			s.sendError(r, w, http.StatusInternalServerError, ErrStorageError, err.Error())
 			return
 		}
 		s.sendJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -134,18 +152,18 @@ func (s *Server) handleSetVaultConfig(authStore *auth.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var cfg auth.VaultConfig
 		if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
-			s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "invalid request body")
+			s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "invalid request body")
 			return
 		}
 		if cfg.Name == "" {
 			cfg.Name = "default"
 		}
 		if !isValidVaultName(cfg.Name) {
-			s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "invalid vault name")
+			s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "invalid vault name")
 			return
 		}
 		if err := authStore.SetVaultConfig(cfg); err != nil {
-			s.sendError(w, http.StatusInternalServerError, ErrStorageError, err.Error())
+			s.sendError(r, w, http.StatusInternalServerError, ErrStorageError, err.Error())
 			return
 		}
 		s.sendJSON(w, http.StatusOK, cfg)
@@ -158,16 +176,16 @@ func (s *Server) handleGetVaultPlasticity(as *auth.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		name := r.PathValue("name")
 		if name == "" {
-			s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "vault name required")
+			s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "vault name required")
 			return
 		}
 		if !isValidVaultName(name) {
-			s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "vault name contains invalid characters")
+			s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "vault name contains invalid characters")
 			return
 		}
 		vc, err := as.GetVaultConfig(name)
 		if err != nil {
-			s.sendError(w, http.StatusInternalServerError, ErrStorageError, "failed to read vault config: "+err.Error())
+			s.sendError(r, w, http.StatusInternalServerError, ErrStorageError, "failed to read vault config: "+err.Error())
 			return
 		}
 		resolved := auth.ResolvePlasticity(vc.Plasticity)
@@ -183,38 +201,38 @@ func (s *Server) handlePutVaultPlasticity(as *auth.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		name := r.PathValue("name")
 		if name == "" {
-			s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "vault name required")
+			s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "vault name required")
 			return
 		}
 		if !isValidVaultName(name) {
-			s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "vault name contains invalid characters")
+			s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "vault name contains invalid characters")
 			return
 		}
 		var cfg auth.PlasticityConfig
 		if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
-			s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "invalid JSON: "+err.Error())
+			s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "invalid JSON: "+err.Error())
 			return
 		}
 		// Validate override field ranges if provided
 		if cfg.HopDepth != nil && (*cfg.HopDepth < 0 || *cfg.HopDepth > 8) {
-			s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "hop_depth must be 0–8")
+			s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "hop_depth must be 0–8")
 			return
 		}
-		for _, fw := range []*float32{cfg.SemanticWeight, cfg.FTSWeight, cfg.DecayFloor} {
+		for _, fw := range []*float32{cfg.SemanticWeight, cfg.FTSWeight, cfg.RelevanceFloor} {
 			if fw != nil && (*fw < 0 || *fw > 1) {
-				s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "weight fields must be 0–1")
+				s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "weight fields must be 0–1")
 				return
 			}
 		}
-		if cfg.DecayStability != nil && *cfg.DecayStability <= 0 {
-			s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "decay_stability must be > 0")
+		if cfg.TemporalHalflife != nil && *cfg.TemporalHalflife <= 0 {
+			s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "temporal_halflife must be > 0")
 			return
 		}
 		if cfg.TraversalProfile != nil {
 			if *cfg.TraversalProfile == "" {
 				cfg.TraversalProfile = nil
 			} else if !activation.ValidProfileName(*cfg.TraversalProfile) {
-				s.sendError(w, http.StatusBadRequest, ErrInvalidEngram,
+				s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram,
 					fmt.Sprintf("invalid traversal_profile %q: must be one of: default, causal, confirmatory, adversarial, structural", *cfg.TraversalProfile))
 				return
 			}
@@ -224,7 +242,7 @@ func (s *Server) handlePutVaultPlasticity(as *auth.Store) http.HandlerFunc {
 			preset = "default"
 		}
 		if !auth.ValidPlasticityPreset(preset) {
-			s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "unknown preset: "+preset)
+			s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "unknown preset: "+preset)
 			return
 		}
 		cfg.Preset = preset
@@ -237,7 +255,7 @@ func (s *Server) handlePutVaultPlasticity(as *auth.Store) http.HandlerFunc {
 		}
 		vc.Plasticity = &cfg
 		if err := as.SetVaultConfig(vc); err != nil {
-			s.sendError(w, http.StatusInternalServerError, ErrStorageError, "store error: "+err.Error())
+			s.sendError(r, w, http.StatusInternalServerError, ErrStorageError, "store error: "+err.Error())
 			return
 		}
 		resolved := auth.ResolvePlasticity(&cfg)
@@ -354,7 +372,7 @@ func (s *Server) handleGetPluginConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	cfg, err := plugincfg.LoadPluginConfig(s.dataDir)
 	if err != nil {
-		s.sendError(w, http.StatusInternalServerError, ErrStorageError, "failed to load plugin config: "+err.Error())
+		s.sendError(r, w, http.StatusInternalServerError, ErrStorageError, "failed to load plugin config: "+err.Error())
 		return
 	}
 	s.sendJSON(w, http.StatusOK, cfg)
@@ -364,16 +382,16 @@ func (s *Server) handleGetPluginConfig(w http.ResponseWriter, r *http.Request) {
 // A server restart is required for changes to take effect.
 func (s *Server) handlePutPluginConfig(w http.ResponseWriter, r *http.Request) {
 	if s.dataDir == "" {
-		s.sendError(w, http.StatusInternalServerError, ErrStorageError, "data directory not configured")
+		s.sendError(r, w, http.StatusInternalServerError, ErrStorageError, "data directory not configured")
 		return
 	}
 	var cfg plugincfg.PluginConfig
 	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
-		s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "invalid request body: "+err.Error())
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "invalid request body: "+err.Error())
 		return
 	}
 	if err := plugincfg.SavePluginConfig(s.dataDir, cfg); err != nil {
-		s.sendError(w, http.StatusInternalServerError, ErrStorageError, "failed to save plugin config: "+err.Error())
+		s.sendError(r, w, http.StatusInternalServerError, ErrStorageError, "failed to save plugin config: "+err.Error())
 		return
 	}
 	s.sendJSON(w, http.StatusOK, cfg)
@@ -384,29 +402,29 @@ func (s *Server) handlePutPluginConfig(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDeleteVault(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if name == "" {
-		s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "vault name required")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "vault name required")
 		return
 	}
 	if !isValidVaultName(name) {
-		s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "vault name contains invalid characters")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "vault name contains invalid characters")
 		return
 	}
 	if name == "default" {
 		if r.Header.Get("X-Allow-Default") != "true" {
-			s.sendError(w, http.StatusConflict, ErrVaultForbidden, "cannot delete default vault without X-Allow-Default: true header")
+			s.sendError(r, w, http.StatusConflict, ErrVaultForbidden, "cannot delete default vault without X-Allow-Default: true header")
 			return
 		}
 	}
 	if err := s.engine.DeleteVault(r.Context(), name); err != nil {
 		if errors.Is(err, engine.ErrVaultNotFound) {
-			s.sendError(w, http.StatusNotFound, ErrVaultNotFound, err.Error())
+			s.sendError(r, w, http.StatusNotFound, ErrVaultNotFound, err.Error())
 			return
 		}
 		if errors.Is(err, engine.ErrVaultJobActive) {
-			s.sendError(w, http.StatusConflict, ErrVaultForbidden, err.Error())
+			s.sendError(r, w, http.StatusConflict, ErrVaultForbidden, err.Error())
 			return
 		}
-		s.sendError(w, http.StatusInternalServerError, ErrStorageError, err.Error())
+		s.sendError(r, w, http.StatusInternalServerError, ErrStorageError, err.Error())
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -417,25 +435,25 @@ func (s *Server) handleDeleteVault(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleClearVault(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if name == "" {
-		s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "vault name required")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "vault name required")
 		return
 	}
 	if !isValidVaultName(name) {
-		s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "vault name contains invalid characters")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "vault name contains invalid characters")
 		return
 	}
 	if name == "default" {
 		if r.Header.Get("X-Allow-Default") != "true" {
-			s.sendError(w, http.StatusConflict, ErrVaultForbidden, "cannot clear default vault without X-Allow-Default: true header")
+			s.sendError(r, w, http.StatusConflict, ErrVaultForbidden, "cannot clear default vault without X-Allow-Default: true header")
 			return
 		}
 	}
 	if err := s.engine.ClearVault(r.Context(), name); err != nil {
 		if errors.Is(err, engine.ErrVaultNotFound) {
-			s.sendError(w, http.StatusNotFound, ErrVaultNotFound, err.Error())
+			s.sendError(r, w, http.StatusNotFound, ErrVaultNotFound, err.Error())
 			return
 		}
-		s.sendError(w, http.StatusInternalServerError, ErrStorageError, err.Error())
+		s.sendError(r, w, http.StatusInternalServerError, ErrStorageError, err.Error())
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -448,31 +466,31 @@ func (s *Server) handleClearVault(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleCloneVault(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if name == "" {
-		s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "vault name required")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "vault name required")
 		return
 	}
 	var req struct {
 		NewName string `json:"new_name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.NewName == "" {
-		s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "new_name required in body")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "new_name required in body")
 		return
 	}
 	if !isValidVaultName(req.NewName) {
-		s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "new_name must be 1–64 lowercase alphanumeric characters, hyphens, or underscores")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "new_name must be 1–64 lowercase alphanumeric characters, hyphens, or underscores")
 		return
 	}
 	if req.NewName == name {
-		s.sendError(w, http.StatusConflict, ErrVaultForbidden, "cannot clone a vault onto itself")
+		s.sendError(r, w, http.StatusConflict, ErrVaultForbidden, "cannot clone a vault onto itself")
 		return
 	}
 	job, err := s.engine.StartClone(r.Context(), name, req.NewName)
 	if err != nil {
 		if errors.Is(err, engine.ErrVaultNotFound) {
-			s.sendError(w, http.StatusNotFound, ErrVaultNotFound, err.Error())
+			s.sendError(r, w, http.StatusNotFound, ErrVaultNotFound, err.Error())
 			return
 		}
-		s.sendError(w, http.StatusInternalServerError, ErrStorageError, err.Error())
+		s.sendError(r, w, http.StatusInternalServerError, ErrStorageError, err.Error())
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -487,7 +505,7 @@ func (s *Server) handleCloneVault(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleMergeVault(w http.ResponseWriter, r *http.Request) {
 	source := r.PathValue("name")
 	if source == "" {
-		s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "source vault name required")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "source vault name required")
 		return
 	}
 	var req struct {
@@ -495,24 +513,24 @@ func (s *Server) handleMergeVault(w http.ResponseWriter, r *http.Request) {
 		DeleteSource bool   `json:"delete_source"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Target == "" {
-		s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "target required in body")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "target required in body")
 		return
 	}
 	if !isValidVaultName(req.Target) {
-		s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "target must be 1–64 lowercase alphanumeric characters, hyphens, or underscores")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "target must be 1–64 lowercase alphanumeric characters, hyphens, or underscores")
 		return
 	}
 	if source == req.Target {
-		s.sendError(w, http.StatusConflict, ErrVaultForbidden, "source and target must be different")
+		s.sendError(r, w, http.StatusConflict, ErrVaultForbidden, "source and target must be different")
 		return
 	}
 	job, err := s.engine.StartMerge(r.Context(), source, req.Target, req.DeleteSource)
 	if err != nil {
 		if errors.Is(err, engine.ErrVaultNotFound) {
-			s.sendError(w, http.StatusNotFound, ErrVaultNotFound, err.Error())
+			s.sendError(r, w, http.StatusNotFound, ErrVaultNotFound, err.Error())
 			return
 		}
-		s.sendError(w, http.StatusInternalServerError, ErrStorageError, err.Error())
+		s.sendError(r, w, http.StatusInternalServerError, ErrStorageError, err.Error())
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -527,11 +545,11 @@ func (s *Server) handleMergeVault(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleExportVault(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if name == "" {
-		s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "vault name required")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "vault name required")
 		return
 	}
 	if !isValidVaultName(name) {
-		s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "vault name contains invalid characters")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "vault name contains invalid characters")
 		return
 	}
 	resetMeta := r.URL.Query().Get("reset_metadata") == "true"
@@ -540,15 +558,30 @@ func (s *Server) handleExportVault(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/gzip")
 	w.Header().Set("Content-Disposition", "attachment; filename=\""+filename+"\"")
 
-	_, err := s.engine.ExportVault(r.Context(), name, s.embedModel, 0, resetMeta, w)
+	// Wrap the response writer to track how many bytes have been streamed.
+	// This lets us distinguish between a pre-stream error (safe to send HTTP 500)
+	// and a mid-stream error (headers already committed; must abort the connection).
+	cw := &countingWriter{ResponseWriter: w}
+
+	_, err := s.engine.ExportVault(r.Context(), name, s.embedModel, 0, resetMeta, cw)
 	if err != nil {
-		if errors.Is(err, engine.ErrVaultNotFound) {
-			// Headers not yet committed — safe to send JSON error.
-			s.sendError(w, http.StatusNotFound, ErrVaultNotFound, err.Error())
+		if errors.Is(err, engine.ErrVaultNotFound) && cw.n == 0 {
+			// No bytes written yet — safe to send a proper JSON error response.
+			s.sendError(r, w, http.StatusNotFound, ErrVaultNotFound, err.Error())
 			return
 		}
-		slog.Error("rest: export vault failed", "vault", name, "err", err)
-		return
+		if cw.n == 0 {
+			// Error before any bytes were written — safe to send HTTP 500.
+			slog.Error("rest: export vault failed before streaming", "vault", name, "err", err)
+			s.sendError(r, w, http.StatusInternalServerError, ErrStorageError, "export failed")
+			return
+		}
+		// If ExportVault fails after streaming has begun (cw.n > 0),
+		// we abort the handler to signal the client with a truncated stream.
+		// The client's gzip decoder will return an error on the incomplete data.
+		// See https://pkg.go.dev/net/http#ErrAbortHandler
+		slog.Error("rest: export vault failed mid-stream; aborting connection", "vault", name, "err", err, "bytes_written", cw.n)
+		panic(http.ErrAbortHandler)
 	}
 }
 
@@ -559,11 +592,11 @@ func (s *Server) handleExportVault(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleImportVault(w http.ResponseWriter, r *http.Request) {
 	vaultName := r.URL.Query().Get("vault")
 	if vaultName == "" {
-		s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "vault query parameter required")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "vault query parameter required")
 		return
 	}
 	if !isValidVaultName(vaultName) {
-		s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "vault name contains invalid characters")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "vault name contains invalid characters")
 		return
 	}
 	resetMeta := r.URL.Query().Get("reset_metadata") == "true"
@@ -571,15 +604,46 @@ func (s *Server) handleImportVault(w http.ResponseWriter, r *http.Request) {
 	job, err := s.engine.StartImport(r.Context(), vaultName, s.embedModel, 0, resetMeta, r.Body)
 	if err != nil {
 		if errors.Is(err, engine.ErrVaultNotFound) {
-			s.sendError(w, http.StatusNotFound, ErrVaultNotFound, err.Error())
+			s.sendError(r, w, http.StatusNotFound, ErrVaultNotFound, err.Error())
 			return
 		}
-		s.sendError(w, http.StatusInternalServerError, ErrStorageError, err.Error())
+		s.sendError(r, w, http.StatusInternalServerError, ErrStorageError, err.Error())
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	json.NewEncoder(w).Encode(map[string]string{"job_id": job.ID})
+}
+
+// handleReindexFTSVault rebuilds the FTS index for a vault using the current
+// Porter2-stemmed tokenizer.
+// POST /api/admin/vaults/{name}/reindex-fts
+// Response 200: {"vault": "...", "engrams_reindexed": N}
+func (s *Server) handleReindexFTSVault(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if name == "" {
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "vault name required")
+		return
+	}
+	if !isValidVaultName(name) {
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "vault name contains invalid characters")
+		return
+	}
+	count, err := s.engine.ReindexFTSVault(r.Context(), name)
+	if err != nil {
+		if errors.Is(err, engine.ErrVaultNotFound) {
+			s.sendError(r, w, http.StatusNotFound, ErrVaultNotFound, err.Error())
+			return
+		}
+		s.sendError(r, w, http.StatusInternalServerError, ErrStorageError, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]any{
+		"vault":             name,
+		"engrams_reindexed": count,
+	})
 }
 
 // handleVaultJobStatus returns the current status of a vault clone/merge job.
@@ -588,17 +652,17 @@ func (s *Server) handleImportVault(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleVaultJobStatus(w http.ResponseWriter, r *http.Request) {
 	jobID := r.URL.Query().Get("job_id")
 	if jobID == "" {
-		s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "job_id query parameter required")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "job_id query parameter required")
 		return
 	}
 	job, ok := s.engine.GetVaultJob(jobID)
 	if !ok {
-		s.sendError(w, http.StatusNotFound, ErrVaultNotFound, "job not found")
+		s.sendError(r, w, http.StatusNotFound, ErrVaultNotFound, "job not found")
 		return
 	}
 	name := r.PathValue("name")
 	if job.Source != name && job.Target != name {
-		s.sendError(w, http.StatusNotFound, ErrVaultNotFound, "job not found for this vault")
+		s.sendError(r, w, http.StatusNotFound, ErrVaultNotFound, "job not found for this vault")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

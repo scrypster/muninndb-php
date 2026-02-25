@@ -2,7 +2,6 @@ package mbp
 
 import (
 	"fmt"
-	"io"
 	"sync"
 
 	"github.com/klauspost/compress/zstd"
@@ -99,14 +98,12 @@ func DecompressPayload(data []byte) ([]byte, error) {
 	dec := raw.(*zstd.Decoder)
 	defer decoderPool.Put(dec)
 
-	// Use a limited reader to prevent decompression bombs
-	limitedReader := io.LimitReader(dec, maxDecompressedSize+1)
-	decompressed, err := io.ReadAll(limitedReader)
+	decoded, err := dec.DecodeAll(data, nil)
 	if err != nil {
 		return nil, fmt.Errorf("zstd decompress: %w", err)
 	}
-	if len(decompressed) > maxDecompressedSize {
+	if len(decoded) > maxDecompressedSize {
 		return nil, fmt.Errorf("decompressed payload exceeds maximum size of %d bytes", maxDecompressedSize)
 	}
-	return decompressed, nil
+	return decoded, nil
 }

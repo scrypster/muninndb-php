@@ -22,6 +22,7 @@ import (
 type EngineAPI interface {
 	Hello(ctx context.Context, req *pb.HelloRequest) (*pb.HelloResponse, error)
 	Write(ctx context.Context, req *pb.WriteRequest) (*pb.WriteResponse, error)
+	BatchWrite(ctx context.Context, req *pb.BatchWriteRequest) (*pb.BatchWriteResponse, error)
 	Read(ctx context.Context, req *pb.ReadRequest) (*pb.ReadResponse, error)
 	Activate(ctx context.Context, req *pb.ActivateRequest) (*pb.ActivateResponse, error)
 	Link(ctx context.Context, req *pb.LinkRequest) (*pb.LinkResponse, error)
@@ -58,6 +59,7 @@ func NewServer(addr string, engine EngineAPI, authStore *auth.Store) *Server {
 	}
 
 	opts := []grpc.ServerOption{
+		grpc.MaxConcurrentStreams(500),
 		grpc.KeepaliveParams(kasp),
 		grpc.UnaryInterceptor(server.authUnaryInterceptor),
 		grpc.StreamInterceptor(server.authStreamInterceptor),
@@ -182,6 +184,7 @@ func (s *Server) Serve(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", s.addr, err)
 	}
+	slog.Info("grpc: listening", "addr", listener.Addr().String())
 	defer listener.Close()
 
 	go s.gs.Serve(listener)
@@ -225,6 +228,16 @@ func (s *Server) Write(ctx context.Context, req *pb.WriteRequest) (*pb.WriteResp
 	resp, err := s.engine.Write(ctx, req)
 	if err != nil {
 		slog.Error("write failed", "error", err)
+		return nil, err
+	}
+	return resp, nil
+}
+
+// BatchWrite implements the BatchWrite RPC.
+func (s *Server) BatchWrite(ctx context.Context, req *pb.BatchWriteRequest) (*pb.BatchWriteResponse, error) {
+	resp, err := s.engine.BatchWrite(ctx, req)
+	if err != nil {
+		slog.Error("batch write failed", "error", err)
 		return nil, err
 	}
 	return resp, nil

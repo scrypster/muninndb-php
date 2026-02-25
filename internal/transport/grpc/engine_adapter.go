@@ -46,15 +46,51 @@ func (a *grpcEngineAdapter) Write(ctx context.Context, req *pb.WriteRequest) (*p
 			CreatedAt: assoc.CreatedAt, LastActivated: assoc.LastActivated,
 		}
 	}
+	// NOTE: Inline enrichment fields (Summary, Entities, Relationships) are not yet
+	// in the proto schema. They pass through as zero values until the proto is updated.
 	resp, err := a.eng.Write(ctx, &mbp.WriteRequest{
 		Concept: req.Concept, Content: req.Content, Tags: req.Tags,
 		Confidence: req.Confidence, Stability: req.Stability, Vault: req.Vault,
 		IdempotentID: req.IdempotentID, Associations: mbpAssocs, Embedding: req.Embedding,
+		MemoryType: uint8(req.MemoryType), TypeLabel: req.TypeLabel,
 	})
 	if err != nil {
 		return nil, err
 	}
 	return &pb.WriteResponse{ID: resp.ID, CreatedAt: resp.CreatedAt}, nil
+}
+
+func (a *grpcEngineAdapter) BatchWrite(ctx context.Context, req *pb.BatchWriteRequest) (*pb.BatchWriteResponse, error) {
+	mbpReqs := make([]*mbp.WriteRequest, len(req.Requests))
+	for i, r := range req.Requests {
+		mbpAssocs := make([]mbp.Association, len(r.Associations))
+		for j, assoc := range r.Associations {
+			mbpAssocs[j] = mbp.Association{
+				TargetID: assoc.TargetID, RelType: uint16(assoc.RelType),
+				Weight: assoc.Weight, Confidence: assoc.Confidence,
+				CreatedAt: assoc.CreatedAt, LastActivated: assoc.LastActivated,
+			}
+		}
+		// NOTE: Inline enrichment fields not yet in proto (see single Write).
+		mbpReqs[i] = &mbp.WriteRequest{
+			Concept: r.Concept, Content: r.Content, Tags: r.Tags,
+			Confidence: r.Confidence, Stability: r.Stability, Vault: r.Vault,
+			IdempotentID: r.IdempotentID, Associations: mbpAssocs, Embedding: r.Embedding,
+			MemoryType: uint8(r.MemoryType), TypeLabel: r.TypeLabel,
+		}
+	}
+	responses, errs := a.eng.WriteBatch(ctx, mbpReqs)
+	results := make([]*pb.BatchWriteItemResult, len(mbpReqs))
+	for i := range mbpReqs {
+		result := &pb.BatchWriteItemResult{Index: int32(i)}
+		if errs[i] != nil {
+			result.Error = errs[i].Error()
+		} else if responses[i] != nil {
+			result.Id = responses[i].ID
+		}
+		results[i] = result
+	}
+	return &pb.BatchWriteResponse{Results: results}, nil
 }
 
 func (a *grpcEngineAdapter) Read(ctx context.Context, req *pb.ReadRequest) (*pb.ReadResponse, error) {
@@ -67,6 +103,7 @@ func (a *grpcEngineAdapter) Read(ctx context.Context, req *pb.ReadRequest) (*pb.
 		Confidence: resp.Confidence, Relevance: resp.Relevance, Tags: resp.Tags,
 		State: uint32(resp.State), CreatedAt: resp.CreatedAt, UpdatedAt: resp.UpdatedAt,
 		LastAccess: resp.LastAccess, AccessCount: uint32(resp.AccessCount), Stability: resp.Stability,
+		MemoryType: uint32(resp.MemoryType), TypeLabel: resp.TypeLabel,
 	}, nil
 }
 

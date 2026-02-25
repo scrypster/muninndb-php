@@ -13,6 +13,7 @@ import (
 type MuninnDBClient interface {
 	Hello(ctx context.Context, in *HelloRequest, opts ...grpc.CallOption) (*HelloResponse, error)
 	Write(ctx context.Context, in *WriteRequest, opts ...grpc.CallOption) (*WriteResponse, error)
+	BatchWrite(ctx context.Context, in *BatchWriteRequest, opts ...grpc.CallOption) (*BatchWriteResponse, error)
 	Read(ctx context.Context, in *ReadRequest, opts ...grpc.CallOption) (*ReadResponse, error)
 	Forget(ctx context.Context, in *ForgetRequest, opts ...grpc.CallOption) (*ForgetResponse, error)
 	Stat(ctx context.Context, in *StatRequest, opts ...grpc.CallOption) (*StatResponse, error)
@@ -41,6 +42,15 @@ func (c *muninnDBClient) Hello(ctx context.Context, in *HelloRequest, opts ...gr
 func (c *muninnDBClient) Write(ctx context.Context, in *WriteRequest, opts ...grpc.CallOption) (*WriteResponse, error) {
 	out := new(WriteResponse)
 	err := c.cc.Invoke(ctx, "/muninn.v1.MuninnDB/Write", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *muninnDBClient) BatchWrite(ctx context.Context, in *BatchWriteRequest, opts ...grpc.CallOption) (*BatchWriteResponse, error) {
+	out := new(BatchWriteResponse)
+	err := c.cc.Invoke(ctx, "/muninn.v1.MuninnDB/BatchWrite", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -150,6 +160,7 @@ func (x *muninnDBSubscribeClient) Recv() (*ActivationPush, error) {
 type MuninnDBServer interface {
 	Hello(context.Context, *HelloRequest) (*HelloResponse, error)
 	Write(context.Context, *WriteRequest) (*WriteResponse, error)
+	BatchWrite(context.Context, *BatchWriteRequest) (*BatchWriteResponse, error)
 	Read(context.Context, *ReadRequest) (*ReadResponse, error)
 	Forget(context.Context, *ForgetRequest) (*ForgetResponse, error)
 	Stat(context.Context, *StatRequest) (*StatResponse, error)
@@ -166,6 +177,10 @@ func (UnimplementedMuninnDBServer) Hello(context.Context, *HelloRequest) (*Hello
 }
 
 func (UnimplementedMuninnDBServer) Write(context.Context, *WriteRequest) (*WriteResponse, error) {
+	return nil, nil
+}
+
+func (UnimplementedMuninnDBServer) BatchWrite(context.Context, *BatchWriteRequest) (*BatchWriteResponse, error) {
 	return nil, nil
 }
 
@@ -252,6 +267,26 @@ var MuninnDB_ServiceDesc = grpc.ServiceDesc{
 				}
 				handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 					return srv.(MuninnDBServer).Write(ctx, req.(*WriteRequest))
+				}
+				return interceptor(ctx, in, info, handler)
+			},
+		},
+		{
+			MethodName: "BatchWrite",
+			Handler: func(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+				in := new(BatchWriteRequest)
+				if err := dec(in); err != nil {
+					return nil, err
+				}
+				if interceptor == nil {
+					return srv.(MuninnDBServer).BatchWrite(ctx, in)
+				}
+				info := &grpc.UnaryServerInfo{
+					Server:     srv,
+					FullMethod: "/muninn.v1.MuninnDB/BatchWrite",
+				}
+				handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+					return srv.(MuninnDBServer).BatchWrite(ctx, req.(*BatchWriteRequest))
 				}
 				return interceptor(ctx, in, info, handler)
 			},

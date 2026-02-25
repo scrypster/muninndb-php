@@ -2,6 +2,7 @@ package rest
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -47,12 +48,12 @@ type testNodeResponse struct {
 func (s *Server) handleAdminClusterToken(w http.ResponseWriter, r *http.Request) {
 	tm := s.joinTokenManager()
 	if tm == nil {
-		s.sendError(w, http.StatusServiceUnavailable, ErrShardUnavailable, "cluster not enabled")
+		s.sendError(r, w, http.StatusServiceUnavailable, ErrShardUnavailable, "cluster not enabled")
 		return
 	}
 	tok, err := tm.Generate()
 	if err != nil {
-		s.sendError(w, http.StatusInternalServerError, ErrInternal, fmt.Sprintf("generate token: %v", err))
+		s.sendError(r, w, http.StatusInternalServerError, ErrInternal, fmt.Sprintf("generate token: %v", err))
 		return
 	}
 	s.sendJSON(w, http.StatusOK, clusterTokenResponse{
@@ -74,24 +75,24 @@ func (s *Server) handleAdminClusterEnable(w http.ResponseWriter, r *http.Request
 	}
 	var req enableClusterRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "invalid JSON")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "invalid JSON")
 		return
 	}
 	if req.Role == "" {
-		s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "role is required")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "role is required")
 		return
 	}
 	validRoles := map[string]bool{"primary": true, "replica": true, "sentinel": true, "observer": true}
 	if !validRoles[req.Role] {
-		s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "role must be one of: primary, replica, sentinel, observer")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "role must be one of: primary, replica, sentinel, observer")
 		return
 	}
 	if req.BindAddr == "" {
-		s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "bind_addr is required")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "bind_addr is required")
 		return
 	}
 	if req.Role != "primary" && req.CortexAddr == "" {
-		s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "cortex_addr is required for non-primary roles")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "cortex_addr is required for non-primary roles")
 		return
 	}
 	cfg := config.ClusterConfig{
@@ -104,7 +105,7 @@ func (s *Server) handleAdminClusterEnable(w http.ResponseWriter, r *http.Request
 		cfg.Seeds = []string{req.CortexAddr}
 	}
 	if err := s.enableClusterRuntime(r.Context(), cfg); err != nil {
-		s.sendError(w, http.StatusInternalServerError, ErrInternal, fmt.Sprintf("enable cluster: %v", err))
+		s.sendError(r, w, http.StatusInternalServerError, ErrInternal, fmt.Sprintf("enable cluster: %v", err))
 		return
 	}
 	s.sendJSON(w, http.StatusOK, map[string]any{"enabled": true, "role": req.Role})
@@ -117,7 +118,7 @@ func (s *Server) handleAdminClusterDisable(w http.ResponseWriter, r *http.Reques
 	}
 	s.DisableCluster()
 	if err := s.persistClusterDisabled(); err != nil {
-		s.sendError(w, http.StatusInternalServerError, ErrInternal, fmt.Sprintf("persist config: %v", err))
+		s.sendError(r, w, http.StatusInternalServerError, ErrInternal, fmt.Sprintf("persist config: %v", err))
 		return
 	}
 	s.sendJSON(w, http.StatusOK, map[string]any{"enabled": false})
@@ -125,7 +126,7 @@ func (s *Server) handleAdminClusterDisable(w http.ResponseWriter, r *http.Reques
 
 func (s *Server) handleAdminClusterAddNode(w http.ResponseWriter, r *http.Request) {
 	if s.coordinator == nil {
-		s.sendError(w, http.StatusServiceUnavailable, ErrShardUnavailable, "cluster not enabled")
+		s.sendError(r, w, http.StatusServiceUnavailable, ErrShardUnavailable, "cluster not enabled")
 		return
 	}
 	var req struct {
@@ -133,17 +134,17 @@ func (s *Server) handleAdminClusterAddNode(w http.ResponseWriter, r *http.Reques
 		Token string `json:"token"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "invalid JSON")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "invalid JSON")
 		return
 	}
 	if req.Addr == "" {
-		s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "addr is required")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "addr is required")
 		return
 	}
 	tm := s.joinTokenManager()
 	if tm != nil {
 		if err := tm.Validate(req.Token); err != nil {
-			s.sendError(w, http.StatusUnauthorized, ErrAuthFailed, fmt.Sprintf("token: %v", err))
+			s.sendError(r, w, http.StatusUnauthorized, ErrAuthFailed, fmt.Sprintf("token: %v", err))
 			return
 		}
 	}
@@ -156,12 +157,12 @@ func (s *Server) handleAdminClusterAddNode(w http.ResponseWriter, r *http.Reques
 
 func (s *Server) handleAdminClusterRemoveNode(w http.ResponseWriter, r *http.Request) {
 	if s.coordinator == nil {
-		s.sendError(w, http.StatusServiceUnavailable, ErrShardUnavailable, "cluster not enabled")
+		s.sendError(r, w, http.StatusServiceUnavailable, ErrShardUnavailable, "cluster not enabled")
 		return
 	}
 	nodeID := r.PathValue("id")
 	if nodeID == "" {
-		s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "node id is required in path")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "node id is required in path")
 		return
 	}
 	if r.URL.Query().Get("drain") == "true" {
@@ -173,32 +174,39 @@ func (s *Server) handleAdminClusterRemoveNode(w http.ResponseWriter, r *http.Req
 			time.Sleep(500 * time.Millisecond)
 		}
 	}
-	s.coordinator.ConnManager().RemovePeer(nodeID)
+	if err := s.coordinator.RemoveNode(nodeID); err != nil {
+		if errors.Is(err, replication.ErrSelfRemoval) {
+			s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "cannot remove self from cluster")
+			return
+		}
+		s.sendError(r, w, http.StatusInternalServerError, ErrInternal, fmt.Sprintf("remove node: %v", err))
+		return
+	}
 	s.sendJSON(w, http.StatusOK, map[string]any{"removed": nodeID})
 }
 
 func (s *Server) handleAdminClusterFailover(w http.ResponseWriter, r *http.Request) {
 	if s.coordinator == nil {
-		s.sendError(w, http.StatusServiceUnavailable, ErrShardUnavailable, "cluster not enabled")
+		s.sendError(r, w, http.StatusServiceUnavailable, ErrShardUnavailable, "cluster not enabled")
 		return
 	}
 	if !s.coordinator.IsLeader() {
-		s.sendError(w, http.StatusConflict, ErrVaultForbidden, "this node is not the current Cortex")
+		s.sendError(r, w, http.StatusConflict, ErrVaultForbidden, "this node is not the current Cortex")
 		return
 	}
 	var req struct {
 		TargetNodeID string `json:"target_node_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "invalid JSON")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "invalid JSON")
 		return
 	}
 	if req.TargetNodeID == "" {
-		s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "target_node_id is required")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "target_node_id is required")
 		return
 	}
 	if err := s.coordinator.GracefulFailover(r.Context(), req.TargetNodeID); err != nil {
-		s.sendError(w, http.StatusInternalServerError, ErrInternal, fmt.Sprintf("failover: %v", err))
+		s.sendError(r, w, http.StatusInternalServerError, ErrInternal, fmt.Sprintf("failover: %v", err))
 		return
 	}
 	s.sendJSON(w, http.StatusOK, map[string]any{"initiated": true, "target": req.TargetNodeID})
@@ -206,12 +214,12 @@ func (s *Server) handleAdminClusterFailover(w http.ResponseWriter, r *http.Reque
 
 func (s *Server) handleAdminClusterRotateTLS(w http.ResponseWriter, r *http.Request) {
 	if s.coordinator == nil {
-		s.sendError(w, http.StatusServiceUnavailable, ErrShardUnavailable, "cluster not enabled")
+		s.sendError(r, w, http.StatusServiceUnavailable, ErrShardUnavailable, "cluster not enabled")
 		return
 	}
 	tls := s.coordinator.TLSManager()
 	if tls == nil {
-		s.sendError(w, http.StatusServiceUnavailable, ErrShardUnavailable, "TLS not configured")
+		s.sendError(r, w, http.StatusServiceUnavailable, ErrShardUnavailable, "TLS not configured")
 		return
 	}
 	nodes := s.coordinator.KnownNodes()
@@ -220,7 +228,7 @@ func (s *Server) handleAdminClusterRotateTLS(w http.ResponseWriter, r *http.Requ
 		nodeID = nodes[0].NodeID
 	}
 	if err := tls.RotateCert(nodeID); err != nil {
-		s.sendError(w, http.StatusInternalServerError, ErrInternal, fmt.Sprintf("rotate: %v", err))
+		s.sendError(r, w, http.StatusInternalServerError, ErrInternal, fmt.Sprintf("rotate: %v", err))
 		return
 	}
 	s.sendJSON(w, http.StatusOK, map[string]any{"rotated": true})
@@ -229,19 +237,19 @@ func (s *Server) handleAdminClusterRotateTLS(w http.ResponseWriter, r *http.Requ
 func (s *Server) handleAdminClusterSettings(w http.ResponseWriter, r *http.Request) {
 	var req clusterSettingsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "invalid JSON")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "invalid JSON")
 		return
 	}
 	if req.HeartbeatMS != nil && *req.HeartbeatMS <= 0 {
-		s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "heartbeat_ms must be > 0")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "heartbeat_ms must be > 0")
 		return
 	}
 	if req.SDOWNBeats != nil && *req.SDOWNBeats < 1 {
-		s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "sdown_beats must be >= 1")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "sdown_beats must be >= 1")
 		return
 	}
 	if req.CCSIntervalS != nil && *req.CCSIntervalS < 5 {
-		s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "ccs_interval_seconds must be >= 5")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "ccs_interval_seconds must be >= 5")
 		return
 	}
 	if s.coordinator != nil && req.HeartbeatMS != nil {
@@ -254,11 +262,11 @@ func (s *Server) handleAdminClusterSettings(w http.ResponseWriter, r *http.Reque
 func (s *Server) handleAdminClusterTestNode(w http.ResponseWriter, r *http.Request) {
 	var req testNodeRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "invalid JSON")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "invalid JSON")
 		return
 	}
 	if req.Addr == "" {
-		s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "addr is required")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "addr is required")
 		return
 	}
 	start := time.Now()
@@ -273,7 +281,7 @@ func (s *Server) handleAdminClusterTestNode(w http.ResponseWriter, r *http.Reque
 func (s *Server) handleAdminClusterEvents(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		s.sendError(w, http.StatusInternalServerError, ErrInternal, "streaming not supported")
+		s.sendError(r, w, http.StatusInternalServerError, ErrInternal, "streaming not supported")
 		return
 	}
 	w.Header().Set("Content-Type", "text/event-stream")

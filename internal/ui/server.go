@@ -222,6 +222,10 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
+	if s.authStore == nil {
+		http.Error(w, "authentication not configured", http.StatusServiceUnavailable)
+		return
+	}
 	var req struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
