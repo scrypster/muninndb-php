@@ -244,6 +244,63 @@ func TestOllamaProvider_EmptyEmbedding(t *testing.T) {
 	}
 }
 
+func TestOllamaProvider_Close_WithClient(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.Method == "POST" && r.URL.Path == "/api/embeddings" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"embedding": [0.1, 0.2, 0.3]}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	provider := &OllamaProvider{}
+	cfg := ProviderHTTPConfig{
+		BaseURL: "http://" + server.Listener.Addr().String(),
+		Model:   "test-model",
+	}
+	provider.Init(context.Background(), cfg)
+
+	err := provider.Close()
+	if err != nil {
+		t.Errorf("Close failed: %v", err)
+	}
+}
+
+func TestOllamaProvider_Init_InvalidJSON(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.Method == "POST" && r.URL.Path == "/api/embeddings" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("not valid json"))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	provider := &OllamaProvider{}
+	cfg := ProviderHTTPConfig{
+		BaseURL: "http://" + server.Listener.Addr().String(),
+		Model:   "test-model",
+	}
+
+	_, err := provider.Init(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("expected error for invalid JSON in init")
+	}
+}
+
 func TestOllamaProvider_EmbedBatch_NonEmptyResult(t *testing.T) {
 	callCount := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

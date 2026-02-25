@@ -31,15 +31,26 @@ func (w *Worker) runPhase2Dedup(ctx context.Context, store *storage.PebbleStore,
 		return err
 	}
 
-	// Build a list of engrams with embeddings only
+	// Build a list of engrams with embeddings only.
+	// ERF v2 stores embeddings in a separate 0x18 key, so GetEngrams()
+	// returns nil embeddings. Fall back to GetEmbedding() in that case.
 	type engramWithEmbed struct {
 		engram    *storage.Engram
 		embedding []float32
 	}
 	withEmbed := make([]engramWithEmbed, 0)
 	for _, eng := range allEngrams {
-		if eng != nil && len(eng.Embedding) > 0 {
-			withEmbed = append(withEmbed, engramWithEmbed{engram: eng, embedding: eng.Embedding})
+		if eng == nil {
+			continue
+		}
+		embed := eng.Embedding
+		if len(embed) == 0 {
+			if loaded, err := store.GetEmbedding(ctx, wsPrefix, eng.ID); err == nil && len(loaded) > 0 {
+				embed = loaded
+			}
+		}
+		if len(embed) > 0 {
+			withEmbed = append(withEmbed, engramWithEmbed{engram: eng, embedding: embed})
 		}
 	}
 

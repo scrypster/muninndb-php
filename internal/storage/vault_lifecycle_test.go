@@ -173,4 +173,3 @@ func TestDeleteVault_0x11OrphansNotDeleted(t *testing.T) {
 		t.Error("digest flag should survive vault deletion")
 	}
 }
-

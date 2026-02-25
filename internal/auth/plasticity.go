@@ -8,96 +8,192 @@ type PlasticityConfig struct {
 	Preset  string `json:"preset,omitempty"`  // "default" | "reference" | "scratchpad" | "knowledge-graph"
 
 	// Optional overrides (nil = use preset value)
-	HebbianEnabled *bool    `json:"hebbian_enabled,omitempty"`
-	DecayEnabled   *bool    `json:"decay_enabled,omitempty"`
-	HopDepth       *int     `json:"hop_depth,omitempty"`       // BFS hops 0–8
-	SemanticWeight *float32 `json:"semantic_weight,omitempty"` // 0–1
-	FTSWeight      *float32 `json:"fts_weight,omitempty"`      // 0–1
-	DecayFloor     *float32 `json:"decay_floor,omitempty"`     // 0–1
-	DecayStability  *float32 `json:"decay_stability,omitempty"`  // days
-	TraversalProfile *string  `json:"traversal_profile,omitempty"` // "default"|"causal"|"confirmatory"|"adversarial"|"structural"; empty = use auto-inference
+	HebbianEnabled    *bool    `json:"hebbian_enabled,omitempty"`
+	TemporalEnabled      *bool    `json:"temporal_enabled,omitempty"`
+	AutoLinkNeighbors *bool    `json:"auto_link_neighbors,omitempty"` // semantic neighbor auto-linking
+	HopDepth          *int     `json:"hop_depth,omitempty"`            // BFS hops 0–8
+	SemanticWeight    *float32 `json:"semantic_weight,omitempty"`      // 0–1
+	FTSWeight         *float32 `json:"fts_weight,omitempty"`           // 0–1
+	RelevanceFloor        *float32 `json:"relevance_floor,omitempty"`          // 0–1
+	TemporalHalflife    *float32 `json:"temporal_halflife,omitempty"`      // days
+	TraversalProfile  *string  `json:"traversal_profile,omitempty"`    // "default"|"causal"|"confirmatory"|"adversarial"|"structural"; empty = use auto-inference
+	// ACT-R parameters (new, preferred over Ebbinghaus fields)
+	ACTRDecay    *float64 `json:"actr_decay,omitempty"`     // power-law exponent d (default 0.5)
+	ACTRHebScale *float64 `json:"actr_heb_scale,omitempty"` // Hebbian amplifier (default 4.0)
+
+	// Experimental scoring models
+	ExperimentalCGDN *bool `json:"experimental_cgdn,omitempty"` // enable CGDN scorer (default false)
+
+	// Predictive Activation Signal (PAS)
+	PredictiveActivation *bool `json:"predictive_activation,omitempty"`
+	PASMaxInjections     *int  `json:"pas_max_injections,omitempty"` // 0-10, default 5
+
+	// Pruning policy (both are zero/disabled by default)
+	MaxEngrams    *int     `json:"max_engrams,omitempty"`    // max engrams per vault; 0 = no limit
+	RetentionDays *float32 `json:"retention_days,omitempty"` // max age in days; 0 = no limit
+
+	// Behavior mode controls how AI agents use memory
+	BehaviorMode         *string `json:"behavior_mode,omitempty"`          // "autonomous"|"prompted"|"selective"|"custom"
+	BehaviorInstructions *string `json:"behavior_instructions,omitempty"` // freeform text for "custom" mode
+
+	// Inline enrichment controls how caller-provided enrichment interacts with background enrichment
+	InlineEnrichment *string `json:"inline_enrichment,omitempty"` // "caller_only"|"caller_preferred"|"background_only"|"disabled"
+
+	// EnrichmentEnabled is a vault-level kill switch for all enrichment (both inline and background).
+	// Default: true. When false, skip ALL enrichment for engrams in this vault.
+	EnrichmentEnabled *bool `json:"enrichment_enabled,omitempty"`
 }
 
 // ResolvedPlasticity is the fully-merged configuration after applying preset defaults
 // and any field-level overrides from PlasticityConfig.
-// Weight fields (SemanticWeight, FTSWeight, HebbianWeight, DecayWeight, RecencyWeight)
+// Weight fields (SemanticWeight, FTSWeight, HebbianWeight, TemporalWeight, RecencyWeight)
 // are independent multipliers and are not required to sum to 1.0.
 // The engine may normalize or use them as-is depending on the activation context.
 type ResolvedPlasticity struct {
-	HebbianEnabled bool    `json:"hebbian_enabled"`
-	DecayEnabled   bool    `json:"decay_enabled"`
-	HopDepth       int     `json:"hop_depth"`
-	SemanticWeight float32 `json:"semantic_weight"`
-	FTSWeight      float32 `json:"fts_weight"`
-	DecayFloor     float32 `json:"decay_floor"`
-	DecayStability float32 `json:"decay_stability"` // days
-	HebbianWeight  float32 `json:"hebbian_weight"`
-	DecayWeight    float32 `json:"decay_weight"`
-	RecencyWeight    float32 `json:"recency_weight"`
-	TraversalProfile string  `json:"traversal_profile"` // empty string = use auto-inference
+	HebbianEnabled    bool    `json:"hebbian_enabled"`
+	TemporalEnabled      bool    `json:"temporal_enabled"`
+	AutoLinkNeighbors bool    `json:"auto_link_neighbors"`
+	HopDepth          int     `json:"hop_depth"`
+	SemanticWeight    float32 `json:"semantic_weight"`
+	FTSWeight         float32 `json:"fts_weight"`
+	RelevanceFloor        float32 `json:"relevance_floor"`
+	TemporalHalflife    float32 `json:"temporal_halflife"` // days
+	HebbianWeight     float32 `json:"hebbian_weight"`
+	TemporalWeight       float32 `json:"temporal_weight"`
+	RecencyWeight     float32 `json:"recency_weight"`
+	TraversalProfile  string  `json:"traversal_profile"` // empty string = use auto-inference
+	// ACT-R parameters (new, preferred over Ebbinghaus fields)
+	ACTRDecay    float64 `json:"actr_decay"`
+	ACTRHebScale float64 `json:"actr_heb_scale"`
+	// Experimental scoring models
+	ExperimentalCGDN bool `json:"experimental_cgdn"`
+	// Predictive Activation Signal (PAS)
+	PredictiveActivation bool `json:"predictive_activation"`
+	PASMaxInjections     int  `json:"pas_max_injections"`
+	// Pruning policy
+	MaxEngrams    int     `json:"max_engrams"`    // 0 = no limit
+	RetentionDays float32 `json:"retention_days"` // 0 = no limit
+	// Behavior mode
+	BehaviorMode         string `json:"behavior_mode"`
+	BehaviorInstructions string `json:"behavior_instructions"`
+	// Inline enrichment mode
+	InlineEnrichment string `json:"inline_enrichment"` // "caller_only", "caller_preferred", "background_only", "disabled"
+	// EnrichmentEnabled is a vault-level kill switch for all enrichment.
+	EnrichmentEnabled bool `json:"enrichment_enabled"`
 }
 
 type plasticityPreset struct {
-	HebbianEnabled bool
-	DecayEnabled   bool
-	HopDepth       int
-	SemanticWeight float32
-	FTSWeight      float32
-	DecayFloor     float32
-	DecayStability float32
-	HebbianWeight  float32
-	DecayWeight    float32
-	RecencyWeight  float32
+	HebbianEnabled    bool
+	TemporalEnabled      bool
+	AutoLinkNeighbors bool
+	HopDepth          int
+	SemanticWeight    float32
+	FTSWeight         float32
+	RelevanceFloor        float32
+	TemporalHalflife    float32
+	HebbianWeight     float32
+	TemporalWeight       float32
+	RecencyWeight     float32
+	ACTRDecay            float64
+	ACTRHebScale         float64
+	ExperimentalCGDN     bool
+	PredictiveActivation bool
+	PASMaxInjections     int
+	MaxEngrams           int
+	RetentionDays     float32
+	BehaviorMode      string
+	InlineEnrichment  string
+	EnrichmentEnabled bool
 }
 
 var plasticityPresets = map[string]plasticityPreset{
 	"default": {
-		HebbianEnabled: true,
-		DecayEnabled:   true,
-		HopDepth:       2,
-		SemanticWeight: 0.6,
-		FTSWeight:      0.3,
-		DecayFloor:     0.05,
-		DecayStability: 30,
-		HebbianWeight:  0.5,
-		DecayWeight:    0.4,
-		RecencyWeight:  0.3,
+		HebbianEnabled:       true,
+		TemporalEnabled:      true,
+		AutoLinkNeighbors:    true,
+		HopDepth:             2,
+		SemanticWeight:       0.6,
+		FTSWeight:            0.3,
+		RelevanceFloor:       0.05,
+		TemporalHalflife:     30,
+		HebbianWeight:        0.5,
+		TemporalWeight:       0.4,
+		RecencyWeight:        0.3,
+		ACTRDecay:            0.5,
+		ACTRHebScale:         4.0,
+		PredictiveActivation: true,
+		PASMaxInjections:     5,
+		MaxEngrams:           0,
+		RetentionDays:        0,
+		BehaviorMode:         "autonomous",
+		InlineEnrichment:     "caller_preferred",
+		EnrichmentEnabled:    true,
 	},
 	"reference": {
-		HebbianEnabled: true,
-		DecayEnabled:   false,
-		HopDepth:       3,
-		SemanticWeight: 0.7,
-		FTSWeight:      0.5,
-		DecayFloor:     1.0,
-		DecayStability: 365,
-		HebbianWeight:  0.6,
-		DecayWeight:    0.0,
-		RecencyWeight:  0.1,
+		HebbianEnabled:       true,
+		TemporalEnabled:      false,
+		AutoLinkNeighbors:    true,
+		HopDepth:             3,
+		SemanticWeight:       0.7,
+		FTSWeight:            0.5,
+		RelevanceFloor:       1.0,
+		TemporalHalflife:     365,
+		HebbianWeight:        0.6,
+		TemporalWeight:       0.0,
+		RecencyWeight:        0.1,
+		ACTRDecay:            0.2,
+		ACTRHebScale:         4.0,
+		PredictiveActivation: true,
+		PASMaxInjections:     5,
+		MaxEngrams:           0,
+		RetentionDays:        0,
+		BehaviorMode:         "autonomous",
+		InlineEnrichment:     "caller_preferred",
+		EnrichmentEnabled:    true,
 	},
 	"scratchpad": {
-		HebbianEnabled: false,
-		DecayEnabled:   true,
-		HopDepth:       0,
-		SemanticWeight: 0.5,
-		FTSWeight:      0.4,
-		DecayFloor:     0.01,
-		DecayStability: 7,
-		HebbianWeight:  0.0,
-		DecayWeight:    0.8,
-		RecencyWeight:  0.5,
+		HebbianEnabled:       false,
+		TemporalEnabled:      true,
+		AutoLinkNeighbors:    true,
+		HopDepth:             0,
+		SemanticWeight:       0.5,
+		FTSWeight:            0.4,
+		RelevanceFloor:       0.01,
+		TemporalHalflife:     7,
+		HebbianWeight:        0.0,
+		TemporalWeight:       0.8,
+		RecencyWeight:        0.5,
+		ACTRDecay:            0.8,
+		ACTRHebScale:         2.0,
+		PredictiveActivation: false,
+		PASMaxInjections:     0,
+		MaxEngrams:           0,
+		RetentionDays:        0,
+		BehaviorMode:         "selective",
+		InlineEnrichment:     "caller_preferred",
+		EnrichmentEnabled:    true,
 	},
 	"knowledge-graph": {
-		HebbianEnabled: true,
-		DecayEnabled:   true,
-		HopDepth:       4,
-		SemanticWeight: 0.5,
-		FTSWeight:      0.2,
-		DecayFloor:     0.1,
-		DecayStability: 60,
-		HebbianWeight:  0.8,
-		DecayWeight:    0.2,
-		RecencyWeight:  0.2,
+		HebbianEnabled:       true,
+		TemporalEnabled:      true,
+		AutoLinkNeighbors:    true,
+		HopDepth:             4,
+		SemanticWeight:       0.5,
+		FTSWeight:            0.2,
+		RelevanceFloor:       0.1,
+		TemporalHalflife:     60,
+		HebbianWeight:        0.8,
+		TemporalWeight:       0.2,
+		RecencyWeight:        0.2,
+		ACTRDecay:            0.3,
+		ACTRHebScale:         8.0,
+		PredictiveActivation: true,
+		PASMaxInjections:     5,
+		MaxEngrams:           0,
+		RetentionDays:        0,
+		BehaviorMode:         "autonomous",
+		InlineEnrichment:     "caller_preferred",
+		EnrichmentEnabled:    true,
 	},
 }
 
@@ -114,16 +210,27 @@ func ResolvePlasticity(cfg *PlasticityConfig) ResolvedPlasticity {
 	}
 
 	r := ResolvedPlasticity{
-		HebbianEnabled: p.HebbianEnabled,
-		DecayEnabled:   p.DecayEnabled,
-		HopDepth:       p.HopDepth,
-		SemanticWeight: p.SemanticWeight,
-		FTSWeight:      p.FTSWeight,
-		DecayFloor:     p.DecayFloor,
-		DecayStability: p.DecayStability,
-		HebbianWeight:  p.HebbianWeight,
-		DecayWeight:    p.DecayWeight,
-		RecencyWeight:  p.RecencyWeight,
+		HebbianEnabled:       p.HebbianEnabled,
+		TemporalEnabled:      p.TemporalEnabled,
+		AutoLinkNeighbors:    p.AutoLinkNeighbors,
+		HopDepth:             p.HopDepth,
+		SemanticWeight:       p.SemanticWeight,
+		FTSWeight:            p.FTSWeight,
+		RelevanceFloor:       p.RelevanceFloor,
+		TemporalHalflife:     p.TemporalHalflife,
+		HebbianWeight:        p.HebbianWeight,
+		TemporalWeight:       p.TemporalWeight,
+		RecencyWeight:        p.RecencyWeight,
+		ACTRDecay:            p.ACTRDecay,
+		ACTRHebScale:         p.ACTRHebScale,
+		ExperimentalCGDN:     p.ExperimentalCGDN,
+		PredictiveActivation: p.PredictiveActivation,
+		PASMaxInjections:     p.PASMaxInjections,
+		MaxEngrams:           p.MaxEngrams,
+		RetentionDays:        p.RetentionDays,
+		BehaviorMode:         p.BehaviorMode,
+		InlineEnrichment:     p.InlineEnrichment,
+		EnrichmentEnabled:    p.EnrichmentEnabled,
 	}
 
 	if cfg == nil {
@@ -134,8 +241,11 @@ func ResolvePlasticity(cfg *PlasticityConfig) ResolvedPlasticity {
 	if cfg.HebbianEnabled != nil {
 		r.HebbianEnabled = *cfg.HebbianEnabled
 	}
-	if cfg.DecayEnabled != nil {
-		r.DecayEnabled = *cfg.DecayEnabled
+	if cfg.TemporalEnabled != nil {
+		r.TemporalEnabled = *cfg.TemporalEnabled
+	}
+	if cfg.AutoLinkNeighbors != nil {
+		r.AutoLinkNeighbors = *cfg.AutoLinkNeighbors
 	}
 	if cfg.HopDepth != nil {
 		r.HopDepth = *cfg.HopDepth
@@ -164,26 +274,110 @@ func ResolvePlasticity(cfg *PlasticityConfig) ResolvedPlasticity {
 			r.FTSWeight = 1
 		}
 	}
-	if cfg.DecayFloor != nil {
-		r.DecayFloor = *cfg.DecayFloor
-		if r.DecayFloor < 0 {
-			r.DecayFloor = 0
+	if cfg.RelevanceFloor != nil {
+		r.RelevanceFloor = *cfg.RelevanceFloor
+		if r.RelevanceFloor < 0 {
+			r.RelevanceFloor = 0
 		}
-		if r.DecayFloor > 1 {
-			r.DecayFloor = 1
+		if r.RelevanceFloor > 1 {
+			r.RelevanceFloor = 1
 		}
 	}
-	if cfg.DecayStability != nil {
-		stability := *cfg.DecayStability
+	if cfg.TemporalHalflife != nil {
+		stability := *cfg.TemporalHalflife
 		if stability > 0 {
-			r.DecayStability = stability
+			r.TemporalHalflife = stability
 		}
 	}
 	if cfg.TraversalProfile != nil {
 		r.TraversalProfile = *cfg.TraversalProfile
 	}
+	if cfg.ACTRDecay != nil {
+		d := *cfg.ACTRDecay
+		if d < 0.01 {
+			d = 0.01
+		}
+		if d > 2.0 {
+			d = 2.0
+		}
+		r.ACTRDecay = d
+	}
+	if cfg.ACTRHebScale != nil {
+		s := *cfg.ACTRHebScale
+		if s < 0.0 {
+			s = 0.0
+		}
+		if s > 50.0 {
+			s = 50.0
+		}
+		r.ACTRHebScale = s
+	}
+	if cfg.ExperimentalCGDN != nil {
+		r.ExperimentalCGDN = *cfg.ExperimentalCGDN
+	}
+	if cfg.PredictiveActivation != nil {
+		r.PredictiveActivation = *cfg.PredictiveActivation
+	}
+	if cfg.PASMaxInjections != nil {
+		v := *cfg.PASMaxInjections
+		if v < 0 {
+			v = 0
+		}
+		if v > 10 {
+			v = 10
+		}
+		r.PASMaxInjections = v
+	}
+	if cfg.MaxEngrams != nil && *cfg.MaxEngrams >= 0 {
+		r.MaxEngrams = *cfg.MaxEngrams
+	}
+	if cfg.RetentionDays != nil && *cfg.RetentionDays >= 0 {
+		r.RetentionDays = *cfg.RetentionDays
+	}
+	if cfg.BehaviorMode != nil {
+		if validBehaviorMode(*cfg.BehaviorMode) {
+			r.BehaviorMode = *cfg.BehaviorMode
+		} else {
+			r.BehaviorMode = "autonomous"
+		}
+	}
+	if cfg.BehaviorInstructions != nil {
+		r.BehaviorInstructions = *cfg.BehaviorInstructions
+	}
+	if cfg.InlineEnrichment != nil {
+		if validInlineEnrichment(*cfg.InlineEnrichment) {
+			r.InlineEnrichment = *cfg.InlineEnrichment
+		} else {
+			r.InlineEnrichment = "caller_preferred"
+		}
+	}
+	if cfg.EnrichmentEnabled != nil {
+		r.EnrichmentEnabled = *cfg.EnrichmentEnabled
+	}
 
 	return r
+}
+
+var validBehaviorModes = map[string]bool{
+	"autonomous": true,
+	"prompted":   true,
+	"selective":  true,
+	"custom":     true,
+}
+
+func validBehaviorMode(s string) bool {
+	return validBehaviorModes[s]
+}
+
+var validInlineEnrichments = map[string]bool{
+	"caller_only":      true,
+	"caller_preferred": true,
+	"background_only":  true,
+	"disabled":         true,
+}
+
+func validInlineEnrichment(s string) bool {
+	return validInlineEnrichments[s]
 }
 
 // ValidPlasticityPreset returns true if s is a known preset name.

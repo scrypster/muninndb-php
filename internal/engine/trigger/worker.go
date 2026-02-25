@@ -240,7 +240,7 @@ func (w *TriggerWorker) handleContradiction(ctx context.Context, event Contradic
 
 		for _, id := range []storage.ULID{event.EngramA, event.EngramB} {
 			eng := byID[id]
-			if eng == nil {
+			if eng == nil || eng.State == storage.StateSoftDeleted {
 				continue
 			}
 			w.deliver.Send(sub, &ActivationPush{
@@ -311,7 +311,11 @@ func (w *TriggerWorker) sweepVault(ctx context.Context, vaultID uint32, ws [8]by
 
 	for _, group := range groups {
 		candidates, err := w.hnsw.Search(ctx, ws, group.vec, sweepTopK)
-		if err != nil || len(candidates) == 0 {
+		if err != nil {
+			slog.Warn("trigger: hnsw search failed in sweep", "vault", vaultID, "err", err)
+			continue
+		}
+		if len(candidates) == 0 {
 			continue
 		}
 
@@ -321,6 +325,7 @@ func (w *TriggerWorker) sweepVault(ctx context.Context, vaultID uint32, ws [8]by
 		}
 		metas, err := w.store.GetMetadata(ctx, ws, ids)
 		if err != nil {
+			slog.Warn("trigger: GetMetadata failed in sweep", "vault", vaultID, "err", err)
 			continue
 		}
 		metaByID := make(map[storage.ULID]*storage.EngramMeta, len(metas))
@@ -333,10 +338,24 @@ func (w *TriggerWorker) sweepVault(ctx context.Context, vaultID uint32, ws [8]by
 			vecScores[c.ID] = c.Score
 		}
 
+		// Batch-load all candidate engrams in a single call before entering the
+		// subscription loop — avoids N×M individual store calls (N subs × M candidates).
+		allEngrams, err := w.store.GetEngrams(ctx, ws, ids)
+		if err != nil {
+			slog.Warn("trigger: GetEngrams failed in sweep", "vault", vaultID, "err", err)
+			allEngrams = nil
+		}
+		engramByID := make(map[storage.ULID]*storage.Engram, len(allEngrams))
+		for _, eng := range allEngrams {
+			if eng != nil {
+				engramByID[eng.ID] = eng
+			}
+		}
+
 		for _, sub := range group.subs {
 			for _, c := range candidates {
 				meta := metaByID[c.ID]
-				if meta == nil {
+				if meta == nil || meta.State == storage.StateSoftDeleted {
 					continue
 				}
 
@@ -358,14 +377,14 @@ func (w *TriggerWorker) sweepVault(ctx context.Context, vaultID uint32, ws [8]by
 					continue
 				}
 
-				engrams, err := w.store.GetEngrams(ctx, ws, []storage.ULID{c.ID})
-				if err != nil || len(engrams) == 0 {
+				eng := engramByID[c.ID]
+				if eng == nil || eng.State == storage.StateSoftDeleted {
 					continue
 				}
 
 				w.deliver.Send(sub, &ActivationPush{
 					SubscriptionID: sub.ID,
-					Engram:         engrams[0],
+					Engram:         eng,
 					Score:          score,
 					Trigger:        TriggerThresholdCrossed,
 					At:             time.Now(),

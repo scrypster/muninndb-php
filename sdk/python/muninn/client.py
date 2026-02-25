@@ -19,6 +19,8 @@ from .sse import SSEStream
 from .types import (
     ActivateResponse,
     ActivationItem,
+    BatchWriteResponse,
+    BatchWriteResult,
     BriefSentence,
     CoherenceResult,
     ReadResponse,
@@ -103,7 +105,12 @@ class MuninnClient:
         tags: list[str] | None = None,
         confidence: float = 0.9,
         stability: float = 0.5,
-    ) -> str:
+        memory_type: int | None = None,
+        type_label: str | None = None,
+        summary: str | None = None,
+        entities: list[dict] | None = None,
+        relationships: list[dict] | None = None,
+    ) -> WriteResponse:
         """Write an engram to the database.
 
         Args:
@@ -113,14 +120,19 @@ class MuninnClient:
             tags: Optional list of tags for categorization
             confidence: Confidence score 0-1 (default: 0.9)
             stability: Stability score 0-1 (default: 0.5)
+            memory_type: Memory type enum (0=unknown, 1=fact, 2=decision, etc.)
+            type_label: Free-form type label (e.g. "architecture_decision")
+            summary: Caller-provided summary for inline enrichment
+            entities: Caller-provided entities [{"name": "...", "type": "..."}]
+            relationships: Caller-provided relationships [{"target_id": "...", "relation": "...", "weight": 1.0}]
 
         Returns:
-            ULID string ID of the created engram
+            WriteResponse with id, created_at, and optional hint
 
         Raises:
             MuninnError: If write fails
         """
-        body = {
+        body: dict = {
             "vault": vault,
             "concept": concept,
             "content": content,
@@ -129,9 +141,71 @@ class MuninnClient:
         }
         if tags:
             body["tags"] = tags
+        if memory_type is not None:
+            body["memory_type"] = memory_type
+        if type_label is not None:
+            body["type_label"] = type_label
+        if summary is not None:
+            body["summary"] = summary
+        if entities is not None:
+            body["entities"] = entities
+        if relationships is not None:
+            body["relationships"] = relationships
 
         response = await self._request("POST", "/api/engrams", json=body)
-        return response.get("id", "")
+        return WriteResponse(
+            id=response.get("id", ""),
+            created_at=response.get("created_at", 0),
+            hint=response.get("hint"),
+        )
+
+    async def write_batch(
+        self,
+        vault: str = "default",
+        engrams: list[dict] | None = None,
+    ) -> BatchWriteResponse:
+        """Write multiple engrams in a single batch call.
+
+        More efficient than calling write() repeatedly. Maximum 50 per batch.
+        Each engram dict can contain: concept, content, tags, confidence,
+        stability, memory_type, type_label, summary, entities, relationships.
+
+        Args:
+            vault: Default vault for engrams that don't specify one
+            engrams: List of engram dicts to write
+
+        Returns:
+            BatchWriteResponse with per-item results
+
+        Raises:
+            MuninnError: If batch write fails
+        """
+        if not engrams:
+            raise MuninnError("engrams list is required and must not be empty")
+        if len(engrams) > 50:
+            raise MuninnError("batch size exceeds maximum of 50")
+
+        items = []
+        for eng in engrams:
+            item = dict(eng)
+            if "vault" not in item:
+                item["vault"] = vault
+            items.append(item)
+
+        response = await self._request(
+            "POST", "/api/engrams/batch", json={"engrams": items}
+        )
+
+        results = [
+            BatchWriteResult(
+                index=r.get("index", i),
+                id=r.get("id", ""),
+                status=r.get("status", "error"),
+                error=r.get("error"),
+            )
+            for i, r in enumerate(response.get("results", []))
+        ]
+        return BatchWriteResponse(results=results)
 
     async def activate(
         self,
@@ -185,6 +259,8 @@ class MuninnClient:
                 why=item.get("why"),
                 hop_path=item.get("hop_path"),
                 dormant=item.get("dormant", False),
+                memory_type=item.get("memory_type", 0),
+                type_label=item.get("type_label", ""),
             )
             for item in response.get("activations", [])
         ]
@@ -321,7 +397,7 @@ class MuninnClient:
                     orphan_ratio=data.get("orphan_ratio", 0.0),
                     contradiction_density=data.get("contradiction_density", 0.0),
                     duplication_pressure=data.get("duplication_pressure", 0.0),
-                    decay_variance=data.get("decay_variance", 0.0),
+                    temporal_variance=data.get("temporal_variance", 0.0),
                     total_engrams=data.get("total_engrams", 0),
                 )
                 for vault_name, data in response["coherence"].items()

@@ -33,6 +33,8 @@ type IndexJob struct {
 type Worker struct {
 	idx            *Index
 	input          chan IndexJob
+	stopCh         chan struct{}
+	stopped        atomic.Bool
 	dropped        atomic.Int64
 	wg             sync.WaitGroup
 	done           chan struct{}
@@ -57,9 +59,10 @@ func (w *Worker) SetClearing(ws [8]byte, clearing bool) {
 func NewWorker(idx *Index) *Worker {
 	n := runtime.NumCPU()
 	w := &Worker{
-		idx:   idx,
-		input: make(chan IndexJob, workerBufSize),
-		done:  make(chan struct{}),
+		idx:    idx,
+		input:  make(chan IndexJob, workerBufSize),
+		stopCh: make(chan struct{}),
+		done:   make(chan struct{}),
 	}
 	w.wg.Add(n)
 	for range n {
@@ -72,15 +75,16 @@ func NewWorker(idx *Index) *Worker {
 }
 
 // Submit enqueues an FTS index job. Non-blocking — drops and warns if queue is full.
-// Returns true if the job was accepted, false if dropped.
+// Returns true if the job was accepted, false if dropped (including after Stop).
 func (w *Worker) Submit(job IndexJob) bool {
+	if w.stopped.Load() {
+		return false
+	}
 	select {
 	case w.input <- job:
 		return true
 	default:
 		n := w.dropped.Add(1)
-		// Rate-limit drop warnings — only log at powers of 2 to avoid
-		// slog I/O becoming a bottleneck under high concurrency.
 		if n&(n-1) == 0 {
 			slog.Warn("fts: worker queue full, index jobs dropped", "total_dropped", n)
 		}
@@ -90,7 +94,8 @@ func (w *Worker) Submit(job IndexJob) bool {
 
 // Stop drains the queue and shuts down all worker goroutines. Blocks until complete.
 func (w *Worker) Stop() {
-	close(w.input) // signals all goroutines to drain+exit
+	w.stopped.Store(true)
+	close(w.stopCh)
 	w.wg.Wait()
 	close(w.done)
 }
@@ -116,15 +121,21 @@ func (w *Worker) run() {
 
 	for {
 		select {
-		case job, ok := <-w.input:
-			if !ok {
-				// Channel closed on Stop() — flush remaining and exit.
-				flush()
-				return
-			}
+		case job := <-w.input:
 			batch = append(batch, job)
 			if len(batch) >= workerBatchSize {
 				flush()
+			}
+		case <-w.stopCh:
+			// Drain remaining items from the input channel before exiting.
+			for {
+				select {
+				case job := <-w.input:
+					batch = append(batch, job)
+				default:
+					flush()
+					return
+				}
 			}
 		case <-ticker.C:
 			flush()

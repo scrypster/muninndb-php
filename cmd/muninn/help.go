@@ -7,6 +7,197 @@ import (
 	"golang.org/x/term"
 )
 
+// wantsHelp returns true if args contain -h, --help, or help.
+func wantsHelp(args []string) bool {
+	for _, a := range args {
+		if a == "-h" || a == "--help" || a == "help" {
+			return true
+		}
+	}
+	return false
+}
+
+// printSubcommandUsage prints a consistently-formatted subcommand help block.
+func printSubcommandUsage(name, summary, usage string, flags [][2]string, examples []string) {
+	isTTY := term.IsTerminal(int(os.Stdout.Fd()))
+	bold := func(s string) string {
+		if isTTY {
+			return "\033[1m" + s + "\033[0m"
+		}
+		return s
+	}
+	dim := func(s string) string {
+		if isTTY {
+			return "\033[2m" + s + "\033[0m"
+		}
+		return s
+	}
+
+	fmt.Println()
+	fmt.Printf("%s — %s\n", bold("muninn "+name), summary)
+	fmt.Println()
+	fmt.Printf("  Usage: %s\n", usage)
+
+	if len(flags) > 0 {
+		fmt.Println()
+		fmt.Println(bold("  Flags:"))
+		for _, f := range flags {
+			fmt.Printf("    %-24s %s\n", f[0], f[1])
+		}
+	}
+
+	if len(examples) > 0 {
+		fmt.Println()
+		fmt.Println(bold("  Examples:"))
+		for _, e := range examples {
+			fmt.Printf("    %s\n", dim(e))
+		}
+	}
+	fmt.Println()
+}
+
+// subcommandHelp maps subcommand names to their help printers.
+var subcommandHelp = map[string]func(){
+	"init": func() {
+		printSubcommandUsage("init", "first-time setup wizard", "muninn init [flags]",
+			[][2]string{
+				{"--tool <tools>", "Comma-separated: claude,claude-code,cursor,openclaw,windsurf,codex,vscode,manual"},
+				{"--token <tok>", "Use a specific MCP token (skip generation)"},
+				{"--no-token", "Disable token auth (open MCP endpoint)"},
+				{"--no-start", "Configure tools but don't start the server"},
+				{"--yes", "Accept all defaults (non-interactive)"},
+			},
+			[]string{
+				"muninn init",
+				"muninn init --tool claude,cursor --yes",
+				"muninn init --tool manual --no-token",
+			})
+	},
+	"start": func() {
+		printSubcommandUsage("start", "start all services in background", "muninn start [flags]",
+			[][2]string{
+				{"--dev", "Serve web assets from ./web (hot reload)"},
+			},
+			[]string{
+				"muninn start",
+				"muninn start --dev",
+			})
+	},
+	"stop": func() {
+		printSubcommandUsage("stop", "stop the running server", "muninn stop", nil,
+			[]string{"muninn stop"})
+	},
+	"restart": func() {
+		printSubcommandUsage("restart", "stop and restart the server", "muninn restart", nil,
+			[]string{"muninn restart"})
+	},
+	"status": func() {
+		printSubcommandUsage("status", "show service health and ports", "muninn status", nil,
+			[]string{"muninn status"})
+	},
+	"shell": func() {
+		printSubcommandUsage("shell", "interactive memory shell", "muninn shell", nil,
+			[]string{
+				"muninn shell",
+				"muninn          # drops into shell when server is running",
+			})
+	},
+	"logs": func() {
+		printSubcommandUsage("logs", "show recent logs and tail", "muninn logs [N] [flags]",
+			[][2]string{
+				{"N", "Number of recent lines to show (positional, default: 25)"},
+				{"--last N", "Number of recent lines to show (default: 25)"},
+				{"--level <level>", "Filter by log level: debug, info, warn, error"},
+				{"--no-follow", "Print recent lines and exit (don't tail)"},
+			},
+			[]string{
+				"muninn logs",
+				"muninn logs 100",
+				"muninn logs --level error",
+				"muninn logs 50 --level warn --no-follow",
+			})
+	},
+	"backup": func() {
+		printSubcommandUsage("backup", "offline point-in-time backup", "muninn backup --output <dir> [flags]",
+			[][2]string{
+				{"--output <dir>", "Destination directory for the backup (required)"},
+				{"--data-dir <dir>", "Source data directory (default: ~/.muninn/data)"},
+			},
+			[]string{
+				"muninn backup --output /backups/muninn-2026-02-25",
+			})
+	},
+	"upgrade": func() {
+		printSubcommandUsage("upgrade", "check for and install updates", "muninn upgrade [flags]",
+			[][2]string{
+				{"--check", "Check only, don't install"},
+			},
+			[]string{
+				"muninn upgrade",
+				"muninn upgrade --check",
+			})
+	},
+	"cluster": func() {
+		printSubcommandUsage("cluster", "cluster management", "muninn cluster <subcommand> [flags]",
+			[][2]string{
+				{"info", "Display cluster topology and node status"},
+				{"status", "Show cluster health and replication lag"},
+				{"enable", "Enable cluster mode on this node"},
+				{"disable", "Disable cluster mode on this node"},
+				{"failover", "Trigger manual leader failover"},
+				{"add-node", "Show instructions for adding a node"},
+				{"remove-node", "Remove a node from the cluster"},
+			},
+			[]string{
+				"muninn cluster info",
+				"muninn cluster status --json",
+				"muninn cluster enable --role replica",
+				"muninn cluster failover --yes",
+			})
+	},
+	"vault": func() {
+		printSubcommandUsage("vault", "vault management", "muninn vault <command> [flags]",
+			[][2]string{
+				{"list [--pattern <glob>]", "List all vaults (with optional glob filter)"},
+				{"delete <name> [--yes] [--force]", "Delete a vault and all its memories"},
+				{"clear <name> [--yes] [--force]", "Remove all memories from a vault"},
+				{"clone <source> <new-name>", "Clone a vault into a new vault"},
+				{"merge <source> <target>", "Merge source vault into target"},
+				{"export --vault <name>", "Export vault to .muninn archive"},
+				{"import <file> --vault <name>", "Import .muninn archive"},
+				{"reindex-fts <name>", "Rebuild FTS index"},
+				{"", ""},
+				{"-u <user>", "Admin username (default: root)"},
+				{"-p", "Prompt for password"},
+				{"-p<password>", "Inline password (no space)"},
+				{"-h <host:port>", "Server host:port (default: localhost:8475)"},
+			},
+			[]string{
+				"muninn vault list",
+				"muninn vault list --pattern 'proof-*'",
+				"muninn vault delete old-project --yes",
+				"muninn vault clone production staging",
+				"muninn vault export --vault mydata -o backup.muninn",
+				"muninn vault delete prod-vault -u admin -p",
+			})
+	},
+	"show vaults": func() {
+		printSubcommandUsage("show vaults", "list all vaults", "muninn show vaults", nil,
+			[]string{"muninn show vaults"})
+	},
+	"completion": func() {
+		printSubcommandUsage("completion", "generate shell completions", "muninn completion <bash|zsh|fish>", nil,
+			[]string{
+				"muninn completion bash >> ~/.bashrc",
+				"muninn completion zsh >> ~/.zshrc",
+				"muninn completion fish > ~/.config/fish/completions/muninn.fish",
+			})
+	},
+	"version": func() {
+		printSubcommandUsage("version", "print version", "muninn version", nil, nil)
+	},
+}
+
 func printHelp() {
 	isTTY := term.IsTerminal(int(os.Stdout.Fd()))
 
@@ -49,9 +240,12 @@ func printHelp() {
 	fmt.Printf("  %-32s %s\n", cyan("muninn status"), "Show which services are running")
 	fmt.Printf("  %-32s %s\n", cyan("muninn"), "Status check / drop into interactive shell")
 	fmt.Printf("  %-32s %s\n", cyan("muninn shell"), "Interactive shell (alias: bare muninn when running)")
-	fmt.Printf("  %-32s %s\n", cyan("muninn logs"), "Tail the server log file")
-	fmt.Printf("  %-32s %s\n", cyan("muninn logs --last 50"), "Print last 50 lines and exit")
+	fmt.Printf("  %-32s %s\n", cyan("muninn logs"), "Show last 25 lines + tail")
+	fmt.Printf("  %-32s %s\n", cyan("muninn logs 50"), "Show last 50 lines + tail")
+	fmt.Printf("  %-32s %s\n", cyan("muninn logs --no-follow"), "Print recent lines and exit")
 	fmt.Printf("  %-32s %s\n", cyan("muninn show vaults"), "List all vaults (requires server running)")
+	fmt.Printf("  %-32s %s\n", cyan("muninn vault <command>"), "Vault management (list, delete, clear, clone, merge, export, import)")
+	fmt.Printf("  %-32s %s\n", cyan("muninn backup --output <dir>"), "Offline point-in-time backup (server must be stopped)")
 	fmt.Printf("  %-32s %s\n", cyan("muninn cluster"), "Cluster management (info, status, failover, add-node, remove-node)")
 	fmt.Printf("  %-32s %s\n", cyan("muninn completion <shell>"), "Shell completion (bash/zsh/fish)")
 	fmt.Printf("  %-32s %s\n", cyan("muninn upgrade"), "Check for and install updates")
@@ -89,6 +283,10 @@ func printHelp() {
 	fmt.Printf("  %-28s %s\n", "MUNINN_OLLAMA_URL", "Local Ollama embed model (e.g. ollama://localhost:11434/nomic-embed-text)")
 	fmt.Printf("  %-28s %s\n", "MUNINN_OPENAI_KEY", "OpenAI embeddings API key (text-embedding-3-small, 1536d)")
 	fmt.Printf("  %-28s %s\n", "MUNINN_VOYAGE_KEY", "Voyage AI embeddings API key (voyage-3, 1024d)")
+	fmt.Printf("  %-28s %s\n", "MUNINN_COHERE_KEY", "Cohere embeddings API key (embed-v4, 1024d)")
+	fmt.Printf("  %-28s %s\n", "MUNINN_GOOGLE_KEY", "Google Gemini embeddings API key (text-embedding-004, 768d)")
+	fmt.Printf("  %-28s %s\n", "MUNINN_JINA_KEY", "Jina embeddings API key (jina-embeddings-v3, 1024d)")
+	fmt.Printf("  %-28s %s\n", "MUNINN_MISTRAL_KEY", "Mistral embeddings API key (mistral-embed, 1024d)")
 	fmt.Println()
 
 	fmt.Println(bold("LLM ENRICHMENT") + dim("  (optional — auto-extract entities, relationships, summaries)"))

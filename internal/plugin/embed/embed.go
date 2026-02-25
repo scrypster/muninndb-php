@@ -69,6 +69,14 @@ func NewEmbedService(providerURL string) (*EmbedService, error) {
 		prov = &OpenAIProvider{}
 	case plugin.SchemeVoyage:
 		prov = &VoyageProvider{}
+	case plugin.SchemeCohere:
+		prov = &CohereProvider{}
+	case plugin.SchemeGoogle:
+		prov = &GoogleProvider{}
+	case plugin.SchemeJina:
+		prov = &JinaProvider{}
+	case plugin.SchemeMistral:
+		prov = &MistralProvider{}
 	default:
 		return nil, fmt.Errorf("unsupported embed provider scheme: %q", provCfg.Scheme)
 	}
@@ -204,6 +212,14 @@ func (s *EmbedService) createRateLimiter(scheme plugin.ProviderScheme, options m
 		ratePerSec = 50.0 // 3000 RPM / 60
 	case plugin.SchemeVoyage:
 		ratePerSec = 5.0 // 300 RPM / 60
+	case plugin.SchemeCohere:
+		ratePerSec = 16.0 // ~1000 RPM / 60
+	case plugin.SchemeGoogle:
+		ratePerSec = 25.0 // 1500 RPM / 60
+	case plugin.SchemeJina:
+		ratePerSec = 8.0 // 500 RPM / 60
+	case plugin.SchemeMistral:
+		ratePerSec = 10.0 // ~600 RPM / 60
 	default:
 		ratePerSec = 10.0 // conservative default
 	}

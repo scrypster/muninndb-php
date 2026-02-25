@@ -2,8 +2,9 @@ package erf
 
 // ERF v1 constants: magic bytes, version, offsets, sizes
 const (
-	Magic   uint32 = 0x4D554E4E // "MUNN"
-	Version uint8  = 0x01
+	Magic    uint32 = 0x4D554E4E // "MUNN"
+	Version  uint8  = 0x01
+	Version2 uint8  = 0x02
 
 	// Section offsets
 	HeaderOffset    = 0
@@ -27,7 +28,9 @@ const (
 	OffsetState       = 64
 	OffsetAssocCount  = 65
 	OffsetEmbedDim    = 67
-	OffsetReserved    = 68 // 32 bytes reserved
+	OffsetMemoryType  = 68 // uint8, first byte of formerly-reserved area
+	OffsetClassification = 69 // uint16, big-endian
+	OffsetReserved    = 71 // 29 bytes reserved (was 32)
 
 	// Offset table field offsets (relative to record start)
 	OffsetConceptOff   = 108
@@ -84,3 +87,21 @@ const (
 	FlagSoftDeleted       uint8 = 1 << 4
 	FlagDirty             uint8 = 1 << 5
 )
+
+// Tagged extension field prefixes. Written after variable data, before CRC32 trailer.
+// Format: tag(1) | len(2, big-endian) | data(len).
+const (
+	TagTypeLabel uint8 = 0x19 // free-form TypeLabel string
+)
+
+// appendTaggedString appends a tagged length-prefixed UTF-8 string to buf.
+func appendTaggedString(buf []byte, tag uint8, s string) []byte {
+	data := []byte(s)
+	if len(data) > 0xFFFF {
+		data = data[:0xFFFF]
+	}
+	buf = append(buf, tag)
+	buf = append(buf, byte(len(data)>>8), byte(len(data)))
+	buf = append(buf, data...)
+	return buf
+}

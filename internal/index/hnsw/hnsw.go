@@ -3,8 +3,11 @@ package hnsw
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
+	"log/slog"
 	"math"
 	"math/rand"
+	"sort"
 	"sync"
 
 	"github.com/cockroachdb/pebble"
@@ -61,15 +64,42 @@ func (n *HNSWNode) maxLayer() int {
 
 // Index is the HNSW vector index.
 type Index struct {
-	mu         sync.RWMutex
-	nodes      map[[16]byte]*HNSWNode
-	entryPoint [16]byte
-	maxLevel   int
-	db         *pebble.DB
-	ws         [8]byte
-	rng        *rand.Rand
-	rngMu      sync.Mutex
-	persistWg  sync.WaitGroup // tracks in-flight persistNode goroutines
+	mu             sync.RWMutex
+	nodes          map[[16]byte]*HNSWNode
+	entryPoint     [16]byte
+	maxLevel       int
+	db             *pebble.DB
+	ws             [8]byte
+	rng            *rand.Rand
+	rngMu          sync.Mutex
+	persistWg      sync.WaitGroup // tracks in-flight persistNode goroutines
+	efConstruction int            // beam width during insert; 0 → uses EfConstruction constant
+	efSearch       int            // beam width during query; 0 → uses EfSearch constant
+	deleted        sync.Map       // key: [16]byte id → struct{} (tombstoned hard-deleted nodes)
+}
+
+// Tombstone marks a node as deleted so it is skipped in future Search results.
+// The node's memory is reclaimed on the next full index rebuild.
+func (idx *Index) Tombstone(id [16]byte) {
+	idx.deleted.Store(id, struct{}{})
+}
+
+// efC returns the effective EfConstruction for this index.
+// Allows per-index override (e.g., lower value during bulk eval loading).
+func (idx *Index) efC() int {
+	if idx.efConstruction > 0 {
+		return idx.efConstruction
+	}
+	return EfConstruction
+}
+
+// efS returns the effective EfSearch for this index.
+// Allows per-index override (e.g., higher value for larger corpora).
+func (idx *Index) efS() int {
+	if idx.efSearch > 0 {
+		return idx.efSearch
+	}
+	return EfSearch
 }
 
 func New(db *pebble.DB, ws [8]byte) *Index {
@@ -85,11 +115,42 @@ func New(db *pebble.DB, ws [8]byte) *Index {
 	}
 }
 
+// NewWithEfConstruction creates a new Index with a custom EfConstruction.
+// Use a lower value (e.g., 50) for bulk eval loading to trade graph quality
+// for speed. Note: EfConstruction affects graph build quality but EfSearch
+// (query-time beam width) is the dominant factor for retrieval recall at scale.
+func NewWithEfConstruction(db *pebble.DB, ws [8]byte, efC int) *Index {
+	idx := New(db, ws)
+	idx.efConstruction = efC
+	return idx
+}
+
+// NewWithParams creates a new Index with custom EfConstruction and EfSearch.
+// Use for eval configurations that need explicit control over both build and
+// query beam widths (e.g., efC=200, efSearch=200 for large-corpus eval).
+func NewWithParams(db *pebble.DB, ws [8]byte, efC, efS int) *Index {
+	idx := New(db, ws)
+	idx.efConstruction = efC
+	idx.efSearch = efS
+	return idx
+}
+
 // Len returns the number of nodes in the index.
 func (idx *Index) Len() int {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 	return len(idx.nodes)
+}
+
+// VectorBytes returns the total size in bytes of all in-memory vectors.
+func (idx *Index) VectorBytes() int64 {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	var total int64
+	for _, n := range idx.nodes {
+		total += int64(len(n.vec)) * 4 // float32 = 4 bytes
+	}
+	return total
 }
 
 // CosineSimilarity computes cosine similarity between two vectors.
@@ -180,7 +241,7 @@ func (idx *Index) Search(ctx context.Context, query []float32, k int) ([]ScoredI
 	}
 
 	// Phase 2: beam search at layer 0
-	ef := EfSearch
+	ef := idx.efS()
 	if k > ef {
 		ef = k
 	}
@@ -196,6 +257,9 @@ func (idx *Index) Search(ctx context.Context, query []float32, k int) ([]ScoredI
 	visited := []heapItem{{id: ep, dist: epDist}}
 	seen := map[[16]byte]bool{ep: true}
 
+	// Track visited max distance to avoid rescanning on every iteration (D4).
+	visitedMax := epDist
+
 	for len(candidates) > 0 {
 		// Pop min from candidates
 		minIdx := 0
@@ -208,15 +272,7 @@ func (idx *Index) Search(ctx context.Context, query []float32, k int) ([]ScoredI
 		candidates[minIdx] = candidates[len(candidates)-1]
 		candidates = candidates[:len(candidates)-1]
 
-		// Find max in visited
-		maxDist := visited[0].dist
-		for _, v := range visited {
-			if v.dist > maxDist {
-				maxDist = v.dist
-			}
-		}
-
-		if curr.dist > maxDist {
+		if curr.dist > visitedMax {
 			break
 		}
 
@@ -237,14 +293,7 @@ func (idx *Index) Search(ctx context.Context, query []float32, k int) ([]ScoredI
 			}
 			nDist := 1.0 - float64(CosineSimilarity(query, nNode.vec))
 
-			maxD := visited[0].dist
-			for _, v := range visited {
-				if v.dist > maxD {
-					maxD = v.dist
-				}
-			}
-
-			if nDist < maxD || len(visited) < ef {
+			if nDist < visitedMax || len(visited) < ef {
 				candidates = append(candidates, heapItem{nID, nDist})
 
 				// Prune candidates if it grows beyond ef*2 to prevent O(n) growth
@@ -261,6 +310,9 @@ func (idx *Index) Search(ctx context.Context, query []float32, k int) ([]ScoredI
 				}
 
 				visited = append(visited, heapItem{nID, nDist})
+				if nDist > visitedMax {
+					visitedMax = nDist
+				}
 
 				// Remove max if over ef
 				if len(visited) > ef {
@@ -272,22 +324,29 @@ func (idx *Index) Search(ctx context.Context, query []float32, k int) ([]ScoredI
 					}
 					visited[maxIdx] = visited[len(visited)-1]
 					visited = visited[:len(visited)-1]
+					// Must rescan to find new max after removal.
+					visitedMax = 0
+					for _, v := range visited {
+						if v.dist > visitedMax {
+							visitedMax = v.dist
+						}
+					}
 				}
 			}
 		}
 	}
 
-	// Sort visited by distance and take top-k
-	for i := 1; i < len(visited); i++ {
-		for j := i; j > 0 && visited[j].dist < visited[j-1].dist; j-- {
-			visited[j], visited[j-1] = visited[j-1], visited[j]
-		}
-	}
+	// Sort visited by distance and take top-k (D1: sort.Slice replaces insertion sort).
+	sort.Slice(visited, func(i, j int) bool { return visited[i].dist < visited[j].dist })
 
 	results := make([]ScoredID, 0, k)
 	for _, v := range visited {
 		if len(results) >= k {
 			break
+		}
+		// Skip tombstoned nodes (hard-deleted engrams).
+		if _, tombstoned := idx.deleted.Load(v.id); tombstoned {
+			continue
 		}
 		results = append(results, ScoredID{
 			ID:    v.id,
@@ -342,7 +401,7 @@ func (idx *Index) Insert(id [16]byte, vector []float32) {
 
 	// Phase 2: insert at each layer from min(level, maxLevel) down to 0
 	for l := min(level, idx.maxLevel); l >= 0; l-- {
-		neighbors := idx.searchLayer(ep, vector, EfConstruction, l)
+		neighbors := idx.searchLayer(ep, vector, idx.efC(), l)
 		M := M
 		if l == 0 {
 			M = M0
@@ -423,6 +482,9 @@ func (idx *Index) searchLayer(ep [16]byte, query []float32, ef, l int) []candida
 	visited := []candidate{{ep, epDist}}
 	seen := map[[16]byte]bool{ep: true}
 
+	// Track visited max distance to avoid rescanning on every iteration (D4).
+	visitedMax := epDist
+
 	for len(candidates) > 0 {
 		minIdx := 0
 		for i := 1; i < len(candidates); i++ {
@@ -434,13 +496,7 @@ func (idx *Index) searchLayer(ep [16]byte, query []float32, ef, l int) []candida
 		candidates[minIdx] = candidates[len(candidates)-1]
 		candidates = candidates[:len(candidates)-1]
 
-		maxDist := visited[0].dist
-		for _, v := range visited {
-			if v.dist > maxDist {
-				maxDist = v.dist
-			}
-		}
-		if curr.dist > maxDist {
+		if curr.dist > visitedMax {
 			break
 		}
 
@@ -461,16 +517,12 @@ func (idx *Index) searchLayer(ep [16]byte, query []float32, ef, l int) []candida
 			}
 			nDist := 1.0 - float64(CosineSimilarity(query, nNode.vec))
 
-			maxD := visited[0].dist
-			for _, v := range visited {
-				if v.dist > maxD {
-					maxD = v.dist
-				}
-			}
-
-			if nDist < maxD || len(visited) < ef {
+			if nDist < visitedMax || len(visited) < ef {
 				candidates = append(candidates, candidate{nID, nDist})
 				visited = append(visited, candidate{nID, nDist})
+				if nDist > visitedMax {
+					visitedMax = nDist
+				}
 				if len(visited) > ef {
 					maxIdx := 0
 					for i := 1; i < len(visited); i++ {
@@ -480,17 +532,20 @@ func (idx *Index) searchLayer(ep [16]byte, query []float32, ef, l int) []candida
 					}
 					visited[maxIdx] = visited[len(visited)-1]
 					visited = visited[:len(visited)-1]
+					// Must rescan to find new max after removal.
+					visitedMax = 0
+					for _, v := range visited {
+						if v.dist > visitedMax {
+							visitedMax = v.dist
+						}
+					}
 				}
 			}
 		}
 	}
 
-	// Sort by distance ascending
-	for i := 1; i < len(visited); i++ {
-		for j := i; j > 0 && visited[j].dist < visited[j-1].dist; j-- {
-			visited[j], visited[j-1] = visited[j-1], visited[j]
-		}
-	}
+	// Sort by distance ascending (D1: sort.Slice replaces insertion sort).
+	sort.Slice(visited, func(i, j int) bool { return visited[i].dist < visited[j].dist })
 	return visited
 }
 
@@ -541,7 +596,9 @@ func (idx *Index) persistNode(id [16]byte, node *HNSWNode) {
 	for l, neighbors := range node.layers {
 		key := keys.HNSWNodeKey(idx.ws, id, uint8(l))
 		val := encodeNeighbors(neighbors)
-		_ = idx.db.Set(key, val, pebble.NoSync)
+		if err := idx.db.Set(key, val, pebble.NoSync); err != nil {
+			slog.Warn("hnsw: failed to persist node", "error", err)
+		}
 	}
 }
 
@@ -624,6 +681,10 @@ func (idx *Index) LoadFromPebble() error {
 			// when all nodes are at layer 0 (where layer == maxLevel == 0).
 			tempEntryPoint = id
 		}
+	}
+
+	if err := iter.Error(); err != nil {
+		return fmt.Errorf("hnsw: LoadFromPebble incomplete read: %w", err)
 	}
 
 	// Only apply to index if load completed successfully

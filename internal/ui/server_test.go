@@ -33,6 +33,15 @@ func (m *mockEngine) Write(ctx context.Context, req *rest.WriteRequest) (*rest.W
 	return &rest.WriteResponse{}, nil
 }
 
+func (m *mockEngine) WriteBatch(ctx context.Context, reqs []*rest.WriteRequest) ([]*rest.WriteResponse, []error) {
+	responses := make([]*rest.WriteResponse, len(reqs))
+	errs := make([]error, len(reqs))
+	for i := range reqs {
+		responses[i] = &rest.WriteResponse{}
+	}
+	return responses, errs
+}
+
 func (m *mockEngine) Read(ctx context.Context, req *rest.ReadRequest) (*rest.ReadResponse, error) {
 	return &rest.ReadResponse{}, nil
 }
@@ -95,6 +104,14 @@ func (m *mockEngine) ExportVault(ctx context.Context, vaultName, embedderModel s
 }
 func (m *mockEngine) StartImport(ctx context.Context, vaultName, embedderModel string, dimension int, resetMeta bool, r io.Reader) (*vaultjob.Job, error) {
 	return &vaultjob.Job{ID: "mock-import-job", Operation: "import", Target: vaultName}, nil
+}
+
+func (m *mockEngine) ReindexFTSVault(ctx context.Context, vaultName string) (int64, error) {
+	return 0, nil
+}
+
+func (m *mockEngine) Checkpoint(destDir string) error {
+	return nil
 }
 
 func makeMockFS() fs.FS {

@@ -50,6 +50,7 @@ type ToolDefinition struct {
 type WriteResult struct {
 	ID      string `json:"id"`
 	Concept string `json:"concept"`
+	Hint    string `json:"hint,omitempty"`
 }
 
 type Memory struct {

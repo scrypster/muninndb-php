@@ -2,6 +2,7 @@ package embed
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -176,5 +177,181 @@ func TestEmbedService_Close(t *testing.T) {
 	err = es.Close()
 	if err != nil {
 		t.Errorf("second Close failed: %v", err)
+	}
+}
+
+func TestEmbedService_Embed_NotInitialized(t *testing.T) {
+	es, _ := NewEmbedService("ollama://localhost:11434/model")
+
+	_, err := es.Embed(context.Background(), []string{"hello"})
+	if err == nil {
+		t.Fatal("expected error for not-initialized service")
+	}
+}
+
+func TestEmbedService_Embed_AfterClose(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.Method == "POST" && r.URL.Path == "/api/embeddings" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"embedding": [0.1, 0.2]}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	es, _ := NewEmbedService("ollama://" + server.Listener.Addr().String() + "/test-model")
+	cfg := plugin.PluginConfig{
+		ProviderURL: "ollama://" + server.Listener.Addr().String() + "/test-model",
+	}
+	es.Init(context.Background(), cfg)
+	es.Close()
+
+	_, err := es.Embed(context.Background(), []string{"hello"})
+	if err == nil {
+		t.Fatal("expected error for closed service")
+	}
+}
+
+func TestEmbedService_Close_WithProviderError(t *testing.T) {
+	es := &EmbedService{
+		provider: &failingCloseProvider{},
+	}
+
+	err := es.Close()
+	if err == nil {
+		t.Fatal("expected error from provider close")
+	}
+}
+
+type failingCloseProvider struct {
+	MockProvider
+}
+
+func (f *failingCloseProvider) Close() error {
+	return fmt.Errorf("provider close error")
+}
+
+func TestEmbedService_NewEmbedService_Local(t *testing.T) {
+	es, err := NewEmbedService("local://all-MiniLM-L6-v2")
+	if err != nil {
+		t.Fatalf("NewEmbedService failed: %v", err)
+	}
+	if es.name != "embed-local" {
+		t.Errorf("expected name embed-local, got %s", es.name)
+	}
+}
+
+func TestEmbedService_CreateRateLimiter_OpenAI(t *testing.T) {
+	es := &EmbedService{}
+	limiter := es.createRateLimiter(plugin.SchemeOpenAI, nil)
+	if limiter == nil {
+		t.Fatal("expected non-nil limiter for OpenAI")
+	}
+	if limiter.rate != 50.0 {
+		t.Errorf("expected OpenAI rate 50.0, got %f", limiter.rate)
+	}
+}
+
+func TestEmbedService_CreateRateLimiter_Voyage(t *testing.T) {
+	es := &EmbedService{}
+	limiter := es.createRateLimiter(plugin.SchemeVoyage, nil)
+	if limiter == nil {
+		t.Fatal("expected non-nil limiter for Voyage")
+	}
+	if limiter.rate != 5.0 {
+		t.Errorf("expected Voyage rate 5.0, got %f", limiter.rate)
+	}
+}
+
+func TestEmbedService_CreateRateLimiter_Ollama(t *testing.T) {
+	es := &EmbedService{}
+	limiter := es.createRateLimiter(plugin.SchemeOllama, nil)
+	if limiter != nil {
+		t.Fatal("expected nil limiter for Ollama")
+	}
+}
+
+func TestEmbedService_CreateRateLimiter_DefaultScheme(t *testing.T) {
+	es := &EmbedService{}
+	limiter := es.createRateLimiter(plugin.SchemeAnthropic, nil)
+	if limiter == nil {
+		t.Fatal("expected non-nil limiter for unknown scheme")
+	}
+	if limiter.rate != 10.0 {
+		t.Errorf("expected default rate 10.0, got %f", limiter.rate)
+	}
+}
+
+func TestEmbedService_OpenAI_Init_Success(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" && r.URL.Path == "/v1/embeddings" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"data": [{"embedding": [0.1, 0.2, 0.3], "index": 0}]}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	es, _ := NewEmbedService("openai://text-embedding-3-small")
+	es.provCfg.BaseURL = "http://" + server.Listener.Addr().String()
+
+	cfg := plugin.PluginConfig{
+		APIKey:  "test-key",
+		Options: map[string]string{},
+	}
+
+	err := es.Init(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+
+	if es.Dimension() != 3 {
+		t.Errorf("expected dimension 3, got %d", es.Dimension())
+	}
+
+	if es.limiter == nil {
+		t.Error("expected non-nil rate limiter for OpenAI")
+	}
+}
+
+func TestEmbedService_Voyage_Init_Success(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" && r.URL.Path == "/v1/embeddings" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"data": [{"embedding": [0.1, 0.2, 0.3], "index": 0}]}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	es, _ := NewEmbedService("voyage://voyage-3")
+	es.provCfg.BaseURL = "http://" + server.Listener.Addr().String()
+
+	cfg := plugin.PluginConfig{
+		APIKey:  "test-key",
+		Options: map[string]string{},
+	}
+
+	err := es.Init(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+
+	if es.Dimension() != 3 {
+		t.Errorf("expected dimension 3, got %d", es.Dimension())
+	}
+
+	if es.limiter == nil {
+		t.Error("expected non-nil rate limiter for Voyage")
 	}
 }

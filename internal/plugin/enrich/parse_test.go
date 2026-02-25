@@ -2,6 +2,8 @@ package enrich
 
 import (
 	"testing"
+
+	"github.com/scrypster/muninndb/internal/plugin"
 )
 
 // TestParseSummary tests parsing of summarization responses.
@@ -86,15 +88,15 @@ func TestParseEntities_BadJSON(t *testing.T) {
 
 // TestParseClassification tests parsing of classification responses.
 func TestParseClassification_ValidJSON(t *testing.T) {
-	raw := `{"memory_type": "decision", "category": "infrastructure", "subcategory": "databases", "tags": ["db", "postgres"]}`
-	memType, category, subcategory, tags, err := ParseClassificationResponse(raw)
+	raw := `{"memory_type": "decision", "type_label": "architectural_decision", "category": "infrastructure", "subcategory": "databases", "tags": ["db", "postgres"]}`
+	memType, typeLabel, category, subcategory, tags, err := ParseClassificationResponse(raw)
 
 	if err != nil {
 		t.Fatalf("ParseClassificationResponse failed: %v", err)
 	}
 
-	if memType != "decision" || category != "infrastructure" || subcategory != "databases" {
-		t.Fatalf("Unexpected classification: type=%q cat=%q subcat=%q", memType, category, subcategory)
+	if memType != "decision" || typeLabel != "architectural_decision" || category != "infrastructure" || subcategory != "databases" {
+		t.Fatalf("Unexpected classification: type=%q label=%q cat=%q subcat=%q", memType, typeLabel, category, subcategory)
 	}
 
 	if len(tags) != 2 || tags[0] != "db" {
@@ -161,52 +163,160 @@ func TestNormalizeEntityType_Valid(t *testing.T) {
 	}
 }
 
-// TestValidateAndDedupeEntities tests deduplication and validation.
-func TestValidateAndDedupeEntities_Dedup(t *testing.T) {
-	entities := []struct {
-		Name       string
-		Type       string
-		Confidence float32
-	}{
-		{"PostgreSQL", "database", 0.8},
-		{"PostgreSQL", "database", 0.95}, // Higher confidence
-		{"Redis", "tool", 0.7},
+// TestValidateAndDedupeEntities tests deduplication, empty names, and confidence clamping.
+func TestValidateAndDedupeEntities(t *testing.T) {
+	input := []plugin.ExtractedEntity{
+		{Name: "PostgreSQL", Type: "database", Confidence: 0.8},
+		{Name: "PostgreSQL", Type: "database", Confidence: 0.95}, // higher confidence wins
+		{Name: "Redis", Type: "tool", Confidence: 0.7},
+		{Name: "", Type: "tool", Confidence: 0.5},      // empty name => skipped
+		{Name: "Neg", Type: "person", Confidence: -0.5}, // clamped to 0.0
+		{Name: "Over", Type: "person", Confidence: 1.5}, // clamped to 1.0
 	}
 
-	var extEntities []interface{}
-	for _, e := range entities {
-		extEntities = append(extEntities, map[string]interface{}{
-			"name":       e.Name,
-			"type":       e.Type,
-			"confidence": e.Confidence,
-		})
+	result := validateAndDedupeEntities(input)
+
+	byName := map[string]plugin.ExtractedEntity{}
+	for _, e := range result {
+		byName[e.Name] = e
 	}
 
-	// Convert to ExtractedEntity
-	input := make([]interface{}, len(entities))
-	for i, e := range entities {
-		input[i] = e
+	if _, ok := byName[""]; ok {
+		t.Fatal("empty-name entity should have been removed")
 	}
 
-	// Test with actual structs
-	actualEntities := []struct {
-		Name       string
-		Type       string
-		Confidence float32
-	}{
-		{"PostgreSQL", "database", 0.8},
-		{"PostgreSQL", "database", 0.95},
-		{"Redis", "tool", 0.7},
+	pg, ok := byName["PostgreSQL"]
+	if !ok {
+		t.Fatal("PostgreSQL missing")
+	}
+	if pg.Confidence != 0.95 {
+		t.Fatalf("expected PostgreSQL confidence 0.95, got %v", pg.Confidence)
 	}
 
-	// We can't easily test this without the actual structs, but we can verify the logic works
-	// by constructing the structs properly
-	var testEntities []interface{}
-	for _, e := range actualEntities {
-		testEntities = append(testEntities, e)
+	neg := byName["Neg"]
+	if neg.Confidence != 0.0 {
+		t.Fatalf("expected clamped confidence 0.0, got %v", neg.Confidence)
+	}
+	over := byName["Over"]
+	if over.Confidence != 1.0 {
+		t.Fatalf("expected clamped confidence 1.0, got %v", over.Confidence)
+	}
+}
+
+func TestValidateRelationships(t *testing.T) {
+	input := []plugin.ExtractedRelation{
+		{FromEntity: "A", ToEntity: "B", RelType: "uses", Weight: 0.9},
+		{FromEntity: "", ToEntity: "B", RelType: "uses", Weight: 0.5},   // empty from => skip
+		{FromEntity: "A", ToEntity: "", RelType: "uses", Weight: 0.5},   // empty to => skip
+		{FromEntity: "C", ToEntity: "D", RelType: "uses", Weight: -0.3}, // clamped to 0.0
+		{FromEntity: "E", ToEntity: "F", RelType: "uses", Weight: 1.5},  // clamped to 1.0
 	}
 
-	_ = testEntities // Use it to avoid unused variable
+	result := validateRelationships(input)
+
+	if len(result) != 3 {
+		t.Fatalf("expected 3 valid relationships, got %d", len(result))
+	}
+
+	if result[1].Weight != 0.0 {
+		t.Fatalf("expected clamped weight 0.0, got %v", result[1].Weight)
+	}
+	if result[2].Weight != 1.0 {
+		t.Fatalf("expected clamped weight 1.0, got %v", result[2].Weight)
+	}
+}
+
+func TestParseEntityResponse_DirectArray(t *testing.T) {
+	raw := `[{"name": "Go", "type": "language", "confidence": 0.9}]`
+	entities, err := ParseEntityResponse(raw)
+	if err != nil {
+		t.Fatalf("ParseEntityResponse failed: %v", err)
+	}
+	if len(entities) != 1 || entities[0].Name != "Go" {
+		t.Fatalf("unexpected entities: %+v", entities)
+	}
+}
+
+func TestParseRelationshipResponse_DirectArray(t *testing.T) {
+	raw := `[{"from": "A", "to": "B", "type": "uses", "weight": 0.8}]`
+	rels, err := ParseRelationshipResponse(raw)
+	if err != nil {
+		t.Fatalf("ParseRelationshipResponse failed: %v", err)
+	}
+	if len(rels) != 1 || rels[0].FromEntity != "A" {
+		t.Fatalf("unexpected rels: %+v", rels)
+	}
+}
+
+func TestParseRelationshipResponse_BadJSON(t *testing.T) {
+	raw := `not valid json at all`
+	rels, err := ParseRelationshipResponse(raw)
+	if err != nil {
+		t.Fatalf("should not error, got: %v", err)
+	}
+	if len(rels) != 0 {
+		t.Fatalf("expected 0 relationships, got %d", len(rels))
+	}
+}
+
+func TestParseClassification_BadJSON(t *testing.T) {
+	raw := `totally broken {{{`
+	memType, typeLabel, cat, subcat, tags, err := ParseClassificationResponse(raw)
+	if err != nil {
+		t.Fatalf("should not error, got: %v", err)
+	}
+	if memType != "" || typeLabel != "" || cat != "" || subcat != "" || tags != nil {
+		t.Fatal("expected all empty on bad JSON")
+	}
+}
+
+func TestParseSummarize_BadJSON(t *testing.T) {
+	raw := `garbage in`
+	summary, keyPoints, err := ParseSummarizeResponse(raw)
+	if err != nil {
+		t.Fatalf("should not error, got: %v", err)
+	}
+	if summary != "" || keyPoints != nil {
+		t.Fatal("expected empty on bad JSON")
+	}
+}
+
+func TestExtractJSON_PlainCodeFences(t *testing.T) {
+	raw := "```\n{\"key\": \"val\"}\n```"
+	extracted := extractJSON(raw)
+	if !contains(extracted, `"key"`) {
+		t.Fatalf("failed to extract from plain code fences: %q", extracted)
+	}
+}
+
+func TestExtractJSON_NoJSON(t *testing.T) {
+	raw := "no json here"
+	extracted := extractJSON(raw)
+	if extracted != "no json here" {
+		t.Fatalf("expected raw string back, got %q", extracted)
+	}
+}
+
+func TestExtractJSON_ArrayBrackets(t *testing.T) {
+	raw := `some text [{"a":1}]`
+	extracted := extractJSON(raw)
+	if !contains(extracted, `[{"a":1}]`) {
+		t.Fatalf("failed to extract array: %q", extracted)
+	}
+}
+
+func TestParseSummary_WithMarkdownFences(t *testing.T) {
+	raw := "```json\n{\"summary\": \"fenced\", \"key_points\": [\"a\"]}\n```"
+	summary, kp, err := ParseSummarizeResponse(raw)
+	if err != nil {
+		t.Fatalf("failed: %v", err)
+	}
+	if summary != "fenced" {
+		t.Fatalf("expected 'fenced', got %q", summary)
+	}
+	if len(kp) != 1 || kp[0] != "a" {
+		t.Fatalf("unexpected key_points: %v", kp)
+	}
 }
 
 func contains(s, substr string) bool {

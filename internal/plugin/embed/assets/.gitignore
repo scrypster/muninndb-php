@@ -5,6 +5,7 @@
 *.so
 *.so.*
 *.dylib
+*.dll
 tokenizer.json
 *.tgz
 *.zip

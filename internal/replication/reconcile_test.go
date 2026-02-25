@@ -639,6 +639,66 @@ func TestReconciler_HandleReconSync_ViaFrameDispatch(t *testing.T) {
 	}
 }
 
+func TestReconciliationTriggeredOnReconnect(t *testing.T) {
+	coord, _ := newTestCoordinator(t, "primary")
+	simulatePromotion(coord, 1)
+
+	// Use a short delay so the test doesn't wait 2s.
+	coord.reconDelay = 50 * time.Millisecond
+
+	sampler := &mockHebbianSampler{}
+	reconciler := NewReconciler(sampler, newMockHebbianStoreWriter(), coord)
+	coord.SetReconciler(reconciler)
+
+	lobeID := "lobe-recon-trigger"
+	coord.msp.AddPeer(lobeID, "127.0.0.1:9650", RoleReplica)
+
+	// Mark peer as SDOWN to simulate a partition.
+	coord.msp.mu.Lock()
+	if p, ok := coord.msp.peers[lobeID]; ok {
+		p.SDown = true
+	}
+	coord.msp.mu.Unlock()
+
+	// Wire a pipe-based peer so startStreamerForLobe can Send.
+	cortexSide, lobeSide := net.Pipe()
+	t.Cleanup(func() { cortexSide.Close(); lobeSide.Close() })
+
+	peer := &PeerConn{nodeID: lobeID, conn: cortexSide}
+	coord.mgr.mu.Lock()
+	coord.mgr.peers[lobeID] = peer
+	coord.mgr.mu.Unlock()
+
+	// Drain the streamer's replication frames so Send doesn't block.
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			if _, err := lobeSide.Read(buf); err != nil {
+				return
+			}
+		}
+	}()
+
+	// Verify reconciler hasn't run yet.
+	if r := reconciler.LastResult(); !r.StartedAt.IsZero() {
+		t.Fatal("expected no reconciliation before reconnect")
+	}
+
+	// Simulate recovery: HandlePing clears SDOWN and fires OnRecover.
+	coord.msp.HandlePing(lobeID, nil)
+
+	// Wait for reconDelay + reconciliation + buffer.
+	time.Sleep(300 * time.Millisecond)
+
+	result := reconciler.LastResult()
+	if result.StartedAt.IsZero() {
+		t.Fatal("expected reconciliation to be triggered after reconnect")
+	}
+	if !result.CompletedAt.After(result.StartedAt) {
+		t.Error("expected CompletedAt to be after StartedAt")
+	}
+}
+
 func TestReconciler_FrameDispatch(t *testing.T) {
 	coord, _ := newTestCoordinator(t, "primary")
 	simulatePromotion(coord,1)

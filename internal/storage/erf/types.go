@@ -24,6 +24,7 @@ type Engram struct {
 	Summary        string
 	KeyPoints      []string
 	MemoryType     uint8
+	TypeLabel      string // free-form label, e.g. "architectural_decision"
 	Classification uint16
 }
 

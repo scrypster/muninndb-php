@@ -41,12 +41,38 @@ type WriteRequest struct {
 	IdempotentID  string        `protobuf:"bytes,7,opt,name=idempotent_id"`
 	Associations  []Association `protobuf:"bytes,8,rep,name=associations"`
 	Embedding     []float32     `protobuf:"fixed32,9,rep,name=embedding"`
+	MemoryType    uint32        `protobuf:"varint,10,opt,name=memory_type"`
+	TypeLabel     string        `protobuf:"bytes,11,opt,name=type_label"`
 }
 
 // WriteResponse message
 type WriteResponse struct {
 	ID        string `protobuf:"bytes,1,opt,name=id"`
 	CreatedAt int64  `protobuf:"varint,2,opt,name=created_at"`
+}
+
+// BatchWriteRequest wraps multiple WriteRequests into a single RPC.
+type BatchWriteRequest struct {
+	Requests []*WriteRequest `protobuf:"bytes,1,rep,name=requests"`
+}
+
+func (m *BatchWriteRequest) GetVault() string {
+	if len(m.Requests) > 0 {
+		return m.Requests[0].Vault
+	}
+	return ""
+}
+
+// BatchWriteItemResult is the per-item result in a BatchWriteResponse.
+type BatchWriteItemResult struct {
+	Index int32  `protobuf:"varint,1,opt,name=index"`
+	Id    string `protobuf:"bytes,2,opt,name=id"`
+	Error string `protobuf:"bytes,3,opt,name=error"`
+}
+
+// BatchWriteResponse returns per-item results for a batch write.
+type BatchWriteResponse struct {
+	Results []*BatchWriteItemResult `protobuf:"bytes,1,rep,name=results"`
 }
 
 // ReadRequest message
@@ -69,6 +95,8 @@ type ReadResponse struct {
 	LastAccess  int64    `protobuf:"varint,10,opt,name=last_access"`
 	AccessCount uint32   `protobuf:"varint,11,opt,name=access_count"`
 	Stability   float32  `protobuf:"fixed32,12,opt,name=stability"`
+	MemoryType  uint32   `protobuf:"varint,13,opt,name=memory_type"`
+	TypeLabel   string   `protobuf:"bytes,14,opt,name=type_label"`
 }
 
 // ForgetRequest message

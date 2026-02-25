@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"log/slog"
 	"sort"
 	"time"
 
@@ -152,8 +153,8 @@ func (ps *PebbleStore) GetMetadata(ctx context.Context, wsPrefix [8]byte, ids []
 	result := make([]*EngramMeta, len(ids))
 	for i, id := range ids {
 		// Level 1: metadata-only cache (populated after first Pebble read).
-		if v, ok := ps.metaCache.Load([16]byte(id)); ok {
-			result[i] = v.(*EngramMeta)
+		if meta, ok := ps.metaCache.Get([16]byte(id)); ok {
+			result[i] = meta
 			continue
 		}
 
@@ -173,7 +174,7 @@ func (ps *PebbleStore) GetMetadata(ctx context.Context, wsPrefix [8]byte, ids []
 				EmbedDim:    eng.EmbedDim,
 				MemoryType:  eng.MemoryType,
 			}
-			ps.metaCache.Store([16]byte(id), meta)
+			ps.metaCache.Add([16]byte(id), meta)
 			result[i] = meta
 			continue
 		}
@@ -208,7 +209,7 @@ func (ps *PebbleStore) GetMetadata(ctx context.Context, wsPrefix [8]byte, ids []
 			MemoryType:  MemoryType(erfMeta.MemoryType),
 		}
 		// Populate metaCache so subsequent calls for this engram skip Pebble.
-		ps.metaCache.Store([16]byte(id), meta)
+		ps.metaCache.Add([16]byte(id), meta)
 		result[i] = meta
 	}
 	return result, nil
@@ -266,7 +267,7 @@ func (ps *PebbleStore) UpdateMetadata(ctx context.Context, wsPrefix [8]byte, id 
 
 	// Invalidate L1 cache and metadata cache BEFORE commit — cached structs are stale.
 	ps.cache.Delete(wsPrefix, id)
-	ps.metaCache.Delete([16]byte(id))
+	ps.metaCache.Remove([16]byte(id))
 
 	if err := batch.Commit(pebble.NoSync); err != nil {
 		return fmt.Errorf("commit batch: %w", err)
@@ -331,7 +332,7 @@ func (ps *PebbleStore) UpdateRelevance(ctx context.Context, wsPrefix [8]byte, id
 
 	// Invalidate L1 cache and metadata cache BEFORE commit — cached structs are stale.
 	ps.cache.Delete(wsPrefix, id)
-	ps.metaCache.Delete([16]byte(id))
+	ps.metaCache.Remove([16]byte(id))
 
 	if err := batch.Commit(pebble.NoSync); err != nil {
 		return fmt.Errorf("commit batch: %w", err)
@@ -379,11 +380,72 @@ func (ps *PebbleStore) DeleteEngram(ctx context.Context, wsPrefix [8]byte, id UL
 		batch.Delete(keys.TagIndexKey(wsPrefix, keys.Hash(tag), [16]byte(id)), nil)
 	}
 
-	// Association forward/reverse keys
-	for _, assoc := range eng.Associations {
-		batch.Delete(keys.AssocFwdKey(wsPrefix, [16]byte(id), assoc.Weight, [16]byte(assoc.TargetID)), nil)
-		batch.Delete(keys.AssocRevKey(wsPrefix, [16]byte(assoc.TargetID), assoc.Weight, [16]byte(id)), nil)
-		batch.Delete(keys.AssocWeightIndexKey(wsPrefix, [16]byte(id), [16]byte(assoc.TargetID)), nil)
+	// Association forward/reverse keys — scan live Pebble keys rather than
+	// trusting the inline ERF associations, which may have stale weights if
+	// the Hebbian worker has updated them since the engram was last written.
+	//
+	// Forward pass: scan 0x03|ws|id to find all associations FROM this engram.
+	// Each hit gives us the actual current weight and targetID, so we can delete:
+	//   - the forward key itself
+	//   - the reverse key 0x04|ws|targetID|weight|id (uses actual weight)
+	//   - the weight index key 0x14|ws|id|targetID
+	fwdPrefix := keys.AssocFwdPrefixForID(wsPrefix, [16]byte(id))
+	fwdIter, err := ps.db.NewIter(&pebble.IterOptions{
+		LowerBound: fwdPrefix,
+		UpperBound: append(append([]byte{}, fwdPrefix...), 0xFF),
+	})
+	if err == nil {
+		for fwdIter.SeekGE(fwdPrefix); fwdIter.Valid(); fwdIter.Next() {
+			k := fwdIter.Key()
+			if len(k) < 25 || !bytes.Equal(k[:25], fwdPrefix) {
+				break
+			}
+			if len(k) < 45 {
+				continue
+			}
+			// Extract actual weight and targetID from the live key.
+			var wc [4]byte
+			copy(wc[:], k[25:29])
+			weight := keys.WeightFromComplement(wc)
+			var targetID [16]byte
+			copy(targetID[:], k[29:45])
+
+			batch.Delete(k, nil) // forward key (exact live key)
+			batch.Delete(keys.AssocRevKey(wsPrefix, targetID, weight, [16]byte(id)), nil)
+			batch.Delete(keys.AssocWeightIndexKey(wsPrefix, [16]byte(id), targetID), nil)
+		}
+		fwdIter.Close()
+	}
+
+	// Reverse pass: scan 0x04|ws|id to find all associations TO this engram
+	// (from other engrams). Clean up the reverse index entries and the
+	// corresponding forward keys in those other engrams.
+	revPrefix := keys.AssocRevPrefixForID(wsPrefix, [16]byte(id))
+	revIter, err := ps.db.NewIter(&pebble.IterOptions{
+		LowerBound: revPrefix,
+		UpperBound: append(append([]byte{}, revPrefix...), 0xFF),
+	})
+	if err == nil {
+		for revIter.SeekGE(revPrefix); revIter.Valid(); revIter.Next() {
+			k := revIter.Key()
+			if len(k) < 25 || !bytes.Equal(k[:25], revPrefix) {
+				break
+			}
+			if len(k) < 45 {
+				continue
+			}
+			// Key layout: 0x04 | ws(8) | dstID(16) | weightComplement(4) | srcID(16)
+			var wc [4]byte
+			copy(wc[:], k[25:29])
+			weight := keys.WeightFromComplement(wc)
+			var srcID [16]byte
+			copy(srcID[:], k[29:45])
+
+			batch.Delete(k, nil) // reverse key
+			batch.Delete(keys.AssocFwdKey(wsPrefix, srcID, weight, [16]byte(id)), nil)
+			batch.Delete(keys.AssocWeightIndexKey(wsPrefix, srcID, [16]byte(id)), nil)
+		}
+		revIter.Close()
 	}
 
 	if err := batch.Commit(pebble.NoSync); err != nil {
@@ -402,7 +464,9 @@ func (ps *PebbleStore) DeleteEngram(ctx context.Context, wsPrefix [8]byte, id UL
 	}
 	buf := make([]byte, 8)
 	binary.BigEndian.PutUint64(buf, uint64(newCount))
-	_ = ps.db.Set(keys.VaultCountKey(wsPrefix), buf, pebble.NoSync)
+	if err := ps.db.Set(keys.VaultCountKey(wsPrefix), buf, pebble.NoSync); err != nil {
+		slog.Warn("storage: failed to persist vault count", "error", err)
+	}
 
 	return nil
 }
@@ -497,7 +561,7 @@ func (ps *PebbleStore) UpdateTags(ctx context.Context, wsPrefix [8]byte, id ULID
 
 	// Invalidate L1 cache BEFORE commit — cached struct has stale tags.
 	ps.cache.Delete(wsPrefix, id)
-	ps.metaCache.Delete([16]byte(id))
+	ps.metaCache.Remove([16]byte(id))
 
 	if err := batch.Commit(pebble.NoSync); err != nil {
 		return fmt.Errorf("commit batch: %w", err)
@@ -506,13 +570,23 @@ func (ps *PebbleStore) UpdateTags(ctx context.Context, wsPrefix [8]byte, id ULID
 	return nil
 }
 
-// GetEmbedding retrieves the embedding for an engram.
+// GetEmbedding reads the quantized embedding from the 0x18 standalone key (ERF v2).
+// Returns nil if no embedding is stored for this engram.
 func (ps *PebbleStore) GetEmbedding(ctx context.Context, wsPrefix [8]byte, id ULID) ([]float32, error) {
-	eng, err := ps.GetEngram(ctx, wsPrefix, id)
+	key := keys.EmbeddingKey(wsPrefix, [16]byte(id))
+	val, err := Get(ps.db, key)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("get embedding: %w", err)
 	}
-	return eng.Embedding, nil
+	if val == nil || len(val) < 8 {
+		return nil, nil // no embedding stored
+	}
+	params := erf.DecodeQuantizeParams([8]byte(val[:8]))
+	quantized := make([]int8, len(val)-8)
+	for i := range quantized {
+		quantized[i] = int8(val[8+i])
+	}
+	return erf.Dequantize(quantized, params), nil
 }
 
 // GetConfidence reads the confidence value from 0x02 metadata for an engram.
@@ -575,7 +649,7 @@ func (ps *PebbleStore) UpdateConfidence(ctx context.Context, wsPrefix [8]byte, i
 	// Update cache (vault-scoped).
 	ps.cache.Set(wsPrefix, id, eng)
 	// Invalidate metadata cache — cached metadata is stale.
-	ps.metaCache.Delete([16]byte(id))
+	ps.metaCache.Remove([16]byte(id))
 
 	return nil
 }
@@ -614,6 +688,7 @@ func toERFEngram(eng *Engram) *erf.Engram {
 		Summary:        eng.Summary,
 		KeyPoints:      eng.KeyPoints,
 		MemoryType:     uint8(eng.MemoryType),
+		TypeLabel:      eng.TypeLabel,
 		Classification: eng.Classification,
 	}
 }
@@ -652,12 +727,14 @@ func fromERFEngram(e *erf.Engram) *Engram {
 		Summary:        e.Summary,
 		KeyPoints:      e.KeyPoints,
 		MemoryType:     MemoryType(e.MemoryType),
+		TypeLabel:      e.TypeLabel,
 		Classification: e.Classification,
 	}
 }
 
 // ScanEngrams iterates over all engrams in the given vault workspace, calling fn for each.
 // Iteration stops early if fn returns a non-nil error.
+// For ERF v2 records, populates Embedding from the parallel 0x18 key space using a forward-seek join.
 // Corrupt ERF records are skipped with a warning log.
 func (ps *PebbleStore) ScanEngrams(ctx context.Context, ws [8]byte, fn func(*Engram) error) error {
 	wsNext := ws
@@ -681,6 +758,21 @@ func (ps *PebbleStore) ScanEngrams(ctx context.Context, ws [8]byte, fn func(*Eng
 	}
 	defer iter.Close()
 
+	// Second iterator for 0x18 embedding keys — sorted by ws|id, same order as 0x01.
+	eLo := make([]byte, 9)
+	eLo[0] = 0x18
+	copy(eLo[1:], ws[:])
+	eHi := make([]byte, 9)
+	eHi[0] = 0x18
+	copy(eHi[1:], wsNext[:])
+
+	embedIter, err := ps.db.NewIter(&pebble.IterOptions{LowerBound: eLo, UpperBound: eHi})
+	if err != nil {
+		return fmt.Errorf("scan engrams: create embed iter: %w", err)
+	}
+	defer embedIter.Close()
+	embedValid := embedIter.First()
+
 	for valid := iter.First(); valid; valid = iter.Next() {
 		k := iter.Key()
 		if len(k) < 25 { // 1 prefix + 8 ws + 16 ULID minimum
@@ -696,6 +788,39 @@ func (ps *PebbleStore) ScanEngrams(ctx context.Context, ws [8]byte, fn func(*Eng
 		}
 
 		eng := fromERFEngram(erfEng)
+
+		// Advance embedding iterator to the matching id using a forward seek.
+		var engID [16]byte
+		copy(engID[:], k[9:25])
+		for embedValid {
+			ek := embedIter.Key()
+			if len(ek) < 25 {
+				embedValid = embedIter.Next()
+				continue
+			}
+			var eID [16]byte
+			copy(eID[:], ek[9:25])
+			if eID == engID {
+				// Matching embedding found — decode and attach.
+				ev := make([]byte, len(embedIter.Value()))
+				copy(ev, embedIter.Value())
+				if len(ev) >= 8 {
+					params := erf.DecodeQuantizeParams([8]byte(ev[:8]))
+					quantized := make([]int8, len(ev)-8)
+					for i := range quantized {
+						quantized[i] = int8(ev[8+i])
+					}
+					eng.Embedding = erf.Dequantize(quantized, params)
+				}
+				embedValid = embedIter.Next()
+				break
+			} else if bytes.Compare(eID[:], engID[:]) > 0 {
+				// Embedding iterator is ahead — this engram has no embedding key.
+				break
+			}
+			embedValid = embedIter.Next()
+		}
+
 		if err := fn(eng); err != nil {
 			return err
 		}

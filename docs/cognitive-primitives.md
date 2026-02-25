@@ -2,70 +2,70 @@
 
 These are not features bolted onto a query engine. They are storage-layer operations — as fundamental to MuninnDB as B-tree rebalancing is to a relational database. They run continuously, in the background, on every engram in the vault. They are why MuninnDB is a different category of database.
 
-Four primitives:
-1. Memory decay — relevance is earned, not permanent
+Five primitives:
+1. Temporal priority — relevance is earned, not permanent
 2. Hebbian association — connections strengthen through use
 3. Bayesian confidence — trust is calibrated, not binary
 4. Contradiction detection — the database finds inconsistencies for you
+5. Predictive Activation Signal — the database learns your retrieval sequences
 
 Each has a mathematical foundation drawn from cognitive science. Each has an implementation that makes the math practical at database scale.
 
 ---
 
-## 1. Memory Decay
+## 1. Temporal Priority (ACT-R Base-Level Activation)
 
 ### The Intuition
 
 What you learned yesterday is easier to recall than what you learned a year ago — unless you have reinforced it. A fact you use every day becomes fluent. A fact you looked up once and never revisited fades. Relevance is not permanent. It is a function of time and use.
 
-Hermann Ebbinghaus formalized this in 1885 with the forgetting curve. His insight was that retention decays exponentially with time, but the rate of decay depends on how well-consolidated the memory is. A well-reinforced memory decays slowly. A single-exposure memory decays fast.
+John Anderson's ACT-R (Adaptive Control of Thought — Rational) cognitive architecture formalizes this as *base-level activation*: a single number that captures how available a memory is right now, based on how often and how recently it has been accessed. ACT-R is one of the most validated cognitive architectures in psychology, used in hundreds of published studies modeling human memory retrieval.
 
 MuninnDB implements this directly.
 
 ### The Formula
 
 ```
-R(t) = max(floor, exp(-t / S))
+B(M) = ln(n + 1) - 0.5 × ln(ageDays / (n + 1))
 ```
 
-- `R`: retention score, which maps directly to the `Relevance` field on an engram (0.0–1.0)
-- `t`: time elapsed since last access, in days
-- `S`: stability, in days — how resistant this engram is to decay
-- `floor`: minimum retention, default 0.05 — nothing is ever completely forgotten
+- `B`: base-level activation — how cognitively available this memory is right now
+- `n`: number of times the memory has been accessed
+- `ageDays`: days elapsed since last access
 
-Reading it: relevance decays exponentially from 1.0 as time passes. Higher stability (larger S) flattens the curve — the same amount of time causes less decay. The floor prevents engrams from becoming permanently invisible.
+Reading it: frequent access (high n) raises activation logarithmically. Time since last access (high ageDays) lowers it. The formula balances both — a memory used heavily but not recently still fades; a memory used once but very recently still has weight. The logarithmic scaling means the first few accesses matter most, and the benefit of additional accesses diminishes naturally.
 
-**Why the floor?** You cannot know what will matter later. An engram that seemed irrelevant six months ago might be critical today. Hard deletion is a one-way door. The floor keeps everything available for activation while keeping dormant engrams out of default results. Archive, don't delete.
+The raw B value is passed through softplus (`ln(1 + e^x)`) to produce a smooth, non-negative activation weight used in scoring.
 
-### Stability
+### Working Through the Math
 
-Stability is not fixed at creation. It is recomputed from access history on every decay cycle.
+A note accessed 13 times, last accessed 10 days ago:
 
 ```
-S = log1p(accessCount) × StabilityGrowthRate × (1 + SpacingBonusFactor × tanh(avgGap / SpacingOptimal))
+B = ln(14) - 0.5 × ln(10 / 14) = 2.64 - 0.5 × (-0.34) = 2.81
+softplus(2.81) ≈ 2.87
 ```
 
-Two things increase stability:
-1. Access count — the more an engram is activated, the more stable it becomes (`log1p` provides diminishing returns, so 1000 accesses doesn't make an engram infinitely stable)
-2. Spacing — an engram accessed 50 times over six months becomes more stable than one accessed 50 times in a single day
+A note accessed once, last accessed 1,400 days ago:
 
-The `tanh(avgGap / SpacingOptimal)` term is the implementation of the spacing effect — one of the most robust findings in memory research. Spaced repetition produces stronger retention than massed repetition. When average days between accesses approach the optimal spacing interval, the stability bonus is maximized. Clustered accesses (small average gap) produce a near-zero spacing bonus.
+```
+B = ln(2) - 0.5 × ln(1400 / 2) = 0.69 - 0.5 × 6.55 = -2.58
+softplus(-2.58) ≈ 0.07
+```
 
-The practical effect: frequently-used, well-spaced engrams become permanent fixtures with very high stability and very slow decay. They are always relevant. Infrequently-used engrams decay toward the floor and eventually drop out of default results.
-
-### Implementation
-
-The decay worker maintains a min-heap ordered by `(next_decay_time, engram_id)`. It sleeps until the next scheduled event, wakes, recomputes R(t) from stored timestamps, and updates the relevance score in the engram's ERF metadata block.
-
-Critically: relevance is always computed from timestamps, never from accumulated state. There is no floating-point error accumulation across thousands of updates. The worker can be restarted, replayed, or repopulated from scratch, and it will produce identical results.
-
-Smart scheduling: the worker predicts when each engram will next cross a meaningful relevance threshold (e.g., from 0.8 to 0.7, from 0.5 to the archive threshold). It only wakes for meaningful events, not for arbitrary polling intervals. O(log n) heap insertions and removals.
+Ratio: **~37x temporal advantage** for the actively-used note. Same content, same semantic similarity — completely different cognitive weight.
 
 ### Why This Beats TTL
 
-The common alternative to principled decay is a fixed time-to-live: delete everything older than 90 days. TTL is blunt — it treats a fact accessed daily and a fact from a single ingestion identically. It cannot distinguish between a current active policy and an obsolete note from three years ago. It destroys data that is still relevant because it is old.
+The common alternative to principled temporal scoring is a fixed time-to-live: delete everything older than 90 days. TTL is blunt — it treats a fact accessed daily and a fact from a single ingestion identically. It cannot distinguish between a current active policy and an obsolete note from three years ago. It destroys data that is still relevant because it is old.
 
-Ebbinghaus decay is adaptive. The decay rate is calibrated to actual use. Relevance tracks reality.
+ACT-R activation is adaptive. The scoring is calibrated to actual use. Relevance tracks reality.
+
+### Implementation
+
+ACT-R activation is computed at query time, not by a background worker. Every engram stores its access count and last-access timestamp. When a query arrives, the activation engine computes B(M) from these stored values and the current wall clock. No stored activation score is ever mutated by a background process.
+
+This is a total-recall design: nothing is ever degraded in storage. The same engram, queried at the same moment, always produces the same score. There is no floating-point drift, no accumulated error, no ordering dependency between worker cycles. The engine can be restarted, replayed, or migrated, and activation scores are identical — because they are derived, not stored.
 
 ---
 
@@ -259,15 +259,74 @@ This is not a minor quality-of-life feature. In any system that accumulates know
 
 ---
 
+## 5. Predictive Activation Signal (PAS)
+
+### The Intuition
+
+Memories are not recalled in isolation. They follow patterns. When you remember your morning login procedure, you next recall the dashboard. When you think about a customer complaint, you then think about the resolution policy. These sequences are learned: the brain tracks which memories follow which, and uses that history to pre-activate the next likely memory before you consciously request it.
+
+This is what cognitive scientists call *sequential activation tracking* — the observation that activation N predicts activation N+1 with high probability when the same sequence has occurred before. The brain builds lightweight transition probability tables that bias retrieval toward procedurally connected memories.
+
+MuninnDB implements this as the Predictive Activation Signal (PAS).
+
+### How It Works
+
+Every activation produces a result set. PAS records the transition from the previous activation's result set to the current one: if activation N returned engrams {A, B} and activation N+1 returned engrams {C, D}, PAS records the transitions A→C, A→D, B→C, B→D. Each transition increments a counter in the transition table.
+
+Over time, the transition table learns which memories tend to follow which. When the same vault later activates engram A, PAS looks up A's top transition targets and injects them as candidates in Phase 2 of the ACTIVATE pipeline — before RRF fusion, before scoring. These injected candidates flow through the full scoring pipeline alongside standard retrieval results.
+
+The key insight: PAS doesn't just re-rank existing results. It *surfaces memories that would not otherwise appear*. If the query is about "login procedures" and PAS has learned that "dashboard navigation" always follows, the dashboard engram enters the candidate pool even if it has zero semantic similarity to the query. This is candidate *expansion*, not re-ranking — and it is the mechanism that produces real recall improvements.
+
+### The Architecture
+
+PAS is implemented as a three-layer system:
+
+**Transition recording.** The `TransitionWorker` (a background cognitive worker following the same pattern as the HebbianWorker) receives transition events from the engine after each activation. It aggregates (source → destination) pairs and writes them to the transition cache.
+
+**Tiered storage.** The `TransitionCache` provides a fast in-memory hot tier backed by Pebble persistence. Increments are O(1) in-memory operations that never touch disk. Periodic flushes write merged totals to Pebble for durability. Cold sources are loaded from Pebble on first access via read-through caching.
+
+**Retrieval integration.** During Phase 2 of the ACTIVATE pipeline, if PAS is enabled for the vault, the engine looks up transition candidates from the previous activation's result set. These candidates enter RRF fusion with their own rank constant (K=50, between HNSW and FTS). Phase 4.5 applies a `transitionBoost` to candidates that match known transition targets, and the boost flows into the ACT-R scoring formula alongside Hebbian boost.
+
+### The Scoring Formula
+
+PAS integrates into ACT-R scoring as an additive term alongside Hebbian boost:
+
+```
+totalActivation = baseLevel + scale × hebbianBoost + scale × transitionBoost
+Score = ContentMatch × softplus(totalActivation) × Confidence
+```
+
+The transition boost is normalized to [0, 1] by dividing the candidate's transition count by the maximum count across all transition targets. This ensures the boost is proportional to how strongly the transition has been learned.
+
+### Configuration
+
+PAS is configurable per vault via the Plasticity system:
+
+- `PredictiveActivation` (boolean, default: true) — enables or disables PAS for the vault
+- `PASMaxInjections` (integer, default: 5, clamped to [1, 20]) — maximum number of transition candidates injected per activation
+
+Setting `PredictiveActivation: false` completely disables PAS for a vault — no transitions are recorded and no candidates are injected.
+
+### When PAS Matters
+
+PAS produces its strongest gains in workflow-oriented use cases: agent task execution, personal assistant interactions, procedural memory, and any scenario where the user follows repeatable sequences. In controlled experiments with 2,000 synthetic items modeling agent and personal assistant workflows:
+
+- **Recall@10 improved by 21%** — transition-predicted items that would never appear in standard retrieval were surfaced
+- **MRR improved by 10-15%** — the right next-step memory ranked higher
+
+PAS is less impactful for one-shot semantic queries with no sequential context. It is most valuable when the same vault is used repeatedly in patterns — exactly the use case that AI agents and personal assistants represent.
+
+---
+
 ## How The Primitives Interact
 
 These four primitives are not independent. They form a feedback loop.
 
-An engram is written with full confidence and high initial relevance.
+An engram is written with full confidence and high initial activation.
 
-Over time, if it is not accessed, the decay worker reduces its relevance. It appears less frequently in activation results.
+Over time, if it is not accessed, its ACT-R activation score — computed at query time from access count and recency — naturally decreases. It appears less frequently in activation results.
 
-If it is accessed frequently, the decay worker increases its stability. It becomes more resistant to decay. Access patterns strengthen it.
+If it is accessed frequently, each access increases n in the ACT-R equation, making the memory more cognitively available. Access patterns strengthen it.
 
 When it co-activates with other engrams, the Hebbian worker strengthens the associations between them. Future activations that find one of the connected engrams will traverse the association graph and surface the others.
 

@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -76,6 +78,8 @@ type MOL struct {
 }
 
 // Open opens or creates the MOL in the given directory.
+// On open, the active segment is scanned to recover the highest sequence number
+// so that subsequent Append calls do not produce duplicate sequence numbers.
 func Open(dir string) (*MOL, error) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, fmt.Errorf("mol: mkdir: %w", err)
@@ -105,7 +109,69 @@ func Open(dir string) (*MOL, error) {
 		size: size,
 	}
 
+	// Recover nextSeq from existing entries (active + sealed segments).
+	maxSeq, found := mol.recoverMaxSeq()
+	if found {
+		mol.nextSeq.Store(maxSeq + 1)
+	}
+
 	return mol, nil
+}
+
+// recoverMaxSeq scans all segment files to find the highest sequence number.
+// Returns (maxSeq, true) if any entries were found, or (0, false) for an empty MOL.
+func (m *MOL) recoverMaxSeq() (uint64, bool) {
+	var maxSeq uint64
+	found := false
+
+	pattern := filepath.Join(m.dir, "mol-*.log")
+	matches, _ := filepath.Glob(pattern)
+
+	allFiles := append(matches, m.active.path)
+	seen := make(map[string]bool)
+	for _, path := range allFiles {
+		if seen[path] {
+			continue
+		}
+		seen[path] = true
+
+		m.scanSegmentMaxSeq(path, &maxSeq, &found)
+	}
+
+	return maxSeq, found
+}
+
+func (m *MOL) scanSegmentMaxSeq(path string, maxSeq *uint64, found *bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+
+	headerBuf := make([]byte, 32)
+	for {
+		if _, err := io.ReadFull(f, headerBuf); err != nil {
+			break
+		}
+		magic := binary.BigEndian.Uint32(headerBuf[0:4])
+		if magic != MOLMagic {
+			break
+		}
+		seqNum := binary.BigEndian.Uint64(headerBuf[4:12])
+		*found = true
+		if seqNum > *maxSeq {
+			*maxSeq = seqNum
+		}
+		payloadLen := binary.BigEndian.Uint32(headerBuf[26:30])
+		const maxPayloadLen = 64 << 20
+		if payloadLen > maxPayloadLen {
+			break
+		}
+		skipLen := int64(payloadLen) + 4
+		if _, err := f.Seek(skipLen, io.SeekCurrent); err != nil {
+			break
+		}
+	}
 }
 
 // Append writes a MOLEntry to the active segment.
@@ -192,6 +258,47 @@ func (m *MOL) MaybeSealSegment() error {
 	}
 
 	return nil
+}
+
+// SafePrune deletes sealed segments that are fully replicated.
+// minReplicatedSeq is the minimum confirmed sequence number across all replicas.
+// Only segments where every entry has seq <= minReplicatedSeq are deleted.
+// Returns the number of segments pruned and any error.
+func (m *MOL) SafePrune(minReplicatedSeq uint64) (int, error) {
+	if minReplicatedSeq == 0 {
+		return 0, nil
+	}
+
+	pattern := filepath.Join(m.dir, "mol-*.log")
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return 0, fmt.Errorf("mol: glob sealed segments: %w", err)
+	}
+
+	pruned := 0
+	for _, path := range matches {
+		base := filepath.Base(path)
+		if base == "mol-active.log" {
+			continue
+		}
+
+		seqStr := strings.TrimPrefix(base, "mol-")
+		seqStr = strings.TrimSuffix(seqStr, ".log")
+		segSeq, err := strconv.ParseUint(seqStr, 10, 64)
+		if err != nil {
+			continue // not a valid sealed segment filename
+		}
+
+		if segSeq <= minReplicatedSeq {
+			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+				return pruned, fmt.Errorf("mol: remove sealed segment %s: %w", base, err)
+			}
+			slog.Info("mol: pruned sealed segment", "file", base, "seg_seq", segSeq, "min_replicated", minReplicatedSeq)
+			pruned++
+		}
+	}
+
+	return pruned, nil
 }
 
 // marshalEntry serializes a MOLEntry into bytes with header and CRC32.
@@ -367,14 +474,32 @@ func (gc *GroupCommitter) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			// Flush remaining before exiting
+			// Drain any pending items that arrived since the last batch pull.
+			for {
+				select {
+				case pw := <-gc.pending:
+					batch = append(batch, pw)
+				default:
+					goto ctxDrained
+				}
+			}
+		ctxDrained:
 			if len(batch) > 0 {
 				gc.flush(batch)
 			}
 			return nil
 
 		case <-gc.done:
-			// Flush remaining
+			// Drain any pending items that arrived since the last batch pull.
+			for {
+				select {
+				case pw := <-gc.pending:
+					batch = append(batch, pw)
+				default:
+					goto doneDrained
+				}
+			}
+		doneDrained:
 			if len(batch) > 0 {
 				gc.flush(batch)
 			}
@@ -382,9 +507,18 @@ func (gc *GroupCommitter) Run(ctx context.Context) error {
 
 		case pw := <-gc.pending:
 			batch = append(batch, pw)
-			// Drain remaining
-			for len(gc.pending) > 0 && len(batch) < gc.maxGroupSize {
-				batch = append(batch, <-gc.pending)
+			// Non-blocking drain: collect any already-queued writes without
+			// blocking. The labeled break exits the for loop, not just the
+			// select — a bare break inside default would only break the select
+			// and cause an infinite loop.
+		drain:
+			for len(batch) < gc.maxGroupSize {
+				select {
+				case pw := <-gc.pending:
+					batch = append(batch, pw)
+				default:
+					break drain
+				}
 			}
 			gc.flush(batch)
 			batch = batch[:0]
@@ -410,7 +544,9 @@ func (gc *GroupCommitter) flush(batch []*PendingWrite) {
 	succeeded := make([]bool, len(batch))
 	for i, pw := range batch {
 		if err := gc.mol.Append(&pw.Entry); err != nil {
-			pw.Done <- err
+			if pw.Done != nil {
+				pw.Done <- err
+			}
 		} else {
 			succeeded[i] = true
 		}
@@ -421,6 +557,9 @@ func (gc *GroupCommitter) flush(batch []*PendingWrite) {
 	for i, pw := range batch {
 		if !succeeded[i] {
 			continue // Already signaled with Append error
+		}
+		if pw.Done == nil {
+			continue // Fire-and-forget (AppendAsync) — no caller waiting
 		}
 		if syncErr != nil {
 			pw.Done <- syncErr
@@ -441,8 +580,10 @@ func (m *MOL) Recover(db *pebble.DB, replayFn func(*MOLEntry) error) error {
 		return fmt.Errorf("mol: glob sealed segments: %w", err)
 	}
 
-	// Sort matches by sequence number to ensure replay in order
-	sort.Strings(matches)
+	// Sort matches by numeric sequence number (not lexicographic).
+	sort.Slice(matches, func(i, j int) bool {
+		return extractMOLSeq(matches[i]) < extractMOLSeq(matches[j])
+	})
 
 	// Replay each sealed segment
 	for _, sealedPath := range matches {
@@ -568,4 +709,15 @@ func AppendAsync(gc *GroupCommitter, entry *MOLEntry) {
 			"vault_id", entry.VaultID,
 		)
 	}
+}
+
+// extractMOLSeq extracts the numeric sequence from a MOL segment filename
+// like "/path/mol-42.log" → 42. Returns 0 on parse failure, which sorts
+// unparseable filenames first (safe: they'll fail to open cleanly).
+func extractMOLSeq(path string) uint64 {
+	base := filepath.Base(path)                // "mol-42.log"
+	base = strings.TrimPrefix(base, "mol-")    // "42.log"
+	base = strings.TrimSuffix(base, ".log")    // "42"
+	n, _ := strconv.ParseUint(base, 10, 64)
+	return n
 }

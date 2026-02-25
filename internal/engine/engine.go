@@ -5,6 +5,9 @@ import (
 	"encoding/binary"
 	"fmt"
 	"log/slog"
+	"math"
+	"math/rand"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -23,6 +26,7 @@ import (
 	"github.com/scrypster/muninndb/internal/engine/vaultjob"
 	"github.com/scrypster/muninndb/internal/index/fts"
 	"github.com/scrypster/muninndb/internal/index/hnsw"
+	"github.com/scrypster/muninndb/internal/metrics"
 	"github.com/scrypster/muninndb/internal/scoring"
 	"github.com/scrypster/muninndb/internal/storage"
 	"github.com/scrypster/muninndb/internal/transport/mbp"
@@ -43,17 +47,20 @@ type Engine struct {
 	activation       *activation.ActivationEngine
 	triggers         *trigger.TriggerSystem
 	engramCount      atomic.Int64
-	hebbianWorker    *cognitive.HebbianWorker
-	decayWorker      *cognitive.DecayWorker
-	contradictWorker *cognitive.Worker[cognitive.ContradictItem]
-	confidenceWorker *cognitive.Worker[cognitive.ConfidenceUpdate]
+	cogMu              sync.RWMutex // protects hebbianWorker, contradictWorker, confidenceWorker, transitionWorker
+	hebbianWorker      *cognitive.HebbianWorker
+	contradictWorker   *cognitive.Worker[cognitive.ContradictItem]
+	confidenceWorker   *cognitive.Worker[cognitive.ConfidenceUpdate]
+	transitionWorker   *cognitive.TransitionWorker
 	activity         *cognitive.ActivityTracker
 	embedder activation.Embedder // optional embedder for embedding-based brief scoring
 	// Feature subsystems (all optional, nil-safe)
-	autoAssoc  *autoassoc.Worker    // write-time automatic tag-based associations
+	autoAssoc      *autoassoc.Worker    // write-time automatic tag-based associations
+	neighborWorker *autoassoc.NeighborWorker // semantic neighbor auto-linking
 	noveltyDet  *novelty.Detector   // write-time near-duplicate detection
 	noveltyJobs chan noveltyJob      // async novelty work queue
-	noveltyDone chan struct{}        // signals worker shutdown
+	noveltyDone chan struct{}        // signals novelty worker shutdown
+	pruneDone   chan struct{}        // signals prune worker shutdown
 	coherence   *coherence.Registry // per-vault incremental coherence counters
 	scoring     *scoring.Store      // per-vault learnable scoring weights
 
@@ -71,6 +78,9 @@ type Engine struct {
 	// Stored as atomic.Value to allow safe concurrent reads without a mutex.
 	onWrite atomic.Value // stores func()
 
+	// noveltyJobsDropped counts novelty jobs silently dropped because the channel was full.
+	noveltyJobsDropped atomic.Int64
+
 	// queryCounter generates fast query IDs without crypto/rand syscall overhead.
 	queryCounter atomic.Uint64
 	// stopOnce ensures Stop() is idempotent even if called multiple times.
@@ -82,6 +92,10 @@ type Engine struct {
 	stopCtx      context.Context    // cancelled on Stop() to signal goroutines
 	stopCancel   context.CancelFunc
 	hnswRegistry *hnsw.Registry     // per-vault HNSW indexes (shared with activation)
+
+	// vaultMu provides per-vault mutual exclusion for destructive vault operations
+	// (PruneVault, ReindexFTSVault, ClearVault). Maps string vault name → *sync.Mutex.
+	vaultMu sync.Map
 }
 
 // SetOnWrite registers a callback invoked after every successful Write.
@@ -95,6 +109,14 @@ func (e *Engine) SetOnWrite(fn func()) {
 func (e *Engine) fastQueryID() string {
 	n := e.queryCounter.Add(1)
 	return fmt.Sprintf("q-%016x", n)
+}
+
+// getVaultMutex returns the per-vault mutex for name, creating it if needed.
+// Used to serialize destructive vault operations (PruneVault, ReindexFTSVault,
+// ClearVault) so concurrent calls on the same vault cannot corrupt state.
+func (e *Engine) getVaultMutex(name string) *sync.Mutex {
+	mu, _ := e.vaultMu.LoadOrStore(name, &sync.Mutex{})
+	return mu.(*sync.Mutex)
 }
 
 // noveltyJob is the unit of work for the async novelty worker.
@@ -115,7 +137,6 @@ func NewEngine(
 	act *activation.ActivationEngine,
 	trig *trigger.TriggerSystem,
 	hebbianWorker *cognitive.HebbianWorker,
-	decayWorker *cognitive.DecayWorker,
 	contradictWorker *cognitive.Worker[cognitive.ContradictItem],
 	confidenceWorker *cognitive.Worker[cognitive.ConfidenceUpdate],
 	embedder activation.Embedder,
@@ -129,15 +150,16 @@ func NewEngine(
 		activation:       act,
 		triggers:         trig,
 		hebbianWorker:    hebbianWorker,
-		decayWorker:      decayWorker,
 		contradictWorker: contradictWorker,
 		confidenceWorker: confidenceWorker,
 		activity:         cognitive.NewActivityTracker(),
 		embedder:         embedder,
 		autoAssoc:        autoassoc.New(store, ftsIdx),
+		neighborWorker:  autoassoc.NewNeighborWorker(store, hnswRegistry),
 		noveltyDet:       novelty.New(),
 		noveltyJobs:      make(chan noveltyJob, 256),
 		noveltyDone:      make(chan struct{}),
+		pruneDone:        make(chan struct{}),
 		coherence:        coherence.NewRegistry(),
 		scoring:          scoring.NewStore(store.GetDB()),
 		stopCtx:          stopCtx,
@@ -167,13 +189,6 @@ func NewEngine(
 			e.triggers.NotifyCognitive(vaultID, storage.ULID(id), field, float32(old), float32(new))
 		}
 	}
-	if e.decayWorker != nil && e.triggers != nil {
-		e.decayWorker.OnDecayUpdate = func(ws [8]byte, id [16]byte, field string, old, new float64) {
-			vaultID := wsVaultID(ws)
-			e.triggers.NotifyCognitive(vaultID, storage.ULID(id), field, float32(old), float32(new))
-		}
-	}
-
 	// Fix 5: Load persisted coherence counters for known vaults.
 	if e.coherence != nil {
 		vaultNames, _ := store.ListVaultNames()
@@ -193,6 +208,10 @@ func NewEngine(
 		e.coherenceFlushDone = make(chan struct{})
 		go e.runCoherenceFlush()
 	}
+
+	// Start periodic vault pruning sweep (runs every 60s with ±5s jitter).
+	// Only active for vaults with MaxEngrams > 0 or RetentionDays > 0.
+	go e.runPruneWorker()
 
 	return e
 }
@@ -238,6 +257,17 @@ func (e *Engine) Stop() {
 		}
 		if e.autoAssoc != nil {
 			e.autoAssoc.Stop()
+			if e.neighborWorker != nil {
+				e.neighborWorker.Stop()
+			}
+		}
+		// Wait for the prune worker to exit after stopCancel() signalled it.
+		if e.pruneDone != nil {
+			select {
+			case <-e.pruneDone:
+			case <-time.After(5 * time.Second):
+				slog.Warn("engine: prune worker did not exit within 5s")
+			}
 		}
 		// Stop async novelty worker.
 		// Do NOT close noveltyJobs — Write() guards with stopCtx.Done() but
@@ -245,16 +275,29 @@ func (e *Engine) Stop() {
 		// a data race detected by -race. Signal shutdown via the cancelled
 		// context instead and wait for the worker to drain and exit.
 		if e.noveltyDone != nil {
-			<-e.noveltyDone
+			select {
+			case <-e.noveltyDone:
+			case <-time.After(5 * time.Second):
+				slog.Warn("engine: novelty worker did not exit within 5s")
+			}
 		}
 		// Drain the FTS worker — flushes any queued indexing jobs before exit.
 		if e.ftsWorker != nil {
 			e.ftsWorker.Stop()
 		}
+		// Close the activation engine's drainLog goroutine. Must happen after FTS
+		// worker stops (writes may reference activation) but before other cleanup.
+		if e.activation != nil {
+			e.activation.Close()
+		}
 		// Fix 5: Stop coherence flush goroutine and wait for final flush.
 		if e.coherenceFlushStop != nil {
 			close(e.coherenceFlushStop)
-			<-e.coherenceFlushDone
+			select {
+			case <-e.coherenceFlushDone:
+			case <-time.After(5 * time.Second):
+				slog.Warn("engine: coherence flush worker did not exit within 5s")
+			}
 		}
 		// Stop the vault job GC goroutine.
 		if e.jobManager != nil {
@@ -307,14 +350,9 @@ func (e *Engine) generateEmbeddingBrief(ctx context.Context, items []mbp.Activat
 	}
 
 	// Sort by score descending and cap at MaxSentences
-	// Use bubble sort for small sets
-	for i := 0; i < len(allSentences)-1; i++ {
-		for j := i + 1; j < len(allSentences); j++ {
-			if allSentences[j].Score > allSentences[i].Score {
-				allSentences[i], allSentences[j] = allSentences[j], allSentences[i]
-			}
-		}
-	}
+	sort.Slice(allSentences, func(i, j int) bool {
+		return allSentences[i].Score > allSentences[j].Score
+	})
 
 	maxN := 5 // return up to 5 top sentences across all engrams
 	if maxN > len(allSentences) {
@@ -373,6 +411,28 @@ func (e *Engine) Write(ctx context.Context, req *mbp.WriteRequest) (*mbp.WriteRe
 	wsPrefix := e.store.ResolveVaultPrefix(req.Vault)
 	e.activity.Record(wsPrefix)
 
+	// Resolve inline enrichment mode for this vault.
+	vaultName := req.Vault
+	if vaultName == "" {
+		vaultName = "default"
+	}
+	resolved := e.resolveVaultPlasticity(vaultName)
+	inlineMode := resolved.InlineEnrichment
+
+	// Determine which caller-provided enrichment fields to use based on mode.
+	callerSummary := ""
+	var callerEntities []mbp.InlineEntity
+	var callerRelationships []mbp.InlineRelationship
+
+	switch inlineMode {
+	case "caller_only", "caller_preferred":
+		callerSummary = req.Summary
+		callerEntities = req.Entities
+		callerRelationships = req.Relationships
+	case "disabled", "background_only":
+		// Ignore caller enrichment data.
+	}
+
 	// Build storage.Engram from request
 	eng := &storage.Engram{
 		Concept:    req.Concept,
@@ -381,6 +441,27 @@ func (e *Engine) Write(ctx context.Context, req *mbp.WriteRequest) (*mbp.WriteRe
 		Confidence: req.Confidence,
 		Stability:  req.Stability,
 		Embedding:  req.Embedding,
+		MemoryType: storage.MemoryType(req.MemoryType),
+		TypeLabel:  req.TypeLabel,
+	}
+
+	// Apply caller-provided summary directly to the engram.
+	if callerSummary != "" {
+		eng.Summary = callerSummary
+	}
+
+	// Store caller-provided entities as key points on the engram (written with initial data).
+	if len(callerEntities) > 0 {
+		entityNames := make([]string, 0, len(callerEntities))
+		for _, ent := range callerEntities {
+			entityNames = append(entityNames, ent.Name+" ("+ent.Type+")")
+		}
+		eng.KeyPoints = append(eng.KeyPoints, entityNames...)
+	}
+
+	// Set custom CreatedAt if provided
+	if req.CreatedAt != nil {
+		eng.CreatedAt = *req.CreatedAt
 	}
 
 	// Convert associations
@@ -407,12 +488,42 @@ func (e *Engine) Write(ctx context.Context, req *mbp.WriteRequest) (*mbp.WriteRe
 		return nil, fmt.Errorf("write engram: %w", err)
 	}
 
-	// Persist vault name for discovery (idempotent, cheap)
-	vault := req.Vault
-	if vault == "" {
-		vault = "default"
+	// Create associations from caller-provided relationships (after engram is stored).
+	for _, rel := range callerRelationships {
+		targetULID, parseErr := storage.ParseULID(rel.TargetID)
+		if parseErr != nil {
+			slog.Warn("engine: inline relationship has invalid target_id", "target_id", rel.TargetID, "error", parseErr)
+			continue
+		}
+		relAssoc := &storage.Association{
+			TargetID:   targetULID,
+			RelType:    storage.RelType(relTypeFromString(rel.Relation)),
+			Weight:     rel.Weight,
+			Confidence: 1.0,
+			CreatedAt:  time.Now(),
+		}
+		if writeErr := e.store.WriteAssociation(ctx, wsPrefix, id, targetULID, relAssoc); writeErr != nil {
+			slog.Warn("engine: failed to write inline relationship", "target_id", rel.TargetID, "error", writeErr)
+		}
 	}
-	_ = e.store.WriteVaultName(wsPrefix, vault)
+
+	// Determine if we should skip background enrichment.
+	// caller_only: skip if any caller data was provided
+	// caller_preferred: the retroactive processor checks per-field (handled there)
+	// disabled: skip entirely (no enrichment at all)
+	callerProvidedAny := callerSummary != "" || len(callerEntities) > 0
+	skipBackgroundEnrich := (inlineMode == "caller_only" && callerProvidedAny) || inlineMode == "disabled"
+
+	// If we should skip background enrichment, set the DigestEnrich flag now
+	// so the retroactive processor skips this engram.
+	if skipBackgroundEnrich {
+		if flagErr := e.store.SetDigestFlag(ctx, id, 0x04); flagErr != nil {
+			slog.Warn("engine: failed to set enrich digest flag for inline enrichment", "id", id.String(), "error", flagErr)
+		}
+	}
+
+	// Persist vault name for discovery (idempotent, cheap)
+	_ = e.store.WriteVaultName(wsPrefix, vaultName)
 
 	// Submit to async FTS worker — decoupled from write hot path.
 	// Engram is already durable; FTS visibility follows within ~100ms.
@@ -427,8 +538,9 @@ func (e *Engine) Write(ctx context.Context, req *mbp.WriteRequest) (*mbp.WriteRe
 		})
 	}
 
-	// Submit to contradiction worker for post-write analysis
-	if e.contradictWorker != nil {
+	// Submit to contradiction worker for post-write analysis.
+	_, contraW, _ := e.cogWorkers()
+	if contraW != nil {
 		contraAssocs := make([]cognitive.ContradictAssoc, len(eng.Associations))
 		for i, assoc := range eng.Associations {
 			contraAssocs[i] = cognitive.ContradictAssoc{
@@ -438,26 +550,24 @@ func (e *Engine) Write(ctx context.Context, req *mbp.WriteRequest) (*mbp.WriteRe
 				RelType:    uint16(assoc.RelType),
 			}
 		}
-		e.contradictWorker.Submit(cognitive.ContradictItem{
+		contraW.Submit(cognitive.ContradictItem{
 			WS:           wsPrefix,
 			EngramID:     [16]byte(id),
 			ConceptHash:  hashString(eng.Concept),
 			Associations: contraAssocs,
 			OnFound: func(ev cognitive.ContradictionEvent) {
 				if e.triggers != nil {
-					// Use the WS prefix from the item; vaultID routing uses prefix matching
 					e.triggers.NotifyContradiction(wsVaultID(wsPrefix), storage.ULID(ev.EngramA), storage.ULID(ev.EngramB), ev.Severity, "semantic")
 				}
-				// Submit confidence updates for both engrams involved in the contradiction.
-				// A detected contradiction lowers confidence (evidence = EvidenceContradiction ≈ 0.1).
-				if e.confidenceWorker != nil {
-					e.confidenceWorker.Submit(cognitive.ConfidenceUpdate{
+				_, _, cw := e.cogWorkers()
+				if cw != nil {
+					cw.Submit(cognitive.ConfidenceUpdate{
 						WS:       wsPrefix,
 						EngramID: ev.EngramA,
 						Evidence: cognitive.EvidenceContradiction,
 						Source:   "contradiction_detected",
 					})
-					e.confidenceWorker.Submit(cognitive.ConfidenceUpdate{
+					cw.Submit(cognitive.ConfidenceUpdate{
 						WS:       wsPrefix,
 						EngramID: ev.EngramB,
 						Evidence: cognitive.EvidenceContradiction,
@@ -472,19 +582,11 @@ func (e *Engine) Write(ctx context.Context, req *mbp.WriteRequest) (*mbp.WriteRe
 
 	// Update coherence counters for the new engram (starts as an orphan).
 	if e.coherence != nil {
-		vaultName := req.Vault
-		if vaultName == "" {
-			vaultName = "default"
-		}
 		e.coherence.GetOrCreate(vaultName).RecordWrite(eng.Confidence)
 	}
 
 	// Write-time novelty detection: enqueue async — O(N) Jaccard scan runs off the hot path.
 	if e.noveltyDet != nil {
-		vaultName := req.Vault
-		if vaultName == "" {
-			vaultName = "default"
-		}
 		job := noveltyJob{
 			wsPrefix:  wsPrefix,
 			id:        id,
@@ -499,6 +601,8 @@ func (e *Engine) Write(ctx context.Context, req *mbp.WriteRequest) (*mbp.WriteRe
 		case e.noveltyJobs <- job:
 		default:
 			// Queue full — drop novelty check rather than block write path.
+			e.noveltyJobsDropped.Add(1)
+			metrics.NoveltyDropsTotal.Inc()
 		}
 	}
 
@@ -508,6 +612,16 @@ func (e *Engine) Write(ctx context.Context, req *mbp.WriteRequest) (*mbp.WriteRe
 			WSPrefix: wsPrefix,
 			NewID:    id,
 			Tags:     eng.Tags,
+		})
+	}
+
+
+	// Write-time semantic neighbor linking: find semantically similar engrams via HNSW.
+	if e.neighborWorker != nil && len(eng.Embedding) > 0 {
+		e.neighborWorker.EnqueueNeighborJob(autoassoc.NeighborJob{
+			WS:        wsPrefix,
+			ID:        [16]byte(id),
+			Embedding: eng.Embedding,
 		})
 	}
 
@@ -531,10 +645,285 @@ func (e *Engine) Write(ctx context.Context, req *mbp.WriteRequest) (*mbp.WriteRe
 		fn()
 	}
 
+	metrics.EngineWritesTotal.Inc()
+
 	return &mbp.WriteResponse{
 		ID:        id.String(),
 		CreatedAt: time.Now().UnixNano(),
 	}, nil
+}
+
+// MaxBatchSize is the maximum number of items allowed in a single WriteBatch call.
+const MaxBatchSize = 50
+
+// ErrBatchTooLarge is returned when a WriteBatch call exceeds MaxBatchSize items.
+var ErrBatchTooLarge = fmt.Errorf("batch size exceeds maximum of %d", MaxBatchSize)
+
+// preparedBatchItem holds all data needed for one item in a WriteBatch —
+// the prepared engram plus post-commit metadata. This avoids re-deriving
+// vault prefixes and enrichment fields after the batch commits.
+type preparedBatchItem struct {
+	wsPrefix             [8]byte
+	vaultName            string
+	eng                  *storage.Engram
+	inlineMode           string
+	callerSummary        string
+	callerEntities       []mbp.InlineEntity
+	callerRelationships  []mbp.InlineRelationship
+	skipBackgroundEnrich bool
+}
+
+// WriteBatch writes multiple engrams in a single Pebble batch commit, then
+// fans out all post-commit async work per item. This amortises the fsync cost
+// across N engrams instead of paying it per-engram.
+func (e *Engine) WriteBatch(ctx context.Context, reqs []*mbp.WriteRequest) ([]*mbp.WriteResponse, []error) {
+	n := len(reqs)
+	if n > MaxBatchSize {
+		errs := make([]error, n)
+		for i := range errs {
+			errs[i] = ErrBatchTooLarge
+		}
+		return make([]*mbp.WriteResponse, n), errs
+	}
+
+	responses := make([]*mbp.WriteResponse, n)
+	errs := make([]error, n)
+
+	// Phase 1: Prepare all engrams (pure computation, no I/O).
+	items := make([]storage.EngramBatchItem, n)
+	prepared := make([]preparedBatchItem, n)
+	validCount := 0
+
+	for i, req := range reqs {
+		wsPrefix := e.store.ResolveVaultPrefix(req.Vault)
+		e.activity.Record(wsPrefix)
+
+		vaultName := req.Vault
+		if vaultName == "" {
+			vaultName = "default"
+		}
+		resolved := e.resolveVaultPlasticity(vaultName)
+		inlineMode := resolved.InlineEnrichment
+
+		var callerSummary string
+		var callerEntities []mbp.InlineEntity
+		var callerRelationships []mbp.InlineRelationship
+
+		switch inlineMode {
+		case "caller_only", "caller_preferred":
+			callerSummary = req.Summary
+			callerEntities = req.Entities
+			callerRelationships = req.Relationships
+		}
+
+		eng := &storage.Engram{
+			Concept:    req.Concept,
+			Content:    req.Content,
+			Tags:       req.Tags,
+			Confidence: req.Confidence,
+			Stability:  req.Stability,
+			Embedding:  req.Embedding,
+			MemoryType: storage.MemoryType(req.MemoryType),
+			TypeLabel:  req.TypeLabel,
+		}
+
+		if callerSummary != "" {
+			eng.Summary = callerSummary
+		}
+		if len(callerEntities) > 0 {
+			entityNames := make([]string, 0, len(callerEntities))
+			for _, ent := range callerEntities {
+				entityNames = append(entityNames, ent.Name+" ("+ent.Type+")")
+			}
+			eng.KeyPoints = append(eng.KeyPoints, entityNames...)
+		}
+		if req.CreatedAt != nil {
+			eng.CreatedAt = *req.CreatedAt
+		}
+
+		assocs := make([]storage.Association, len(req.Associations))
+		for j, a := range req.Associations {
+			targetID, parseErr := storage.ParseULID(a.TargetID)
+			if parseErr != nil {
+				errs[i] = fmt.Errorf("parse target id: %w", parseErr)
+				break
+			}
+			assocs[j] = storage.Association{
+				TargetID:      targetID,
+				RelType:       storage.RelType(a.RelType),
+				Weight:        a.Weight,
+				Confidence:    a.Confidence,
+				CreatedAt:     time.Unix(0, a.CreatedAt),
+				LastActivated: a.LastActivated,
+			}
+		}
+		if errs[i] != nil {
+			continue
+		}
+		eng.Associations = assocs
+
+		callerProvidedAny := callerSummary != "" || len(callerEntities) > 0
+		skipBG := (inlineMode == "caller_only" && callerProvidedAny) || inlineMode == "disabled"
+
+		items[i] = storage.EngramBatchItem{WSPrefix: wsPrefix, Engram: eng}
+		prepared[i] = preparedBatchItem{
+			wsPrefix:             wsPrefix,
+			vaultName:            vaultName,
+			eng:                  eng,
+			inlineMode:           inlineMode,
+			callerSummary:        callerSummary,
+			callerEntities:       callerEntities,
+			callerRelationships:  callerRelationships,
+			skipBackgroundEnrich: skipBG,
+		}
+		validCount++
+	}
+
+	// Phase 2: Single Pebble batch commit for all valid engrams.
+	ids, batchErrs := e.store.WriteEngramBatch(ctx, items)
+	for i := range reqs {
+		if errs[i] != nil {
+			continue // already failed in prepare phase
+		}
+		if batchErrs[i] != nil {
+			errs[i] = fmt.Errorf("write engram: %w", batchErrs[i])
+			continue
+		}
+		responses[i] = &mbp.WriteResponse{
+			ID:        ids[i].String(),
+			CreatedAt: time.Now().UnixNano(),
+		}
+	}
+
+	// Phase 3: Post-commit async work for each successfully written engram.
+	for i := range reqs {
+		if errs[i] != nil {
+			continue
+		}
+		p := &prepared[i]
+		id := ids[i]
+
+		for _, rel := range p.callerRelationships {
+			targetULID, parseErr := storage.ParseULID(rel.TargetID)
+			if parseErr != nil {
+				continue
+			}
+			relAssoc := &storage.Association{
+				TargetID:   targetULID,
+				RelType:    storage.RelType(relTypeFromString(rel.Relation)),
+				Weight:     rel.Weight,
+				Confidence: 1.0,
+				CreatedAt:  time.Now(),
+			}
+			_ = e.store.WriteAssociation(ctx, p.wsPrefix, id, targetULID, relAssoc)
+		}
+
+		if p.skipBackgroundEnrich {
+			_ = e.store.SetDigestFlag(ctx, id, 0x04)
+		}
+
+		_ = e.store.WriteVaultName(p.wsPrefix, p.vaultName)
+
+		if e.ftsWorker != nil {
+			e.ftsWorker.Submit(fts.IndexJob{
+				WS:        p.wsPrefix,
+				ID:        [16]byte(id),
+				Concept:   p.eng.Concept,
+				CreatedBy: p.eng.CreatedBy,
+				Content:   p.eng.Content,
+				Tags:      p.eng.Tags,
+			})
+		}
+
+		_, contraW, _ := e.cogWorkers()
+		if contraW != nil {
+			contraAssocs := make([]cognitive.ContradictAssoc, len(p.eng.Associations))
+			for j, assoc := range p.eng.Associations {
+				contraAssocs[j] = cognitive.ContradictAssoc{
+					EngramID:   [16]byte(id),
+					TargetID:   assoc.TargetID,
+					TargetHash: hashString(assoc.TargetID.String()),
+					RelType:    uint16(assoc.RelType),
+				}
+			}
+			wsPrefix := p.wsPrefix
+			contraW.Submit(cognitive.ContradictItem{
+				WS:           wsPrefix,
+				EngramID:     [16]byte(id),
+				ConceptHash:  hashString(p.eng.Concept),
+				Associations: contraAssocs,
+				OnFound: func(ev cognitive.ContradictionEvent) {
+					if e.triggers != nil {
+						e.triggers.NotifyContradiction(wsVaultID(wsPrefix), storage.ULID(ev.EngramA), storage.ULID(ev.EngramB), ev.Severity, "semantic")
+					}
+					_, _, cw := e.cogWorkers()
+					if cw != nil {
+						cw.Submit(cognitive.ConfidenceUpdate{WS: wsPrefix, EngramID: ev.EngramA, Evidence: cognitive.EvidenceContradiction, Source: "contradiction_detected"})
+						cw.Submit(cognitive.ConfidenceUpdate{WS: wsPrefix, EngramID: ev.EngramB, Evidence: cognitive.EvidenceContradiction, Source: "contradiction_detected"})
+					}
+				},
+			})
+		}
+
+		e.engramCount.Add(1)
+
+		if e.coherence != nil {
+			e.coherence.GetOrCreate(p.vaultName).RecordWrite(p.eng.Confidence)
+		}
+
+		if e.noveltyDet != nil {
+			job := noveltyJob{
+				wsPrefix:  p.wsPrefix,
+				id:        id,
+				vaultID:   wsVaultID(p.wsPrefix),
+				concept:   p.eng.Concept,
+				content:   p.eng.Content,
+				vaultName: p.vaultName,
+			}
+			select {
+			case <-e.stopCtx.Done():
+			case e.noveltyJobs <- job:
+			default:
+				e.noveltyJobsDropped.Add(1)
+				metrics.NoveltyDropsTotal.Inc()
+			}
+		}
+
+		if e.autoAssoc != nil && len(p.eng.Tags) > 0 {
+			e.autoAssoc.Enqueue(autoassoc.Job{
+				WSPrefix: p.wsPrefix,
+				NewID:    id,
+				Tags:     p.eng.Tags,
+			})
+		}
+
+		if e.neighborWorker != nil && len(p.eng.Embedding) > 0 {
+			e.neighborWorker.EnqueueNeighborJob(autoassoc.NeighborJob{
+				WS:        p.wsPrefix,
+				ID:        [16]byte(id),
+				Embedding: p.eng.Embedding,
+			})
+		}
+
+		if e.triggers != nil {
+			vaultID := wsVaultID(p.wsPrefix)
+			engCopy := *p.eng
+			engCopy.Tags = append([]string(nil), p.eng.Tags...)
+			engCopy.Associations = append([]storage.Association(nil), p.eng.Associations...)
+			if p.eng.Embedding != nil {
+				engCopy.Embedding = append([]float32(nil), p.eng.Embedding...)
+			}
+			e.triggers.NotifyWrite(vaultID, &engCopy, true)
+		}
+
+		if fn, ok := e.onWrite.Load().(func()); ok && fn != nil {
+			fn()
+		}
+
+		metrics.EngineWritesTotal.Inc()
+	}
+
+	return responses, errs
 }
 
 // Read implements mbp.EngineAPI.Read.
@@ -567,12 +956,26 @@ func (e *Engine) Read(ctx context.Context, req *mbp.ReadRequest) (*mbp.ReadRespo
 		Summary:        eng.Summary,
 		KeyPoints:      eng.KeyPoints,
 		MemoryType:     uint8(eng.MemoryType),
+		TypeLabel:      eng.TypeLabel,
 		Classification: eng.Classification,
 	}, nil
 }
 
 // Activate implements mbp.EngineAPI.Activate.
 func (e *Engine) Activate(ctx context.Context, req *mbp.ActivateRequest) (*mbp.ActivateResponse, error) {
+	return e.activateCore(ctx, req, nil)
+}
+
+// ActivateWithStructuredFilter is like Activate but accepts a structured filter
+// (e.g., *query.Filter) that implements a Match(*storage.Engram) bool interface.
+// This allows the MQL executor to pass WHERE predicates for proper post-retrieval filtering.
+func (e *Engine) ActivateWithStructuredFilter(ctx context.Context, req *mbp.ActivateRequest, structuredFilter interface{}) (*mbp.ActivateResponse, error) {
+	return e.activateCore(ctx, req, structuredFilter)
+}
+
+// activateCore is the shared implementation for Activate and ActivateWithStructuredFilter.
+// structuredFilter may be nil (plain Activate) or a non-nil filter value (structured query).
+func (e *Engine) activateCore(ctx context.Context, req *mbp.ActivateRequest, structuredFilter interface{}) (*mbp.ActivateResponse, error) {
 	// Resolve per-vault Plasticity config. nil authStore means use defaults (tests, bench).
 	var resolved auth.ResolvedPlasticity
 	if e.authStore != nil {
@@ -591,17 +994,26 @@ func (e *Engine) Activate(ctx context.Context, req *mbp.ActivateRequest) (*mbp.A
 	// Build activation.ActivateRequest
 	wsPrefix := e.store.ResolveVaultPrefix(req.Vault)
 	e.activity.Record(wsPrefix)
+	vaultSize := e.store.GetVaultCount(ctx, wsPrefix)
+	vaultID := wsVaultID(wsPrefix)
 	actReq := &activation.ActivateRequest{
-		VaultPrefix:  wsPrefix,
-		Context:      req.Context,
-		Embedding:    req.Embedding,
-		Threshold:    float64(req.Threshold),
-		MaxResults:   req.MaxResults,
-		HopDepth:     req.MaxHops,
-		IncludeWhy:   req.IncludeWhy,
-		VaultDefault: resolved.TraversalProfile,
-		Profile:      req.Profile,
+		VaultID:            vaultID,
+		VaultPrefix:        wsPrefix,
+		Context:            req.Context,
+		Embedding:          req.Embedding,
+		Threshold:          float64(req.Threshold),
+		MaxResults:         req.MaxResults,
+		HopDepth:           req.MaxHops,
+		IncludeWhy:         req.IncludeWhy,
+		VaultDefault:       resolved.TraversalProfile,
+		Profile:            req.Profile,
+		StructuredFilter:   structuredFilter,
+		CandidatesPerIndex: activation.CalcCandidatesPerIndex(vaultSize),
 	}
+
+	// PAS: Predictive Activation Signal config from vault Plasticity.
+	actReq.PASEnabled = resolved.PredictiveActivation
+	actReq.PASMaxInjections = resolved.PASMaxInjections
 
 	// Set defaults
 	if actReq.MaxResults == 0 {
@@ -625,6 +1037,7 @@ func (e *Engine) Activate(ctx context.Context, req *mbp.ActivateRequest) (*mbp.A
 	actReq.ReadOnly = auth.ObserveFromContext(ctx)
 
 	// Convert weights if provided; otherwise apply preset weights from Plasticity config.
+	// All scoring goes through ACT-R; legacy temporal path is kept in code but not reachable for now.
 	if req.Weights != nil {
 		actReq.Weights = &activation.Weights{
 			SemanticSimilarity: req.Weights.SemanticSimilarity,
@@ -633,16 +1046,45 @@ func (e *Engine) Activate(ctx context.Context, req *mbp.ActivateRequest) (*mbp.A
 			HebbianBoost:       req.Weights.HebbianBoost,
 			AccessFrequency:    req.Weights.AccessFrequency,
 			Recency:            req.Weights.Recency,
+			UseCGDN:            req.Weights.UseCGDN,
+			CGDNAlpha:          req.Weights.CGDNAlpha,
+			CGDNBeta:           req.Weights.CGDNBeta,
+			CGDNPower:          req.Weights.CGDNPower,
+			UseACTR:            true, // only path for now; legacy temporal code kept for possible future use
+			ACTRDecay:          req.Weights.ACTRDecay,
+			ACTRHebScale:       req.Weights.ACTRHebScale,
 		}
 	} else {
-		actReq.Weights = &activation.Weights{
-			SemanticSimilarity: float32(resolved.SemanticWeight),
-			FullTextRelevance:  float32(resolved.FTSWeight),
-			DecayFactor:        float32(resolved.DecayWeight),
-			HebbianBoost:       float32(resolved.HebbianWeight),
-			Recency:            float32(resolved.RecencyWeight),
-			AccessFrequency:    0.05, // preserved from pre-Plasticity activation default
+		actrDecay := float32(0.5)
+		if resolved.ACTRDecay > 0 {
+			actrDecay = float32(resolved.ACTRDecay)
 		}
+		actrHebScale := float32(4.0)
+		if resolved.ACTRHebScale > 0 {
+			actrHebScale = float32(resolved.ACTRHebScale)
+		}
+		actReq.Weights = &activation.Weights{
+			// ACT-R ContentMatch gate: 60% semantic, 40% FTS — proven optimal.
+			// Plasticity's SemanticWeight/FTSWeight were calibrated for the old 6-component
+			// additive formula and produce different semantics in ACT-R mode. Use hardcoded
+			// proven values to guarantee deterministic results.
+			SemanticSimilarity: 0.6,
+			FullTextRelevance:  0.4,
+			// Legacy fields kept for backward compat with non-ACT-R scoring paths
+			DecayFactor:     float32(resolved.TemporalWeight),
+			HebbianBoost:    float32(resolved.HebbianWeight),
+			Recency:         float32(resolved.RecencyWeight),
+			AccessFrequency: 0.05,
+			// ACT-R cognitive parameters (from Plasticity presets)
+			UseACTR:      true,
+			ACTRDecay:    actrDecay,
+			ACTRHebScale: actrHebScale,
+		}
+	}
+
+	// Gate CGDN behind vault's ExperimentalCGDN flag.
+	if actReq.Weights.UseCGDN && !resolved.ExperimentalCGDN {
+		actReq.Weights.UseCGDN = false
 	}
 
 	// Convert filters if provided
@@ -657,13 +1099,25 @@ func (e *Engine) Activate(ctx context.Context, req *mbp.ActivateRequest) (*mbp.A
 		}
 	}
 
+	// Snapshot the previous activation BEFORE running the current one.
+	// The activation log is updated asynchronously by Run()'s drainLog goroutine,
+	// so capturing it here guarantees we see the correct "previous" entry.
+	var prevActivation []storage.ULID
+	if resolved.PredictiveActivation && !auth.ObserveFromContext(ctx) {
+		prevEntries := e.activation.AssocLog().RecentForVault(vaultID, 1)
+		if len(prevEntries) > 0 {
+			prevActivation = prevEntries[0].EngramIDs
+		}
+	}
+
 	// Run activation
 	result, err := e.activation.Run(ctx, actReq)
 	if err != nil {
 		return nil, fmt.Errorf("activation: %w", err)
 	}
+	metrics.EngineActivationsTotal.Inc()
 
-	// Convert result.Scored to []mbp.ActivationItem
+	// Convert result.Activations to []mbp.ActivationItem
 	items := make([]mbp.ActivationItem, len(result.Activations))
 	for i, scored := range result.Activations {
 		items[i] = mbp.ActivationItem{
@@ -676,12 +1130,12 @@ func (e *Engine) Activate(ctx context.Context, req *mbp.ActivateRequest) (*mbp.A
 			Dormant:    scored.Dormant,
 		}
 
-		// Add score components if available
 		items[i].ScoreComponents = mbp.ScoreComponents{
 			SemanticSimilarity: float32(scored.Components.SemanticSimilarity),
 			FullTextRelevance:  float32(scored.Components.FullTextRelevance),
 			DecayFactor:        float32(scored.Components.DecayFactor),
 			HebbianBoost:       float32(scored.Components.HebbianBoost),
+			TransitionBoost:    float32(scored.Components.TransitionBoost),
 			AccessFrequency:    float32(scored.Components.AccessFrequency),
 			Recency:            float32(scored.Components.Recency),
 			Raw:                float32(scored.Components.Raw),
@@ -701,7 +1155,8 @@ func (e *Engine) Activate(ctx context.Context, req *mbp.ActivateRequest) (*mbp.A
 	// On Lobe nodes (hebbianWorker == nil) collect refs for forwarding to Cortex instead.
 	var lobeCoActivations []mbp.CoActivationRef
 	if len(result.Activations) > 0 && !auth.ObserveFromContext(ctx) && resolved.HebbianEnabled {
-		if e.hebbianWorker != nil {
+		hebW, _, _ := e.cogWorkers()
+		if hebW != nil {
 			coActivatedEngrams := make([]cognitive.CoActivatedEngram, len(result.Activations))
 			for i, scored := range result.Activations {
 				coActivatedEngrams[i] = cognitive.CoActivatedEngram{
@@ -709,7 +1164,7 @@ func (e *Engine) Activate(ctx context.Context, req *mbp.ActivateRequest) (*mbp.A
 					Score: scored.Score,
 				}
 			}
-			e.hebbianWorker.Submit(cognitive.CoActivationEvent{
+			hebW.Submit(cognitive.CoActivationEvent{
 				WS:      wsPrefix,
 				At:      time.Now(),
 				Engrams: coActivatedEngrams,
@@ -725,31 +1180,27 @@ func (e *Engine) Activate(ctx context.Context, req *mbp.ActivateRequest) (*mbp.A
 		}
 	}
 
-	// Submit decay candidates to Decay worker (skipped in observe mode or when disabled by Plasticity).
-	// On Lobe nodes (decayWorker == nil) collect accessed IDs for forwarding to Cortex instead.
-	// Use SubmitBatch to reduce per-item channel contention under high concurrency.
-	var lobeAccessedIDs [][16]byte
-	if len(result.Activations) > 0 && !auth.ObserveFromContext(ctx) && resolved.DecayEnabled {
-		if e.decayWorker != nil {
-			now := time.Now()
-			decayItems := make([]cognitive.DecayCandidate, len(result.Activations))
-			for i, scored := range result.Activations {
-				decayItems[i] = cognitive.DecayCandidate{
-					WS:          wsPrefix,
-					ID:          scored.Engram.ID,
-					CreatedAt:   scored.Engram.CreatedAt,
-					LastAccess:  now,
-					AccessCount: scored.Engram.AccessCount,
-					Stability:   scored.Engram.Stability,
-					Relevance:   scored.Engram.Relevance,
-				}
+	// PAS: Record sequential transitions (previous activation → current activation).
+	// Uses the prevActivation snapshot captured before Run() to avoid race conditions
+	// with the async drainLog goroutine.
+	if len(result.Activations) > 0 && len(prevActivation) > 0 {
+		e.cogMu.RLock()
+		tw := e.transitionWorker
+		e.cogMu.RUnlock()
+		if tw != nil {
+			prevEngrams := make([]cognitive.TransitionEngram, len(prevActivation))
+			for i, id := range prevActivation {
+				prevEngrams[i] = cognitive.TransitionEngram{ID: [16]byte(id)}
 			}
-			e.decayWorker.SubmitBatch(decayItems)
-		} else if e.coordinator != nil {
-			lobeAccessedIDs = make([][16]byte, len(result.Activations))
+			currEngrams := make([]cognitive.TransitionEngram, len(result.Activations))
 			for i, scored := range result.Activations {
-				lobeAccessedIDs[i] = [16]byte(scored.Engram.ID)
+				currEngrams[i] = cognitive.TransitionEngram{ID: [16]byte(scored.Engram.ID)}
 			}
+			tw.Submit(cognitive.TransitionEvent{
+				WS:       wsPrefix,
+				Previous: prevEngrams,
+				Current:  currEngrams,
+			})
 		}
 	}
 
@@ -761,13 +1212,12 @@ func (e *Engine) Activate(ctx context.Context, req *mbp.ActivateRequest) (*mbp.A
 
 	// Forward collected Lobe side effects to the Cortex asynchronously.
 	// Only fires when workers are nil (Lobe mode) and coordinator is wired.
-	if e.coordinator != nil && (len(lobeCoActivations) > 0 || len(lobeAccessedIDs) > 0) {
+	if e.coordinator != nil && len(lobeCoActivations) > 0 {
 		effect := mbp.CognitiveSideEffect{
 			QueryID:       e.fastQueryID(),
 			OriginNodeID:  e.coordinatorID,
 			Timestamp:     time.Now().UnixNano(),
 			CoActivations: lobeCoActivations,
-			AccessedIDs:   lobeAccessedIDs,
 		}
 		e.coordinator.ForwardCognitiveEffects(effect)
 	}
@@ -804,240 +1254,6 @@ func (e *Engine) Activate(ctx context.Context, req *mbp.ActivateRequest) (*mbp.A
 						EngramID: s.EngramID,
 						Text:     s.Text,
 						Score:    s.Score,
-					}
-				}
-			}
-		}
-	}
-
-	return &mbp.ActivateResponse{
-		QueryID:     e.fastQueryID(),
-		TotalFound:  result.TotalFound,
-		Activations: items,
-		LatencyMs:   result.LatencyMs,
-		Brief:       briefSentences,
-	}, nil
-}
-
-// ActivateWithStructuredFilter is like Activate but accepts a structured filter
-// (e.g., *query.Filter) that implements a Match(*storage.Engram) bool interface.
-// This allows the MQL executor to pass WHERE predicates for proper post-retrieval filtering.
-func (e *Engine) ActivateWithStructuredFilter(ctx context.Context, req *mbp.ActivateRequest, structuredFilter interface{}) (*mbp.ActivateResponse, error) {
-	// Resolve per-vault Plasticity config. nil authStore means use defaults (tests, bench).
-	var resolved auth.ResolvedPlasticity
-	if e.authStore != nil {
-		vaultCfg, err := e.authStore.GetVaultConfig(req.Vault)
-		if err == nil {
-			resolved = auth.ResolvePlasticity(vaultCfg.Plasticity)
-		} else {
-			slog.Warn("plasticity: failed to read vault config, using defaults",
-				"vault", req.Vault, "err", err)
-			resolved = auth.ResolvePlasticity(nil)
-		}
-	} else {
-		resolved = auth.ResolvePlasticity(nil)
-	}
-
-	// Build activation.ActivateRequest (same as Activate but with StructuredFilter)
-	wsPrefix := e.store.ResolveVaultPrefix(req.Vault)
-	e.activity.Record(wsPrefix)
-	actReq := &activation.ActivateRequest{
-		VaultPrefix:      wsPrefix,
-		Context:          req.Context,
-		Embedding:        req.Embedding,
-		Threshold:        float64(req.Threshold),
-		MaxResults:       req.MaxResults,
-		HopDepth:         req.MaxHops,
-		IncludeWhy:       req.IncludeWhy,
-		VaultDefault:     resolved.TraversalProfile,
-		Profile:          req.Profile,
-		StructuredFilter: structuredFilter, // Pass the structured filter for post-retrieval filtering
-	}
-
-	// Set defaults
-	if actReq.MaxResults == 0 {
-		actReq.MaxResults = 20
-	}
-	if actReq.Threshold == 0 {
-		actReq.Threshold = 0.1
-	}
-
-	if actReq.HopDepth == 0 {
-		actReq.HopDepth = resolved.HopDepth
-	}
-	if req.DisableHops {
-		actReq.HopDepth = 0
-	}
-
-	actReq.ReadOnly = auth.ObserveFromContext(ctx)
-
-	// Convert weights if provided; otherwise apply preset weights from Plasticity config.
-	if req.Weights != nil {
-		actReq.Weights = &activation.Weights{
-			SemanticSimilarity: req.Weights.SemanticSimilarity,
-			FullTextRelevance:  req.Weights.FullTextRelevance,
-			DecayFactor:        req.Weights.DecayFactor,
-			HebbianBoost:       req.Weights.HebbianBoost,
-			AccessFrequency:    req.Weights.AccessFrequency,
-			Recency:            req.Weights.Recency,
-		}
-	} else {
-		actReq.Weights = &activation.Weights{
-			SemanticSimilarity: float32(resolved.SemanticWeight),
-			FullTextRelevance:  float32(resolved.FTSWeight),
-			DecayFactor:        float32(resolved.DecayWeight),
-			HebbianBoost:       float32(resolved.HebbianWeight),
-			Recency:            float32(resolved.RecencyWeight),
-			AccessFrequency:    0.05, // preserved from pre-Plasticity activation default
-		}
-	}
-
-	// Convert filters if provided
-	if len(req.Filters) > 0 {
-		actReq.Filters = make([]activation.Filter, len(req.Filters))
-		for i, f := range req.Filters {
-			actReq.Filters[i] = activation.Filter{
-				Field: f.Field,
-				Op:    f.Op,
-				Value: f.Value,
-			}
-		}
-	}
-
-	// Run activation (will use StructuredFilter for post-retrieval filtering)
-	result, err := e.activation.Run(ctx, actReq)
-	if err != nil {
-		return nil, fmt.Errorf("activation: %w", err)
-	}
-
-	// Convert result.Activations to []mbp.ActivationItem (same as Activate)
-	items := make([]mbp.ActivationItem, len(result.Activations))
-	for i, scored := range result.Activations {
-		items[i] = mbp.ActivationItem{
-			ID:         scored.Engram.ID.String(),
-			Concept:    scored.Engram.Concept,
-			Content:    scored.Engram.Content,
-			Score:      float32(scored.Score),
-			Confidence: scored.Engram.Confidence,
-			Why:        scored.Why,
-			Dormant:    scored.Dormant,
-		}
-
-		// Add score components
-		items[i].ScoreComponents = mbp.ScoreComponents{
-			SemanticSimilarity: float32(scored.Components.SemanticSimilarity),
-			FullTextRelevance:  float32(scored.Components.FullTextRelevance),
-			DecayFactor:        float32(scored.Components.DecayFactor),
-			HebbianBoost:       float32(scored.Components.HebbianBoost),
-			AccessFrequency:    float32(scored.Components.AccessFrequency),
-			Recency:            float32(scored.Components.Recency),
-			Raw:                float32(scored.Components.Raw),
-			Final:              float32(scored.Components.Final),
-		}
-
-		// Add hop path if present
-		if len(scored.HopPath) > 0 {
-			items[i].HopPath = make([]string, len(scored.HopPath))
-			for j, hop := range scored.HopPath {
-				items[i].HopPath[j] = hop.String()
-			}
-		}
-	}
-
-	// Submit co-activations to Hebbian worker (same logic as Activate)
-	var lobeCoActivations []mbp.CoActivationRef
-	if len(result.Activations) > 0 && !auth.ObserveFromContext(ctx) && resolved.HebbianEnabled {
-		if e.hebbianWorker != nil {
-			coActivatedEngrams := make([]cognitive.CoActivatedEngram, len(result.Activations))
-			for i, scored := range result.Activations {
-				coActivatedEngrams[i] = cognitive.CoActivatedEngram{
-					ID:    scored.Engram.ID,
-					Score: scored.Score,
-				}
-			}
-			e.hebbianWorker.Submit(cognitive.CoActivationEvent{
-				WS:      wsPrefix,
-				At:      time.Now(),
-				Engrams: coActivatedEngrams,
-			})
-		} else if e.coordinator != nil {
-			lobeCoActivations = make([]mbp.CoActivationRef, len(result.Activations))
-			for i, scored := range result.Activations {
-				lobeCoActivations[i] = mbp.CoActivationRef{
-					ID:    [16]byte(scored.Engram.ID),
-					Score: scored.Score,
-				}
-			}
-		}
-	}
-
-	// Submit decay candidates (same logic as Activate)
-	var lobeAccessedIDs [][16]byte
-	if len(result.Activations) > 0 && !auth.ObserveFromContext(ctx) && resolved.DecayEnabled {
-		if e.decayWorker != nil {
-			now := time.Now()
-			decayItems := make([]cognitive.DecayCandidate, len(result.Activations))
-			for i, scored := range result.Activations {
-				decayItems[i] = cognitive.DecayCandidate{
-					WS:          wsPrefix,
-					ID:          scored.Engram.ID,
-					CreatedAt:   scored.Engram.CreatedAt,
-					LastAccess:  now,
-					AccessCount: scored.Engram.AccessCount,
-					Stability:   scored.Engram.Stability,
-					Relevance:   scored.Engram.Relevance,
-				}
-			}
-			e.decayWorker.SubmitBatch(decayItems)
-		} else if e.coordinator != nil {
-			lobeAccessedIDs = make([][16]byte, len(result.Activations))
-			for i, scored := range result.Activations {
-				lobeAccessedIDs[i] = [16]byte(scored.Engram.ID)
-			}
-		}
-	}
-
-	// Co-activation confidence suppressed — see Activate() for rationale.
-
-	// Forward collected Lobe side effects (same logic as Activate)
-	if e.coordinator != nil && (len(lobeCoActivations) > 0 || len(lobeAccessedIDs) > 0) {
-		effect := mbp.CognitiveSideEffect{
-			QueryID:       e.fastQueryID(),
-			OriginNodeID:  e.coordinatorID,
-			Timestamp:     time.Now().UnixNano(),
-			CoActivations: lobeCoActivations,
-			AccessedIDs:   lobeAccessedIDs,
-		}
-		e.coordinator.ForwardCognitiveEffects(effect)
-	}
-
-	// Build activation brief (same logic as Activate)
-	var briefSentences []mbp.BriefSentence
-	briefMode := req.BriefMode
-	if briefMode == "" {
-		briefMode = "auto"
-	}
-	if briefMode == "extractive" || briefMode == "auto" {
-		if briefMode == "auto" && e.embedder != nil && len(req.Embedding) > 0 {
-			briefSentences = e.generateEmbeddingBrief(ctx, items, req.Embedding)
-		}
-
-		if len(briefSentences) == 0 {
-			engContents := make([]enginebrief.EngramContent, 0, len(items))
-			for _, item := range items {
-				engContents = append(engContents, enginebrief.EngramContent{
-					ID:      item.ID,
-					Content: item.Content,
-				})
-			}
-			sentences := enginebrief.Compute(engContents, req.Context)
-			if len(sentences) > 0 {
-				briefSentences = make([]mbp.BriefSentence, len(sentences))
-				for j, s := range sentences {
-					briefSentences[j] = mbp.BriefSentence{
-						EngramID: s.EngramID,
-						Text:     s.Text,
-						Score:    float64(s.Score),
 					}
 				}
 			}
@@ -1119,6 +1335,21 @@ func (e *Engine) Link(ctx context.Context, req *mbp.LinkRequest) (*mbp.LinkRespo
 		return nil, fmt.Errorf("parse target id: %w", err)
 	}
 
+	// Guard: reject links to/from soft-deleted engrams. A single batched
+	// GetMetadata call avoids two expensive GetEngram round-trips.
+	metas, err := e.store.GetMetadata(ctx, wsPrefix, []storage.ULID{sourceID, targetID})
+	if err != nil {
+		return nil, fmt.Errorf("link: check endpoint states: %w", err)
+	}
+	for _, meta := range metas {
+		if meta == nil {
+			return nil, ErrEngramNotFound
+		}
+		if meta.State == storage.StateSoftDeleted {
+			return nil, ErrEngramSoftDeleted
+		}
+	}
+
 	assoc := &storage.Association{
 		TargetID:   targetID,
 		RelType:    storage.RelType(req.RelType),
@@ -1134,8 +1365,9 @@ func (e *Engine) Link(ctx context.Context, req *mbp.LinkRequest) (*mbp.LinkRespo
 	// When a "contradicts" link is explicitly created via Link(), notify the
 	// ContradictWorker so it can flag the pair and drive confidence updates.
 	if storage.RelType(req.RelType) == storage.RelContradicts {
-		if e.contradictWorker != nil {
-			e.contradictWorker.Submit(cognitive.ContradictItem{
+		_, linkContra, linkConf := e.cogWorkers()
+		if linkContra != nil {
+			linkContra.Submit(cognitive.ContradictItem{
 				WS:          wsPrefix,
 				EngramID:    [16]byte(sourceID),
 				ConceptHash: 0,
@@ -1157,15 +1389,15 @@ func (e *Engine) Link(ctx context.Context, req *mbp.LinkRequest) (*mbp.LinkRespo
 					if e.triggers != nil {
 						e.triggers.NotifyContradiction(wsVaultID(wsPrefix), storage.ULID(ev.EngramA), storage.ULID(ev.EngramB), ev.Severity, "explicit_link")
 					}
-					// Drive confidence down for both endpoints of the contradiction.
-					if e.confidenceWorker != nil {
-						e.confidenceWorker.Submit(cognitive.ConfidenceUpdate{
+					_, _, cw := e.cogWorkers()
+					if cw != nil {
+						cw.Submit(cognitive.ConfidenceUpdate{
 							WS:       wsPrefix,
 							EngramID: ev.EngramA,
 							Evidence: cognitive.EvidenceContradiction,
 							Source:   "contradiction_detected",
 						})
-						e.confidenceWorker.Submit(cognitive.ConfidenceUpdate{
+						cw.Submit(cognitive.ConfidenceUpdate{
 							WS:       wsPrefix,
 							EngramID: ev.EngramB,
 							Evidence: cognitive.EvidenceContradiction,
@@ -1177,14 +1409,14 @@ func (e *Engine) Link(ctx context.Context, req *mbp.LinkRequest) (*mbp.LinkRespo
 		}
 		// Also directly flag the pair and update confidence without waiting for
 		// ContradictWorker's batch processing — direct link is an explicit assertion.
-		if e.confidenceWorker != nil {
-			e.confidenceWorker.Submit(cognitive.ConfidenceUpdate{
+		if linkConf != nil {
+			linkConf.Submit(cognitive.ConfidenceUpdate{
 				WS:       wsPrefix,
 				EngramID: [16]byte(sourceID),
 				Evidence: cognitive.EvidenceContradiction,
 				Source:   "contradiction_detected",
 			})
-			e.confidenceWorker.Submit(cognitive.ConfidenceUpdate{
+			linkConf.Submit(cognitive.ConfidenceUpdate{
 				WS:       wsPrefix,
 				EngramID: [16]byte(targetID),
 				Evidence: cognitive.EvidenceContradiction,
@@ -1209,6 +1441,11 @@ func (e *Engine) Forget(ctx context.Context, req *mbp.ForgetRequest) (*mbp.Forge
 		if err := e.store.DeleteEngram(ctx, wsPrefix, id); err != nil {
 			return nil, fmt.Errorf("hard delete: %w", err)
 		}
+		// Mark the node as deleted in the HNSW index so it is skipped in
+		// future Search results. Memory is reclaimed on the next rebuild.
+		if e.hnswRegistry != nil {
+			e.hnswRegistry.TombstoneNode(wsPrefix, [16]byte(id))
+		}
 		// Decrement the global engram counter. Floor at zero to guard against
 		// counter skew in crash-recovery scenarios (mirrors ClearVault's guard).
 		for {
@@ -1221,8 +1458,16 @@ func (e *Engine) Forget(ctx context.Context, req *mbp.ForgetRequest) (*mbp.Forge
 			}
 		}
 	} else {
+		// Read the engram before soft-deleting so we can clean up FTS index entries.
+		eng, readErr := e.store.GetEngram(ctx, wsPrefix, id)
 		if err := e.store.SoftDelete(ctx, wsPrefix, id); err != nil {
 			return nil, fmt.Errorf("soft delete: %w", err)
+		}
+		// Remove FTS posting-list entries so soft-deleted engrams do not appear in search.
+		if readErr == nil && eng != nil && e.fts != nil {
+			if ftErr := e.fts.DeleteEngram(wsPrefix, [16]byte(id), eng.Concept, eng.CreatedBy, eng.Content, eng.Tags); ftErr != nil {
+				slog.Warn("engine: fts cleanup failed after soft delete", "id", req.ID, "error", ftErr)
+			}
 		}
 	}
 
@@ -1237,8 +1482,14 @@ func (e *Engine) Stat(ctx context.Context, req *mbp.StatRequest) (*mbp.StatRespo
 		vaultCount = 1
 	}
 
+	engramCount := e.engramCount.Load()
+	if req.Vault != "" {
+		wsPrefix := e.store.ResolveVaultPrefix(req.Vault)
+		engramCount = e.store.GetVaultCount(ctx, wsPrefix)
+	}
+
 	resp := &mbp.StatResponse{
-		EngramCount:  e.engramCount.Load(),
+		EngramCount:  engramCount,
 		VaultCount:   vaultCount,
 		StorageBytes: e.store.DiskSize(),
 	}
@@ -1254,7 +1505,7 @@ func (e *Engine) Stat(ctx context.Context, req *mbp.StatRequest) (*mbp.StatRespo
 					OrphanRatio:          snap.OrphanRatio,
 					ContradictionDensity: snap.ContradictionDensity,
 					DuplicationPressure:  snap.DuplicationPressure,
-					DecayVariance:        snap.DecayVariance,
+					TemporalVariance:     snap.TemporalVariance,
 					TotalEngrams:         snap.TotalEngrams,
 				}
 			}
@@ -1269,20 +1520,71 @@ func (e *Engine) ListVaults(ctx context.Context) ([]string, error) {
 	return e.store.ListVaultNames()
 }
 
+// SetCognitiveWorkers replaces the engine's cognitive worker references.
+// Used during cluster role changes: on promotion to Cortex, pass freshly
+// created workers; on demotion to Lobe, call ClearCognitiveWorkers instead.
+// Thread-safe: holds cogMu write lock.
+func (e *Engine) SetCognitiveWorkers(
+	heb *cognitive.HebbianWorker,
+	contradict *cognitive.Worker[cognitive.ContradictItem],
+	confidence *cognitive.Worker[cognitive.ConfidenceUpdate],
+) {
+	e.cogMu.Lock()
+	// Wire trigger callback before publishing the worker reference, so
+	// concurrent goroutines never see a worker without its callback.
+	if heb != nil && e.triggers != nil {
+		heb.OnWeightUpdate = func(ws [8]byte, id [16]byte, field string, old, new float64) {
+			vaultID := wsVaultID(ws)
+			e.triggers.NotifyCognitive(vaultID, storage.ULID(id), field, float32(old), float32(new))
+		}
+	}
+	e.hebbianWorker = heb
+	e.contradictWorker = contradict
+	e.confidenceWorker = confidence
+	e.cogMu.Unlock()
+}
+
+// SetTransitionWorker sets the PAS transition worker. Thread-safe.
+func (e *Engine) SetTransitionWorker(tw *cognitive.TransitionWorker) {
+	e.cogMu.Lock()
+	e.transitionWorker = tw
+	e.cogMu.Unlock()
+}
+
+// ClearCognitiveWorkers nils out the worker references so the engine
+// operates in Lobe mode (no local cognitive processing).
+// Thread-safe: holds cogMu write lock.
+func (e *Engine) ClearCognitiveWorkers() {
+	e.cogMu.Lock()
+	e.hebbianWorker = nil
+	e.contradictWorker = nil
+	e.confidenceWorker = nil
+	e.transitionWorker = nil
+	e.cogMu.Unlock()
+}
+
+// cogWorkers returns thread-safe snapshots of the cognitive worker pointers.
+// Safe to use after return even if ClearCognitiveWorkers runs concurrently,
+// because the old worker objects remain valid (just won't receive new events).
+func (e *Engine) cogWorkers() (*cognitive.HebbianWorker, *cognitive.Worker[cognitive.ContradictItem], *cognitive.Worker[cognitive.ConfidenceUpdate]) {
+	e.cogMu.RLock()
+	h, ct, cf := e.hebbianWorker, e.contradictWorker, e.confidenceWorker
+	e.cogMu.RUnlock()
+	return h, ct, cf
+}
+
 // WorkerStats returns the current statistics for all cognitive workers.
 func (e *Engine) WorkerStats() cognitive.EngineWorkerStats {
+	heb, contra, conf := e.cogWorkers()
 	stats := cognitive.EngineWorkerStats{}
-	if e.hebbianWorker != nil {
-		stats.Hebbian = e.hebbianWorker.Stats()
+	if heb != nil {
+		stats.Hebbian = heb.Stats()
 	}
-	if e.decayWorker != nil {
-		stats.Decay = e.decayWorker.Stats()
+	if contra != nil {
+		stats.Contradict = contra.Stats()
 	}
-	if e.contradictWorker != nil {
-		stats.Contradict = e.contradictWorker.Stats()
-	}
-	if e.confidenceWorker != nil {
-		stats.Confidence = e.confidenceWorker.Stats()
+	if conf != nil {
+		stats.Confidence = conf.Stats()
 	}
 	return stats
 }
@@ -1361,6 +1663,24 @@ func (e *Engine) ListDeleted(ctx context.Context, vault string, limit int) ([]*s
 // correct subscription buckets in the trigger registry.
 func wsVaultID(ws [8]byte) uint32 {
 	return binary.BigEndian.Uint32(ws[:4])
+}
+
+// relTypeFromString converts a relation name string to a uint16 RelType value.
+func relTypeFromString(rel string) uint16 {
+	m := map[string]storage.RelType{
+		"supports": storage.RelSupports, "contradicts": storage.RelContradicts,
+		"depends_on": storage.RelDependsOn, "supersedes": storage.RelSupersedes,
+		"relates_to": storage.RelRelatesTo, "is_part_of": storage.RelIsPartOf,
+		"causes": storage.RelCauses, "preceded_by": storage.RelPrecededBy,
+		"followed_by": storage.RelFollowedBy, "created_by_person": storage.RelCreatedByPerson,
+		"belongs_to_project": storage.RelBelongsToProject, "references": storage.RelReferences,
+		"implements": storage.RelImplements, "blocks": storage.RelBlocks,
+		"resolves": storage.RelResolves, "refines": storage.RelRefines,
+	}
+	if v, ok := m[rel]; ok {
+		return uint16(v)
+	}
+	return uint16(storage.RelRelatesTo)
 }
 
 // hashString returns a simple hash of a string for concept/target matching.
@@ -1555,6 +1875,187 @@ func (e *Engine) RecordAccess(ctx context.Context, vault, id string) error {
 		LastAccess:  time.Now(),
 	}
 	return e.store.UpdateMetadata(ctx, ws, ulid, meta)
+}
+
+// resolveVaultPlasticity returns the resolved plasticity config for a vault,
+// falling back to defaults when no authStore is configured.
+func (e *Engine) resolveVaultPlasticity(vaultName string) auth.ResolvedPlasticity {
+	if e.authStore != nil {
+		vaultCfg, err := e.authStore.GetVaultConfig(vaultName)
+		if err == nil {
+			return auth.ResolvePlasticity(vaultCfg.Plasticity)
+		}
+	}
+	return auth.ResolvePlasticity(nil)
+}
+
+// ResolveVaultPlasticity returns the resolved plasticity config for a vault.
+func (e *Engine) ResolveVaultPlasticity(vaultName string) auth.ResolvedPlasticity {
+	return e.resolveVaultPlasticity(vaultName)
+}
+
+// PruneVault prunes a vault according to its resolved MaxEngrams and RetentionDays policy.
+// It uses hard-delete (removes all secondary indexes) to ensure pruned engrams do not
+// persist in the relevance bucket index and cause an infinite prune loop.
+// Returns the number of engrams pruned.
+func (e *Engine) PruneVault(ctx context.Context, vaultName string) (int64, error) {
+	mu := e.getVaultMutex(vaultName)
+	mu.Lock()
+	defer mu.Unlock()
+
+	resolved := e.resolveVaultPlasticity(vaultName)
+	ws := e.store.ResolveVaultPrefix(vaultName)
+
+	var pruned int64
+
+	// MaxEngrams: two-phase prune — use stale relevance index as pre-filter, then
+	// re-rank candidates by real ACT-R base-level score to delete the worst engrams.
+	if resolved.MaxEngrams > 0 {
+		count := e.store.GetVaultCount(ctx, ws)
+		excess := count - int64(resolved.MaxEngrams)
+		if excess > 0 {
+			// Phase 1: fetch heuristic candidates from the relevance bucket index.
+			// Over-fetch to compensate for index staleness (new engrams start at relevance=0).
+			topK := int(excess) * 2
+			var candidates []storage.ULID
+			for attempt := 0; attempt < 2; attempt++ {
+				ids, err := e.store.LowestRelevanceIDs(ctx, ws, topK)
+				if err != nil {
+					return pruned, fmt.Errorf("prune vault %s (max_engrams scan): %w", vaultName, err)
+				}
+				candidates = ids
+				if int64(len(candidates)) >= excess {
+					break
+				}
+				topK = int(excess) * 4
+			}
+
+			// Phase 2: load metadata and compute real ACT-R base-level score for each candidate.
+			// B(M) = ln(n+1) - d * ln(max(ageDays, 0.1) / n)  where d=0.5 (standard decay).
+			// Engrams with low B(M) are stale and rarely accessed — safest to delete.
+			type scoredCandidate struct {
+				id    storage.ULID
+				score float64
+			}
+			const actrDecay = 0.5
+			now := time.Now()
+			scored := make([]scoredCandidate, 0, len(candidates))
+
+			if len(candidates) > 0 {
+				metas, err := e.store.GetMetadata(ctx, ws, candidates)
+				if err != nil {
+					// Fall back: delete candidates in index order without rescoring.
+					metas = nil
+				}
+				for i, id := range candidates {
+					var b float64
+					if metas != nil && i < len(metas) && metas[i] != nil {
+						m := metas[i]
+						lastAccess := m.LastAccess
+						if lastAccess.IsZero() || lastAccess.Year() < 2000 {
+							lastAccess = now
+						}
+						ageDays := math.Max(now.Sub(lastAccess).Hours()/24.0, 0.1)
+						n := float64(m.AccessCount + 1)
+						b = math.Log(n) - actrDecay*math.Log(math.Max(ageDays, 0.1)/n)
+					}
+					scored = append(scored, scoredCandidate{id: id, score: b})
+				}
+				// Sort ascending: lowest base-level (worst engrams) first.
+				sort.Slice(scored, func(i, j int) bool {
+					return scored[i].score < scored[j].score
+				})
+			}
+
+			// Delete the bottom `excess` by ACT-R base-level score (or all available if fewer).
+			toDelete := int(excess)
+			if toDelete > len(scored) {
+				toDelete = len(scored)
+			}
+			for i := 0; i < toDelete; i++ {
+				id := scored[i].id
+				if err := e.store.DeleteEngram(ctx, ws, id); err != nil {
+					slog.Debug("prune vault: hard-delete failed", "vault", vaultName, "id", id, "err", err)
+					continue
+				}
+				// Decrement the global engram counter.
+				for {
+					cur := e.engramCount.Load()
+					if cur <= 0 {
+						break
+					}
+					if e.engramCount.CompareAndSwap(cur, cur-1) {
+						break
+					}
+				}
+				pruned++
+			}
+		}
+	}
+
+	// RetentionDays: hard-delete engrams older than the retention threshold.
+	if resolved.RetentionDays > 0 {
+		cutoff := time.Now().Add(-time.Duration(float64(resolved.RetentionDays) * float64(24*time.Hour)))
+		// Scan 0x01 EngramKey range for engrams created before cutoff.
+		// EngramIDsByCreatedRange with epoch→cutoff returns IDs of old engrams.
+		const retentionBatchSize = 500
+		epoch := time.Unix(0, 0)
+		ids, err := e.store.EngramIDsByCreatedRange(ctx, ws, epoch, cutoff, retentionBatchSize)
+		if err != nil {
+			return pruned, fmt.Errorf("prune vault %s (retention scan): %w", vaultName, err)
+		}
+		for _, id := range ids {
+			if err := e.store.DeleteEngram(ctx, ws, id); err != nil {
+				slog.Debug("prune vault: retention hard-delete failed", "vault", vaultName, "id", id, "err", err)
+				continue
+			}
+			// Decrement the global engram counter.
+			for {
+				cur := e.engramCount.Load()
+				if cur <= 0 {
+					break
+				}
+				if e.engramCount.CompareAndSwap(cur, cur-1) {
+					break
+				}
+			}
+			pruned++
+		}
+	}
+
+	return pruned, nil
+}
+
+// runPruneWorker is a periodic background sweep that prunes vaults according to their
+// MaxEngrams and RetentionDays policies. Runs every 60s with ±5s jitter to spread load.
+func (e *Engine) runPruneWorker() {
+	defer close(e.pruneDone)
+	jitter := time.Duration(rand.Intn(10)) * time.Second
+	timer := time.NewTimer(60*time.Second + jitter)
+	defer timer.Stop()
+	for {
+		select {
+		case <-timer.C:
+			vaults, _ := e.ListVaults(e.stopCtx)
+			for _, vaultName := range vaults {
+				resolved := e.resolveVaultPlasticity(vaultName)
+				if resolved.MaxEngrams > 0 || resolved.RetentionDays > 0 {
+					if _, err := e.PruneVault(e.stopCtx, vaultName); err != nil {
+						slog.Debug("vault prune failed", "vault", vaultName, "err", err)
+					}
+				}
+			}
+			jitter = time.Duration(rand.Intn(10)) * time.Second
+			timer.Reset(60*time.Second + jitter)
+		case <-e.stopCtx.Done():
+			return
+		}
+	}
+}
+
+// GetNoveltyDrops returns the total number of novelty jobs dropped because the channel was full.
+func (e *Engine) GetNoveltyDrops() int64 {
+	return e.noveltyJobsDropped.Load()
 }
 
 // runNoveltyWorker drains the noveltyJobs channel, performing O(N) Jaccard similarity

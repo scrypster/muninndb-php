@@ -30,14 +30,14 @@ func testEnv(t *testing.T) (*engine.Engine, func()) {
 		t.Fatal(err)
 	}
 
-	store := storage.NewPebbleStore(db, 1000)
+	store := storage.NewPebbleStore(db, storage.PebbleStoreConfig{CacheSize: 1000})
 	ftsIdx := fts.New(db)
 
 	// Minimal no-op embedder and adapters
 	embedder := &noopEmbedder{}
 	actEngine := activation.New(store, &ftsAdapter{ftsIdx}, nil, embedder)
 	trigSystem := trigger.New(store, &ftsTrigAdapter{ftsIdx}, nil, embedder)
-	eng := engine.NewEngine(store, nil, ftsIdx, actEngine, trigSystem, nil, nil, nil, nil, embedder, nil)
+	eng := engine.NewEngine(store, nil, ftsIdx, actEngine, trigSystem, nil, nil, nil, embedder, nil)
 
 	return eng, func() {
 		eng.Stop()    // stop FTS worker, novelty worker, coherence flush, autoAssoc

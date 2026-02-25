@@ -10,8 +10,8 @@ func TestResolvePlasticity_NilUsesDefault(t *testing.T) {
 	if !r.HebbianEnabled {
 		t.Error("want HebbianEnabled=true")
 	}
-	if !r.DecayEnabled {
-		t.Error("want DecayEnabled=true")
+	if !r.TemporalEnabled {
+		t.Error("want TemporalEnabled=true")
 	}
 }
 
@@ -23,18 +23,18 @@ func TestResolvePlasticity_ScratchpadPreset(t *testing.T) {
 	if r.HebbianEnabled {
 		t.Error("scratchpad: want HebbianEnabled=false")
 	}
-	if r.DecayStability != 7 {
-		t.Errorf("scratchpad DecayStability want 7, got %f", r.DecayStability)
+	if r.TemporalHalflife != 7 {
+		t.Errorf("scratchpad TemporalHalflife want 7, got %f", r.TemporalHalflife)
 	}
 }
 
 func TestResolvePlasticity_ReferencePreset(t *testing.T) {
 	r := ResolvePlasticity(&PlasticityConfig{Preset: "reference"})
-	if r.DecayEnabled {
-		t.Error("reference: want DecayEnabled=false")
+	if r.TemporalEnabled {
+		t.Error("reference: want TemporalEnabled=false")
 	}
-	if r.DecayFloor != 1.0 {
-		t.Errorf("reference DecayFloor want 1.0, got %f", r.DecayFloor)
+	if r.RelevanceFloor != 1.0 {
+		t.Errorf("reference RelevanceFloor want 1.0, got %f", r.RelevanceFloor)
 	}
 }
 
@@ -120,5 +120,236 @@ func TestPlasticityConfig_NilTraversalProfileIsEmpty(t *testing.T) {
 	r := ResolvePlasticity(cfg)
 	if r.TraversalProfile != "" {
 		t.Errorf("unset TraversalProfile should resolve to empty string, got %q", r.TraversalProfile)
+	}
+}
+
+func TestPAS_DefaultPreset(t *testing.T) {
+	r := ResolvePlasticity(nil)
+	if !r.PredictiveActivation {
+		t.Error("default: want PredictiveActivation=true")
+	}
+	if r.PASMaxInjections != 5 {
+		t.Errorf("default: want PASMaxInjections=5, got %d", r.PASMaxInjections)
+	}
+}
+
+func TestPAS_ScratchpadPreset(t *testing.T) {
+	r := ResolvePlasticity(&PlasticityConfig{Preset: "scratchpad"})
+	if r.PredictiveActivation {
+		t.Error("scratchpad: want PredictiveActivation=false")
+	}
+	if r.PASMaxInjections != 0 {
+		t.Errorf("scratchpad: want PASMaxInjections=0, got %d", r.PASMaxInjections)
+	}
+}
+
+func TestPAS_ReferencePreset(t *testing.T) {
+	r := ResolvePlasticity(&PlasticityConfig{Preset: "reference"})
+	if !r.PredictiveActivation {
+		t.Error("reference: want PredictiveActivation=true")
+	}
+	if r.PASMaxInjections != 5 {
+		t.Errorf("reference: want PASMaxInjections=5, got %d", r.PASMaxInjections)
+	}
+}
+
+func TestPAS_KnowledgeGraphPreset(t *testing.T) {
+	r := ResolvePlasticity(&PlasticityConfig{Preset: "knowledge-graph"})
+	if !r.PredictiveActivation {
+		t.Error("knowledge-graph: want PredictiveActivation=true")
+	}
+	if r.PASMaxInjections != 5 {
+		t.Errorf("knowledge-graph: want PASMaxInjections=5, got %d", r.PASMaxInjections)
+	}
+}
+
+func TestPAS_OverrideDisable(t *testing.T) {
+	f := false
+	r := ResolvePlasticity(&PlasticityConfig{
+		PredictiveActivation: &f,
+	})
+	if r.PredictiveActivation {
+		t.Error("override false should disable PredictiveActivation")
+	}
+}
+
+func TestPAS_OverrideMaxInjections(t *testing.T) {
+	v := 3
+	r := ResolvePlasticity(&PlasticityConfig{
+		PASMaxInjections: &v,
+	})
+	if r.PASMaxInjections != 3 {
+		t.Errorf("override want PASMaxInjections=3, got %d", r.PASMaxInjections)
+	}
+}
+
+func TestPAS_MaxInjectionsClampedLow(t *testing.T) {
+	v := -5
+	r := ResolvePlasticity(&PlasticityConfig{
+		PASMaxInjections: &v,
+	})
+	if r.PASMaxInjections != 0 {
+		t.Errorf("negative should clamp to 0, got %d", r.PASMaxInjections)
+	}
+}
+
+func TestPAS_MaxInjectionsClampedHigh(t *testing.T) {
+	v := 99
+	r := ResolvePlasticity(&PlasticityConfig{
+		PASMaxInjections: &v,
+	})
+	if r.PASMaxInjections != 10 {
+		t.Errorf("above 10 should clamp to 10, got %d", r.PASMaxInjections)
+	}
+}
+
+func TestBehaviorMode_DefaultPreset(t *testing.T) {
+	r := ResolvePlasticity(nil)
+	if r.BehaviorMode != "autonomous" {
+		t.Errorf("default: want BehaviorMode=autonomous, got %q", r.BehaviorMode)
+	}
+}
+
+func TestBehaviorMode_ScratchpadPreset(t *testing.T) {
+	r := ResolvePlasticity(&PlasticityConfig{Preset: "scratchpad"})
+	if r.BehaviorMode != "selective" {
+		t.Errorf("scratchpad: want BehaviorMode=selective, got %q", r.BehaviorMode)
+	}
+}
+
+func TestBehaviorMode_Override(t *testing.T) {
+	mode := "prompted"
+	r := ResolvePlasticity(&PlasticityConfig{BehaviorMode: &mode})
+	if r.BehaviorMode != "prompted" {
+		t.Errorf("override: want BehaviorMode=prompted, got %q", r.BehaviorMode)
+	}
+}
+
+func TestBehaviorMode_InvalidFallsToAutonomous(t *testing.T) {
+	mode := "invalid-mode"
+	r := ResolvePlasticity(&PlasticityConfig{BehaviorMode: &mode})
+	if r.BehaviorMode != "autonomous" {
+		t.Errorf("invalid mode should fall back to autonomous, got %q", r.BehaviorMode)
+	}
+}
+
+func TestBehaviorMode_CustomWithInstructions(t *testing.T) {
+	mode := "custom"
+	instr := "Remember only code patterns."
+	r := ResolvePlasticity(&PlasticityConfig{
+		BehaviorMode:         &mode,
+		BehaviorInstructions: &instr,
+	})
+	if r.BehaviorMode != "custom" {
+		t.Errorf("want BehaviorMode=custom, got %q", r.BehaviorMode)
+	}
+	if r.BehaviorInstructions != "Remember only code patterns." {
+		t.Errorf("want BehaviorInstructions=%q, got %q", instr, r.BehaviorInstructions)
+	}
+}
+
+func TestBehaviorMode_AllPresetsHaveMode(t *testing.T) {
+	presets := []string{"default", "reference", "scratchpad", "knowledge-graph"}
+	for _, preset := range presets {
+		t.Run(preset, func(t *testing.T) {
+			r := ResolvePlasticity(&PlasticityConfig{Preset: preset})
+			if r.BehaviorMode == "" {
+				t.Errorf("preset %q: BehaviorMode should not be empty", preset)
+			}
+		})
+	}
+}
+
+// InlineEnrichment tests
+
+func TestInlineEnrichment_DefaultPreset(t *testing.T) {
+	r := ResolvePlasticity(nil)
+	if r.InlineEnrichment != "caller_preferred" {
+		t.Errorf("default: want InlineEnrichment=caller_preferred, got %q", r.InlineEnrichment)
+	}
+}
+
+func TestInlineEnrichment_AllPresetsHaveValue(t *testing.T) {
+	presets := []string{"default", "reference", "scratchpad", "knowledge-graph"}
+	for _, preset := range presets {
+		t.Run(preset, func(t *testing.T) {
+			r := ResolvePlasticity(&PlasticityConfig{Preset: preset})
+			if r.InlineEnrichment == "" {
+				t.Errorf("preset %q: InlineEnrichment should not be empty", preset)
+			}
+		})
+	}
+}
+
+func TestInlineEnrichment_Override(t *testing.T) {
+	mode := "caller_only"
+	r := ResolvePlasticity(&PlasticityConfig{InlineEnrichment: &mode})
+	if r.InlineEnrichment != "caller_only" {
+		t.Errorf("override: want InlineEnrichment=caller_only, got %q", r.InlineEnrichment)
+	}
+}
+
+func TestInlineEnrichment_BackgroundOnly(t *testing.T) {
+	mode := "background_only"
+	r := ResolvePlasticity(&PlasticityConfig{InlineEnrichment: &mode})
+	if r.InlineEnrichment != "background_only" {
+		t.Errorf("want background_only, got %q", r.InlineEnrichment)
+	}
+}
+
+func TestInlineEnrichment_Disabled(t *testing.T) {
+	mode := "disabled"
+	r := ResolvePlasticity(&PlasticityConfig{InlineEnrichment: &mode})
+	if r.InlineEnrichment != "disabled" {
+		t.Errorf("want disabled, got %q", r.InlineEnrichment)
+	}
+}
+
+func TestInlineEnrichment_InvalidFallsToCallerPreferred(t *testing.T) {
+	mode := "invalid-mode"
+	r := ResolvePlasticity(&PlasticityConfig{InlineEnrichment: &mode})
+	if r.InlineEnrichment != "caller_preferred" {
+		t.Errorf("invalid mode should fall back to caller_preferred, got %q", r.InlineEnrichment)
+	}
+}
+
+func TestInlineEnrichment_CallerPreferred(t *testing.T) {
+	mode := "caller_preferred"
+	r := ResolvePlasticity(&PlasticityConfig{InlineEnrichment: &mode})
+	if r.InlineEnrichment != "caller_preferred" {
+		t.Errorf("want caller_preferred, got %q", r.InlineEnrichment)
+	}
+}
+
+func TestEnrichmentEnabled_DefaultTrue(t *testing.T) {
+	r := ResolvePlasticity(nil)
+	if !r.EnrichmentEnabled {
+		t.Error("EnrichmentEnabled should default to true")
+	}
+}
+
+func TestEnrichmentEnabled_ExplicitFalse(t *testing.T) {
+	f := false
+	r := ResolvePlasticity(&PlasticityConfig{EnrichmentEnabled: &f})
+	if r.EnrichmentEnabled {
+		t.Error("EnrichmentEnabled should be false when explicitly set")
+	}
+}
+
+func TestEnrichmentEnabled_ExplicitTrue(t *testing.T) {
+	tr := true
+	r := ResolvePlasticity(&PlasticityConfig{EnrichmentEnabled: &tr})
+	if !r.EnrichmentEnabled {
+		t.Error("EnrichmentEnabled should be true when explicitly set")
+	}
+}
+
+func TestEnrichmentEnabled_AllPresetsDefaultTrue(t *testing.T) {
+	presets := []string{"default", "reference", "scratchpad", "knowledge-graph"}
+	for _, name := range presets {
+		r := ResolvePlasticity(&PlasticityConfig{Preset: name})
+		if !r.EnrichmentEnabled {
+			t.Errorf("preset %q: EnrichmentEnabled should default to true", name)
+		}
 	}
 }

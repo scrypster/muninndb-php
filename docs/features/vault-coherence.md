@@ -14,7 +14,7 @@ Most databases give you storage metrics (bytes used, index size, row count). Mun
 - **High orphan ratio** → write more engrams with tags, or manually link existing ones.
 - **High contradiction density** → run contradiction resolution.
 - **High duplication pressure** → call `CONSOLIDATE` on near-duplicate clusters.
-- **High decay variance** → some memories are fading while others are active; consider archiving stale ones.
+- **High temporal variance** → some memories are fading while others are active; consider archiving stale ones.
 
 ## How it works
 
@@ -35,7 +35,7 @@ Coherence is computed in O(1) from atomic counters updated at every write/link/c
 ```
 coherence = 1.0 - (orphanRatio × 0.3
                  + contradictionDensity × 0.3
-                 + decayVariance × 0.2
+                 + temporalVariance × 0.2
                  + duplicationPressure × 0.2)
 ```
 
@@ -60,7 +60,7 @@ Coherence scores appear in the `GET /api/stats` response:
       "orphan_ratio": 0.12,
       "contradiction_density": 0.03,
       "duplication_pressure": 0.08,
-      "decay_variance": 0.41,
+      "temporal_variance": 0.41,
       "total_engrams": 1200
     },
     "research": {

@@ -229,3 +229,123 @@ func generateTestEmbedding(dim int) []float32 {
 	}
 	return emb
 }
+
+func TestTypeLabelRoundTrip_V1(t *testing.T) {
+	eng := &Engram{
+		ID:        newTestULID(),
+		CreatedAt: time.Now().Truncate(time.Nanosecond),
+		UpdatedAt: time.Now().Truncate(time.Nanosecond),
+		Concept:   "TypeLabel test",
+		Content:   "Testing TypeLabel round-trip through ERF v1",
+		TypeLabel: "architectural_decision",
+	}
+
+	data, err := Encode(eng)
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+
+	decoded, err := Decode(data)
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+
+	if decoded.TypeLabel != "architectural_decision" {
+		t.Errorf("TypeLabel = %q, want %q", decoded.TypeLabel, "architectural_decision")
+	}
+}
+
+func TestTypeLabelRoundTrip_V2(t *testing.T) {
+	eng := &Engram{
+		ID:        newTestULID(),
+		CreatedAt: time.Now().Truncate(time.Nanosecond),
+		UpdatedAt: time.Now().Truncate(time.Nanosecond),
+		Concept:   "TypeLabel v2 test",
+		Content:   "Testing TypeLabel round-trip through ERF v2",
+		TypeLabel: "coding_pattern",
+	}
+
+	data, err := EncodeV2(eng)
+	if err != nil {
+		t.Fatalf("EncodeV2: %v", err)
+	}
+
+	decoded, err := Decode(data)
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+
+	if decoded.TypeLabel != "coding_pattern" {
+		t.Errorf("TypeLabel = %q, want %q", decoded.TypeLabel, "coding_pattern")
+	}
+}
+
+func TestTypeLabelEmpty_BackwardCompat(t *testing.T) {
+	eng := &Engram{
+		ID:        newTestULID(),
+		CreatedAt: time.Now().Truncate(time.Nanosecond),
+		UpdatedAt: time.Now().Truncate(time.Nanosecond),
+		Concept:   "No TypeLabel",
+		Content:   "Old engram without TypeLabel",
+	}
+
+	data, err := Encode(eng)
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+
+	decoded, err := Decode(data)
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+
+	if decoded.TypeLabel != "" {
+		t.Errorf("TypeLabel = %q, want empty string for old records", decoded.TypeLabel)
+	}
+}
+
+func TestEncodeV2_NoInlineAssocEmbed(t *testing.T) {
+	eng := &Engram{
+		Concept:   "test concept",
+		Content:   "test content",
+		CreatedBy: "tester",
+		Tags:      []string{"a", "b"},
+		// Associations and embedding are set but must NOT appear in v2 output
+		Associations: []Association{{TargetID: [16]byte{1}, RelType: 1, Weight: 0.5}},
+		Embedding:    []float32{0.1, 0.2, 0.3},
+	}
+	copy(eng.ID[:], []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16})
+	eng.CreatedAt = time.Now()
+	eng.UpdatedAt = time.Now()
+	eng.Confidence = 0.9
+	eng.State = 1
+
+	data, err := EncodeV2(eng)
+	if err != nil {
+		t.Fatalf("EncodeV2: %v", err)
+	}
+
+	// Version byte must be 0x02
+	if data[4] != Version2 {
+		t.Errorf("version = 0x%02x, want 0x%02x", data[4], Version2)
+	}
+
+	// FlagHasEmbedding must NOT be set
+	flags := data[5]
+	if flags&FlagHasEmbedding != 0 {
+		t.Error("FlagHasEmbedding should not be set in v2 record")
+	}
+
+	// Verify magic bytes
+	if data[0] != 0x4D || data[1] != 0x55 || data[2] != 0x4E || data[3] != 0x4E {
+		t.Error("magic bytes incorrect")
+	}
+
+	// Verify CRC16 at offset 6
+	if !VerifyCRC16(data[0:8]) {
+		t.Error("CRC16 verification failed")
+	}
+
+	// (Decode round-trip will be tested in Task 7 when Decode supports v2)
+	// For now, just verify the basic structure is correct
+}

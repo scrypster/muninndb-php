@@ -18,10 +18,10 @@ func (e *Engine) StartClone(ctx context.Context, sourceVault, newName string) (*
 	// concurrent clone/delete cannot race between the existence check and the
 	// WriteVaultName reservation.
 	e.vaultOpsMu.Lock()
+	defer e.vaultOpsMu.Unlock()
 
 	names, err := e.store.ListVaultNames()
 	if err != nil {
-		e.vaultOpsMu.Unlock()
 		return nil, fmt.Errorf("start clone: list vaults: %w", err)
 	}
 	sourceFound := false
@@ -35,11 +35,9 @@ func (e *Engine) StartClone(ctx context.Context, sourceVault, newName string) (*
 		}
 	}
 	if !sourceFound {
-		e.vaultOpsMu.Unlock()
 		return nil, fmt.Errorf("start clone: source vault %q: %w", sourceVault, ErrVaultNotFound)
 	}
 	if targetExists {
-		e.vaultOpsMu.Unlock()
 		return nil, fmt.Errorf("start clone: target vault %q already exists", newName)
 	}
 
@@ -47,11 +45,8 @@ func (e *Engine) StartClone(ctx context.Context, sourceVault, newName string) (*
 	// CloneVaultData no longer calls WriteVaultName; we do it here atomically.
 	wsTarget := e.store.VaultPrefix(newName)
 	if err := e.store.WriteVaultName(wsTarget, newName); err != nil {
-		e.vaultOpsMu.Unlock()
 		return nil, fmt.Errorf("start clone: reserve vault name: %w", err)
 	}
-
-	e.vaultOpsMu.Unlock()
 
 	job, err := e.jobManager.Create("clone", sourceVault, newName)
 	if err != nil {
@@ -155,10 +150,10 @@ func (e *Engine) StartMerge(ctx context.Context, sourceVault, targetVault string
 	// I3: Hold vaultOpsMu during existence checks so a concurrent delete cannot
 	// remove a vault between our check and the goroutine launch.
 	e.vaultOpsMu.Lock()
+	defer e.vaultOpsMu.Unlock()
 
 	names, err := e.store.ListVaultNames()
 	if err != nil {
-		e.vaultOpsMu.Unlock()
 		return nil, fmt.Errorf("start merge: list vaults: %w", err)
 	}
 	sourceFound := false
@@ -172,15 +167,11 @@ func (e *Engine) StartMerge(ctx context.Context, sourceVault, targetVault string
 		}
 	}
 	if !sourceFound {
-		e.vaultOpsMu.Unlock()
 		return nil, fmt.Errorf("start merge: source vault %q: %w", sourceVault, ErrVaultNotFound)
 	}
 	if !targetFound {
-		e.vaultOpsMu.Unlock()
 		return nil, fmt.Errorf("start merge: target vault %q: %w", targetVault, ErrVaultNotFound)
 	}
-
-	e.vaultOpsMu.Unlock()
 
 	job, err := e.jobManager.Create("merge", sourceVault, targetVault)
 	if err != nil {

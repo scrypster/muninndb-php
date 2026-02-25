@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -49,10 +50,12 @@ func TestLoadOrGenerateToken_NewToken(t *testing.T) {
 	if strings.TrimSpace(string(b)) != tok {
 		t.Errorf("token file content mismatch")
 	}
-	// Verify file permissions
-	info, _ := os.Stat(tokenFile)
-	if info.Mode().Perm() != 0600 {
-		t.Errorf("token file should be 0600, got %o", info.Mode().Perm())
+	// Verify file permissions (Windows doesn't support Unix permissions)
+	if runtime.GOOS != "windows" {
+		info, _ := os.Stat(tokenFile)
+		if info.Mode().Perm() != 0600 {
+			t.Errorf("token file should be 0600, got %o", info.Mode().Perm())
+		}
 	}
 }
 
@@ -228,6 +231,9 @@ func TestMCPServerEntry_WithToken(t *testing.T) {
 	if entry["url"] != "http://localhost:8750/mcp" {
 		t.Errorf("unexpected url: %v", entry["url"])
 	}
+	if entry["type"] != "http" {
+		t.Errorf("type = %v, want \"http\" (SSE is deprecated)", entry["type"])
+	}
 	headers, ok := entry["headers"].(map[string]any)
 	if !ok {
 		t.Fatal("headers not found")
@@ -242,6 +248,9 @@ func TestMCPServerEntry_NoToken(t *testing.T) {
 	entry := mcpServerEntry("http://localhost:8750/mcp", "")
 	if _, ok := entry["headers"]; ok {
 		t.Error("headers should not be present when token is empty")
+	}
+	if entry["type"] != "http" {
+		t.Errorf("type = %v, want \"http\" (SSE is deprecated)", entry["type"])
 	}
 }
 
@@ -297,10 +306,14 @@ func withTempHome(t *testing.T) (string, func()) {
 	// Also set APPDATA for Windows tests
 	origAPPDATA := os.Getenv("APPDATA")
 	os.Setenv("APPDATA", tmp)
+	// os.UserHomeDir() on Windows checks USERPROFILE, not HOME
+	origUP := os.Getenv("USERPROFILE")
+	os.Setenv("USERPROFILE", tmp)
 	return tmp, func() {
 		os.Setenv("HOME", orig)
 		os.Setenv("XDG_CONFIG_HOME", origXDG)
 		os.Setenv("APPDATA", origAPPDATA)
+		os.Setenv("USERPROFILE", origUP)
 	}
 }
 
@@ -491,6 +504,158 @@ func TestConfigureOpenClawWritesConfig(t *testing.T) {
 	}
 	if !strings.Contains(out, "✓") {
 		t.Errorf("output missing success marker: %s", out)
+	}
+}
+
+// TestCodexConfigPath verifies Codex config path is set correctly.
+func TestCodexConfigPath(t *testing.T) {
+	path := codexConfigPath()
+	if path == "" {
+		t.Error("codexConfigPath returned empty string")
+	}
+	home, _ := os.UserHomeDir()
+	if !strings.HasPrefix(path, home) {
+		t.Errorf("path %q should start with home dir", path)
+	}
+	if !strings.HasSuffix(path, filepath.Join(".codex", "config.toml")) {
+		t.Errorf("path %q should end with .codex/config.toml", path)
+	}
+}
+
+// TestConfigureCodexWritesConfig verifies Codex config is written correctly as TOML.
+func TestConfigureCodexWritesConfig(t *testing.T) {
+	_, cleanup := withTempHome(t)
+	defer cleanup()
+
+	out := captureStdout(func() {
+		if err := configureCodex("http://localhost:8750/mcp", "mdb_testtoken"); err != nil {
+			t.Fatalf("error: %v", err)
+		}
+	})
+
+	data, err := os.ReadFile(codexConfigPath())
+	if err != nil {
+		t.Fatalf("file not written: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "muninn") {
+		t.Errorf("muninn not in config: %s", content)
+	}
+	if !strings.Contains(content, "http://localhost:8750/mcp") {
+		t.Errorf("MCP URL not in config: %s", content)
+	}
+	if !strings.Contains(content, "Bearer mdb_testtoken") {
+		t.Errorf("token not in config: %s", content)
+	}
+	if !strings.Contains(out, "✓") {
+		t.Errorf("output missing success marker: %s", out)
+	}
+}
+
+// TestConfigureCodexNoToken verifies no auth header when token is empty.
+func TestConfigureCodexNoToken(t *testing.T) {
+	_, cleanup := withTempHome(t)
+	defer cleanup()
+
+	captureStdout(func() {
+		if err := configureCodex("http://localhost:8750/mcp", ""); err != nil {
+			t.Fatalf("error: %v", err)
+		}
+	})
+
+	data, _ := os.ReadFile(codexConfigPath())
+	content := string(data)
+	if strings.Contains(content, "Bearer") {
+		t.Errorf("should not have auth header without token: %s", content)
+	}
+	if strings.Contains(content, "http_headers") {
+		t.Errorf("should not have http_headers without token: %s", content)
+	}
+	if !strings.Contains(content, "http://localhost:8750/mcp") {
+		t.Errorf("URL missing: %s", content)
+	}
+}
+
+// TestConfigureCodexPreservesExistingKeys verifies existing TOML keys are not lost.
+func TestConfigureCodexPreservesExistingKeys(t *testing.T) {
+	_, cleanup := withTempHome(t)
+	defer cleanup()
+
+	path := codexConfigPath()
+	os.MkdirAll(filepath.Dir(path), 0755)
+	existing := `model = "o3-mini"
+
+[mcp_servers.other-tool]
+url = "http://other.example"
+`
+	os.WriteFile(path, []byte(existing), 0644)
+
+	captureStdout(func() {
+		configureCodex("http://localhost:8750/mcp", "tok123")
+	})
+
+	data, _ := os.ReadFile(path)
+	content := string(data)
+
+	if !strings.Contains(content, `o3-mini`) {
+		t.Errorf("model key was lost: %s", content)
+	}
+	if !strings.Contains(content, "other-tool") {
+		t.Errorf("other-tool server was lost: %s", content)
+	}
+	if !strings.Contains(content, "muninn") {
+		t.Errorf("muninn not added: %s", content)
+	}
+}
+
+// TestWriteCodexTOMLConfig_InvalidTOML verifies graceful error on corrupt config.
+func TestWriteCodexTOMLConfig_InvalidTOML(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	os.WriteFile(path, []byte("this is not valid toml = = = [[["), 0644)
+
+	_, err := writeCodexTOMLConfig(path, "http://localhost:8750/mcp", "")
+	if err == nil {
+		t.Fatal("expected error for invalid TOML, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid TOML") {
+		t.Errorf("expected 'invalid TOML' in error, got: %v", err)
+	}
+}
+
+// TestWriteCodexTOMLConfig_BackupCreated verifies .bak is created for existing files.
+func TestWriteCodexTOMLConfig_BackupCreated(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	original := []byte("[mcp_servers]\n")
+	os.WriteFile(path, original, 0644)
+
+	writeCodexTOMLConfig(path, "http://localhost:8750/mcp", "")
+
+	bak, err := os.ReadFile(path + ".bak")
+	if err != nil {
+		t.Fatal("backup file not created")
+	}
+	if string(bak) != string(original) {
+		t.Error("backup content does not match original")
+	}
+}
+
+// TestConfigureNamedToolsCodex verifies codex tool configures Codex.
+func TestConfigureNamedToolsCodex(t *testing.T) {
+	_, cleanup := withTempHome(t)
+	defer cleanup()
+
+	out := captureStdout(func() {
+		configureNamedTools([]string{"codex"}, "http://localhost:8750/mcp", "tok123")
+	})
+	if !strings.Contains(out, "✓") {
+		t.Errorf("expected success marker for codex tool, got: %s", out)
+	}
+
+	path := codexConfigPath()
+	if _, err := os.ReadFile(path); err != nil {
+		t.Errorf("codex config file not written: %v", err)
 	}
 }
 
@@ -739,5 +904,166 @@ func TestConfigureNamedToolsUnknownToolSetupAI(t *testing.T) {
 	})
 	if !strings.Contains(stderr, "unknown tool") {
 		t.Errorf("expected error for unknown tool, got stderr: %s", stderr)
+	}
+}
+
+// TestConfigureClaudeMD_NewFile creates CLAUDE.md from scratch.
+func TestConfigureClaudeMD_NewFile(t *testing.T) {
+	_, cleanup := withTempHome(t)
+	defer cleanup()
+
+	out := captureStdout(func() {
+		if err := configureClaudeMD(); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	path := claudeMDPath()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("CLAUDE.md not created: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "mcp__muninn__muninn_remember") {
+		t.Error("missing muninn_remember tool reference")
+	}
+	if !strings.Contains(content, "mcp__muninn__muninn_recall") {
+		t.Error("missing muninn_recall tool reference")
+	}
+	if !strings.Contains(content, "mcp__muninn__muninn_guide") {
+		t.Error("missing muninn_guide tool reference")
+	}
+	if !strings.Contains(content, "Memory Storage Preference") {
+		t.Error("missing Memory Storage Preference header")
+	}
+	if !strings.Contains(out, "✓") {
+		t.Errorf("output missing success marker: %s", out)
+	}
+	if !strings.Contains(out, "created") {
+		t.Errorf("output should say 'created' for new file: %s", out)
+	}
+}
+
+// TestConfigureClaudeMD_PrependsToExisting prepends the block to an existing CLAUDE.md.
+func TestConfigureClaudeMD_PrependsToExisting(t *testing.T) {
+	_, cleanup := withTempHome(t)
+	defer cleanup()
+
+	path := claudeMDPath()
+	os.MkdirAll(filepath.Dir(path), 0755)
+	existing := "# My Existing Instructions\n\nDo things my way.\n"
+	os.WriteFile(path, []byte(existing), 0644)
+
+	out := captureStdout(func() {
+		if err := configureClaudeMD(); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	data, _ := os.ReadFile(path)
+	content := string(data)
+
+	// MuninnDB block should be at the top
+	if !strings.HasPrefix(content, "# Memory Storage Preference") {
+		t.Error("MuninnDB block should be prepended to the top")
+	}
+	// Original content should still be there
+	if !strings.Contains(content, "My Existing Instructions") {
+		t.Error("original content should be preserved")
+	}
+	if !strings.Contains(content, "Do things my way.") {
+		t.Error("original instructions should be preserved")
+	}
+	// Separator between sections
+	if !strings.Contains(content, "---") {
+		t.Error("should have a separator between MuninnDB block and existing content")
+	}
+	if !strings.Contains(out, "updated") {
+		t.Errorf("output should say 'updated' for existing file: %s", out)
+	}
+}
+
+// TestConfigureClaudeMD_AlreadyConfigured skips if MuninnDB block already exists.
+func TestConfigureClaudeMD_AlreadyConfigured(t *testing.T) {
+	_, cleanup := withTempHome(t)
+	defer cleanup()
+
+	path := claudeMDPath()
+	os.MkdirAll(filepath.Dir(path), 0755)
+	existing := "# Memory Storage Preference\n\nmcp__muninn__muninn_remember already here\n"
+	os.WriteFile(path, []byte(existing), 0644)
+
+	out := captureStdout(func() {
+		if err := configureClaudeMD(); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	// Should not modify the file
+	data, _ := os.ReadFile(path)
+	if string(data) != existing {
+		t.Error("file should not be modified when already configured")
+	}
+	if !strings.Contains(out, "already") {
+		t.Errorf("output should indicate already configured: %s", out)
+	}
+}
+
+// TestConfigureClaudeMD_CreatesDirectory creates ~/.claude/ if it doesn't exist.
+func TestConfigureClaudeMD_CreatesDirectory(t *testing.T) {
+	_, cleanup := withTempHome(t)
+	defer cleanup()
+
+	captureStdout(func() {
+		if err := configureClaudeMD(); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	path := claudeMDPath()
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("CLAUDE.md should exist: %v", err)
+	}
+}
+
+// TestHasClaudeCode verifies tool list detection.
+func TestHasClaudeCode(t *testing.T) {
+	tests := []struct {
+		tools    []string
+		expected bool
+	}{
+		{[]string{"claude-code"}, true},
+		{[]string{"claudecode"}, true},
+		{[]string{"claude", "claude-code", "cursor"}, true},
+		{[]string{"claude", "cursor"}, false},
+		{[]string{}, false},
+		{nil, false},
+	}
+	for _, tt := range tests {
+		got := hasClaudeCode(tt.tools)
+		if got != tt.expected {
+			t.Errorf("hasClaudeCode(%v) = %v, want %v", tt.tools, got, tt.expected)
+		}
+	}
+}
+
+// TestPrintClaudeMDInstructions verifies manual instructions are printed.
+func TestPrintClaudeMDInstructions(t *testing.T) {
+	out := captureStdout(func() {
+		printClaudeMDInstructions()
+	})
+	if !strings.Contains(out, "CLAUDE.md") {
+		t.Errorf("should mention CLAUDE.md: %s", out)
+	}
+	if !strings.Contains(out, "MuninnDB") {
+		t.Errorf("should mention MuninnDB: %s", out)
+	}
+}
+
+// TestClaudeMDPath verifies the path is under ~/.claude/.
+func TestClaudeMDPath(t *testing.T) {
+	path := claudeMDPath()
+	if !strings.HasSuffix(path, filepath.Join(".claude", "CLAUDE.md")) {
+		t.Errorf("unexpected path: %s", path)
 	}
 }

@@ -3,7 +3,6 @@ package storage
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/cockroachdb/pebble"
 	"github.com/scrypster/muninndb/internal/storage/erf"
@@ -126,44 +125,22 @@ func (ps *PebbleStore) getDigestFlagsRaw(id [16]byte) (uint8, error) {
 
 // UpdateEmbedding stores an embedding vector for an engram.
 // The wsPrefix is looked up from the engram's key scan.
+// For ERF v2, only the 0x18 embedding key is written; the full engram is not re-encoded.
 func (ps *PebbleStore) UpdateEmbedding(ctx context.Context, wsPrefix [8]byte, id ULID, vec []float32) error {
-	eng, err := ps.GetEngram(ctx, wsPrefix, id)
-	if err != nil {
-		return fmt.Errorf("update embedding: get engram: %w", err)
-	}
-
-	eng.Embedding = vec
-	eng.UpdatedAt = time.Now()
-
-	switch len(vec) {
-	case 384:
-		eng.EmbedDim = Embed384
-	case 768:
-		eng.EmbedDim = Embed768
-	case 1536:
-		eng.EmbedDim = Embed1536
-	default:
-		if len(vec) > 0 {
-			eng.EmbedDim = Embed384
-		}
-	}
-
-	erfEng := toERFEngram(eng)
-	erfBytes, err := erf.Encode(erfEng)
-	if err != nil {
-		return fmt.Errorf("update embedding: encode: %w", err)
+	params, quantized := erf.Quantize(vec)
+	paramsBuf := erf.EncodeQuantizeParams(params)
+	embedBytes := make([]byte, 8+len(quantized))
+	copy(embedBytes[:8], paramsBuf[:])
+	for i, v := range quantized {
+		embedBytes[8+i] = byte(v)
 	}
 
 	batch := ps.db.NewBatch()
 	defer batch.Close()
-	batch.Set(keys.EngramKey(wsPrefix, [16]byte(id)), erfBytes, nil)
-	batch.Set(keys.MetaKey(wsPrefix, [16]byte(id)), erf.MetaKeySlice(erfBytes), nil)
-
+	batch.Set(keys.EmbeddingKey(wsPrefix, [16]byte(id)), embedBytes, nil)
 	if err := batch.Commit(pebble.Sync); err != nil {
 		return fmt.Errorf("update embedding: commit: %w", err)
 	}
-
-	ps.cache.Set(wsPrefix, id, eng)
 	return nil
 }
 
@@ -210,7 +187,7 @@ type PluginEngramIterator struct {
 	started bool
 	current *Engram
 	// wsCache maps ULID -> vault prefix so callers can retrieve it.
-	wsCache  map[ULID][8]byte
+	wsCache   map[ULID][8]byte
 	currentWS [8]byte
 }
 

@@ -182,6 +182,191 @@ func TestOpenAIProvider_Init_NoData(t *testing.T) {
 	}
 }
 
+func TestOpenAIProvider_Init_EmptyEmbedding(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" && r.URL.Path == "/v1/embeddings" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"data": []map[string]interface{}{
+					{"embedding": []float32{}, "index": 0},
+				},
+			})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	provider := &OpenAIProvider{}
+	cfg := ProviderHTTPConfig{
+		BaseURL: "http://" + server.Listener.Addr().String(),
+		Model:   "text-embedding-3-small",
+		APIKey:  "test-key",
+	}
+
+	_, err := provider.Init(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("expected error for empty embedding")
+	}
+}
+
+func TestOpenAIProvider_Init_InvalidJSON(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" && r.URL.Path == "/v1/embeddings" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("not valid json"))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	provider := &OpenAIProvider{}
+	cfg := ProviderHTTPConfig{
+		BaseURL: "http://" + server.Listener.Addr().String(),
+		Model:   "text-embedding-3-small",
+		APIKey:  "test-key",
+	}
+
+	_, err := provider.Init(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("expected error for invalid JSON")
+	}
+}
+
+func TestOpenAIProvider_Init_ServerError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" && r.URL.Path == "/v1/embeddings" {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte("server error"))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	provider := &OpenAIProvider{}
+	cfg := ProviderHTTPConfig{
+		BaseURL: "http://" + server.Listener.Addr().String(),
+		Model:   "text-embedding-3-small",
+		APIKey:  "test-key",
+	}
+
+	_, err := provider.Init(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("expected error for server error")
+	}
+}
+
+func TestOpenAIProvider_Init_Unreachable(t *testing.T) {
+	provider := &OpenAIProvider{}
+	cfg := ProviderHTTPConfig{
+		BaseURL: "http://localhost:54321",
+		Model:   "text-embedding-3-small",
+		APIKey:  "test-key",
+	}
+
+	_, err := provider.Init(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("expected error for unreachable server")
+	}
+}
+
+func TestOpenAIProvider_EmbedBatch_InvalidJSON(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" && r.URL.Path == "/v1/embeddings" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("not json"))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	provider := &OpenAIProvider{}
+	cfg := ProviderHTTPConfig{
+		BaseURL: "http://" + server.Listener.Addr().String(),
+		Model:   "text-embedding-3-small",
+		APIKey:  "test-key",
+	}
+	provider.Init(context.Background(), cfg)
+
+	_, err := provider.EmbedBatch(context.Background(), []string{"test"})
+	if err == nil {
+		t.Fatal("expected error for invalid JSON")
+	}
+}
+
+func TestOpenAIProvider_EmbedBatch_ServerError(t *testing.T) {
+	callCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" && r.URL.Path == "/v1/embeddings" {
+			callCount++
+			if callCount == 1 {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"data": []map[string]interface{}{
+						{"embedding": []float32{0.1, 0.2, 0.3}, "index": 0},
+					},
+				})
+				return
+			}
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte("server error"))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	provider := &OpenAIProvider{}
+	cfg := ProviderHTTPConfig{
+		BaseURL: "http://" + server.Listener.Addr().String(),
+		Model:   "text-embedding-3-small",
+		APIKey:  "test-key",
+	}
+	provider.Init(context.Background(), cfg)
+
+	_, err := provider.EmbedBatch(context.Background(), []string{"test"})
+	if err == nil {
+		t.Fatal("expected error for server error")
+	}
+}
+
+func TestOpenAIProvider_Close_WithClient(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" && r.URL.Path == "/v1/embeddings" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"data": []map[string]interface{}{
+					{"embedding": []float32{0.1, 0.2, 0.3}, "index": 0},
+				},
+			})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	provider := &OpenAIProvider{}
+	cfg := ProviderHTTPConfig{
+		BaseURL: "http://" + server.Listener.Addr().String(),
+		Model:   "text-embedding-3-small",
+		APIKey:  "test-key",
+	}
+	provider.Init(context.Background(), cfg)
+
+	err := provider.Close()
+	if err != nil {
+		t.Errorf("Close failed: %v", err)
+	}
+}
+
 func TestOpenAIProvider_Embed_ResultOrdering(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "POST" && r.URL.Path == "/v1/embeddings" {

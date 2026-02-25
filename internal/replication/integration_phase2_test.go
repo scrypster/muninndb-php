@@ -283,8 +283,7 @@ func TestP2Integration_CognitiveForwarding(t *testing.T) {
 
 	// Wire mock cognitive workers into node-A.
 	mockHebbian := &mockHebbianSubmitter{}
-	mockDecay := &mockDecaySubmitter{}
-	nodeA.coord.SetCognitiveWorkers(mockHebbian, mockDecay)
+	nodeA.coord.SetCognitiveWorkers(mockHebbian)
 
 	// Construct a CognitiveSideEffect with 3 CoActivationRef entries.
 	engram1 := [16]byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10}
@@ -300,7 +299,6 @@ func TestP2Integration_CognitiveForwarding(t *testing.T) {
 			{ID: engram2, Score: 0.85},
 			{ID: engram3, Score: 0.75},
 		},
-		AccessedIDs: [][16]byte{engram1, engram2, engram3},
 	}
 
 	// Forward the effect from node-B's coordinator to node-A (Cortex).
@@ -339,19 +337,9 @@ func TestP2Integration_CognitiveForwarding(t *testing.T) {
 		}
 	}
 
-	// Verify the mock DecayWorker received submissions for accessed IDs.
-	waitFor(t, 5*time.Second, func() bool {
-		return len(mockDecay.Received()) >= 3
-	}, "DecayWorker to receive 3 submissions")
-
-	decayCount := len(mockDecay.Received())
-	if decayCount != 3 {
-		t.Errorf("DecayWorker submissions=%d, expected 3", decayCount)
-	}
-
 	t.Logf("CognitiveForwarding: 3 co-activations forwarded from Lobe to Cortex, "+
-		"CogForwardedTotal=%d, HebbianEvents=%d, DecaySubmissions=%d",
-		nodeA.coord.CogForwardedTotal(), len(hebbianEvents), decayCount)
+		"CogForwardedTotal=%d, HebbianEvents=%d",
+		nodeA.coord.CogForwardedTotal(), len(hebbianEvents))
 }
 
 // ---------------------------------------------------------------------------
@@ -381,8 +369,7 @@ func TestP2Integration_GracefulHandoff(t *testing.T) {
 
 	// Wire mock cognitive flushers into node-A.
 	hebbianFlusher := &p2MockFlusher{}
-	decayFlusher := &p2MockFlusher{}
-	nodeA.coord.SetCognitiveFlushers(hebbianFlusher, decayFlusher)
+	nodeA.coord.SetCognitiveFlushers(hebbianFlusher)
 
 	// Write 100 entries on node-A.
 	appendEntries(t, nodeA, "h", 100)
@@ -418,12 +405,9 @@ func TestP2Integration_GracefulHandoff(t *testing.T) {
 		t.Errorf("node-B epoch=%d, expected > %d", nodeB.coord.CurrentEpoch(), originalEpoch)
 	}
 
-	// Verify cognitive flushers were called during handoff.
+	// Verify cognitive flusher was called during handoff.
 	if !hebbianFlusher.stopped.Load() {
 		t.Error("HebbianFlusher should have been stopped during handoff")
-	}
-	if !decayFlusher.stopped.Load() {
-		t.Error("DecayFlusher should have been stopped during handoff")
 	}
 
 	// Write 50 more entries on new Cortex node-B and deliver them to A and C

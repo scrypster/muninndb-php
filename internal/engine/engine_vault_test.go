@@ -154,6 +154,48 @@ func TestEngineDeleteVault_NotFound(t *testing.T) {
 	}
 }
 
+// TestClearVault_Idempotent verifies that calling ClearVault twice on the same
+// vault does not return an error on the second call and leaves the vault empty.
+func TestClearVault_Idempotent(t *testing.T) {
+	eng, _, store, cleanup := testEnvWithAuth(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const vaultName = "idempotent-clear-vault"
+
+	// Write 3 engrams using eng.Write — this also registers the vault name.
+	for i := 0; i < 3; i++ {
+		if _, err := eng.Write(ctx, writeReq(vaultName, "concept", "content")); err != nil {
+			t.Fatalf("Write[%d]: %v", i, err)
+		}
+	}
+
+	ws := store.VaultPrefix(vaultName)
+
+	// Verify we have at least 3 engrams (may be more if engine background init wrote extras).
+	if count := store.GetVaultCount(ctx, ws); count < 3 {
+		t.Fatalf("expected at least 3 engrams before first ClearVault, got %d", count)
+	}
+
+	// First ClearVault — must succeed.
+	if err := eng.ClearVault(ctx, vaultName); err != nil {
+		t.Fatalf("first ClearVault: %v", err)
+	}
+
+	if count := store.GetVaultCount(ctx, ws); count != 0 {
+		t.Errorf("expected 0 engrams after first ClearVault, got %d", count)
+	}
+
+	// Second ClearVault on an already-empty vault — must also succeed (idempotent).
+	if err := eng.ClearVault(ctx, vaultName); err != nil {
+		t.Fatalf("second ClearVault (idempotent): %v", err)
+	}
+
+	if count := store.GetVaultCount(ctx, ws); count != 0 {
+		t.Errorf("expected 0 engrams after second ClearVault, got %d", count)
+	}
+}
+
 func TestEngineClearVault_CoherenceGone(t *testing.T) {
 	eng, cleanup := testEnv(t)
 	defer cleanup()

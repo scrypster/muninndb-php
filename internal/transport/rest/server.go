@@ -2,25 +2,49 @@ package rest
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
+	"runtime/debug"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/google/uuid"
 	"github.com/scrypster/muninndb/internal/auth"
 	"github.com/scrypster/muninndb/internal/config"
+	"github.com/scrypster/muninndb/internal/engine"
 	"github.com/scrypster/muninndb/internal/engine/trigger"
+	"github.com/scrypster/muninndb/internal/metrics"
 	"github.com/scrypster/muninndb/internal/plugin"
 	"github.com/scrypster/muninndb/internal/replication"
 	mbp "github.com/scrypster/muninndb/internal/transport/mbp"
+	"golang.org/x/time/rate"
 )
+
+// ctxKeyRequestID is the typed context key used to propagate the request ID
+// through the middleware chain to sendError.
+type ctxKeyRequestID struct{}
+
+// statusRecorder wraps http.ResponseWriter to capture the HTTP status code
+// written by downstream handlers for use in metrics instrumentation.
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	r.status = code
+	r.ResponseWriter.WriteHeader(code)
+}
 
 // Server is an HTTP REST server for the MuninnDB engine.
 type Server struct {
@@ -52,6 +76,12 @@ type Server struct {
 
 	// coordinator is the optional cluster coordinator; nil when cluster is disabled.
 	coordinator *replication.ClusterCoordinator
+
+	// Health check fields.
+	startTime       time.Time
+	version         string     // set at construction time; empty falls back to "dev"
+	dbWritable      atomic.Bool
+	subsystemsReady atomic.Bool
 
 	shutdown  chan struct{}
 	ready     chan struct{} // closed by Serve after wg.Add(1); guards against Shutdown racing wg.Wait
@@ -88,24 +118,29 @@ func NewServer(addr string, engine EngineAPI, authStore *auth.Store, sessionSecr
 		embedModel:     embedInfo.Model,
 		pluginRegistry: pluginRegistry,
 		dataDir:        dataDir,
+		startTime:      time.Now(),
 		shutdown:       make(chan struct{}),
 		ready:          make(chan struct{}),
 	}
+	// Subsystems are considered ready immediately unless explicitly marked otherwise.
+	s.subsystemsReady.Store(true)
 	if len(mcpInfo) > 0 {
 		s.mcpAddr = mcpInfo[0].Addr
 		s.mcpHasToken = mcpInfo[0].HasToken
 	}
+	// Start background DB writability probe (non-blocking, avoids probing on every request).
+	go s.probeDBWritability()
 
-	// Replication routes — no auth required (internal cluster ops).
-	mux.HandleFunc("GET /v1/replication/status", s.withPublicMiddleware(s.handleReplicationStatus))
-	mux.HandleFunc("GET /v1/replication/lag", s.withPublicMiddleware(s.handleReplicationLag))
-	mux.HandleFunc("POST /v1/replication/promote", s.withPublicMiddleware(s.handleReplicationPromote))
+	// Replication routes — cluster auth required when cluster is active.
+	mux.HandleFunc("GET /v1/replication/status", s.withClusterAuthMiddleware(s.withPublicMiddleware(s.handleReplicationStatus)))
+	mux.HandleFunc("GET /v1/replication/lag", s.withClusterAuthMiddleware(s.withPublicMiddleware(s.handleReplicationLag)))
+	mux.HandleFunc("POST /v1/replication/promote", s.withClusterAuthMiddleware(s.withPublicMiddleware(s.handleReplicationPromote)))
 
-	// Cluster routes — no auth required (topology and health probes).
-	mux.HandleFunc("GET /v1/cluster/info", s.withPublicMiddleware(s.handleClusterInfo))
-	mux.HandleFunc("GET /v1/cluster/health", s.withPublicMiddleware(s.handleClusterHealth))
-	mux.HandleFunc("GET /v1/cluster/nodes", s.withPublicMiddleware(s.handleClusterNodes))
-	mux.HandleFunc("GET /v1/cluster/cognitive/consistency", s.withPublicMiddleware(s.handleCognitiveConsistency))
+	// Cluster routes — cluster auth required when cluster is active.
+	mux.HandleFunc("GET /v1/cluster/info", s.withClusterAuthMiddleware(s.withPublicMiddleware(s.handleClusterInfo)))
+	mux.HandleFunc("GET /v1/cluster/health", s.withClusterAuthMiddleware(s.withPublicMiddleware(s.handleClusterHealth)))
+	mux.HandleFunc("GET /v1/cluster/nodes", s.withClusterAuthMiddleware(s.withPublicMiddleware(s.handleClusterNodes)))
+	mux.HandleFunc("GET /v1/cluster/cognitive/consistency", s.withClusterAuthMiddleware(s.withPublicMiddleware(s.handleCognitiveConsistency)))
 
 	// Public routes — no auth, no body size limit (health/auth handshake).
 	mux.HandleFunc("POST /api/hello", s.withPublicMiddleware(s.handleHello))
@@ -114,6 +149,7 @@ func NewServer(addr string, engine EngineAPI, authStore *auth.Store, sessionSecr
 	mux.HandleFunc("GET /api/workers", s.withPublicMiddleware(s.handleWorkerStats))
 
 	// Authenticated vault routes — require Bearer API key.
+	mux.HandleFunc("POST /api/engrams/batch", s.withMiddleware(s.handleBatchCreate))
 	mux.HandleFunc("POST /api/engrams", s.withMiddleware(s.handleCreateEngram))
 	mux.HandleFunc("GET /api/engrams/{id}", s.withMiddleware(s.handleGetEngram))
 	mux.HandleFunc("DELETE /api/engrams/{id}", s.withMiddleware(s.handleDeleteEngram))
@@ -147,6 +183,8 @@ func NewServer(addr string, engine EngineAPI, authStore *auth.Store, sessionSecr
 	mux.HandleFunc("GET /api/admin/vaults/{name}/job-status", s.withAdminMiddleware(s.handleVaultJobStatus))
 	mux.HandleFunc("GET /api/admin/vaults/{name}/export", s.withAdminMiddleware(s.handleExportVault))
 	mux.HandleFunc("POST /api/admin/vaults/import", s.withAdminMiddleware(s.withLargeBody(s.handleImportVault)))
+	mux.HandleFunc("POST /api/admin/vaults/{name}/reindex-fts", s.withAdminMiddleware(s.handleReindexFTSVault))
+	mux.HandleFunc("POST /api/admin/backup", s.withAdminMiddleware(s.handleBackup))
 
 	// Cluster management — session auth required
 	mux.HandleFunc("GET /api/admin/cluster/token", s.withAdminMiddleware(s.handleAdminClusterToken))
@@ -161,9 +199,15 @@ func NewServer(addr string, engine EngineAPI, authStore *auth.Store, sessionSecr
 	mux.HandleFunc("POST /api/admin/cluster/nodes/test", s.withAdminMiddleware(s.handleAdminClusterTestNode))
 	mux.HandleFunc("GET /api/admin/cluster/events", s.withAdminMiddleware(s.handleAdminClusterEvents))
 
+	// Build the global and per-IP rate limiters from env vars with fallback defaults.
+	globalRPS := envIntDefault("MUNINN_RATE_LIMIT_GLOBAL_RPS", 1000)
+	perIPRPS := envIntDefault("MUNINN_RATE_LIMIT_PER_IP_RPS", 100)
+	globalLimiter := rate.NewLimiter(rate.Limit(globalRPS), globalRPS*2)
+	ipCache, _ := lru.New[string, *rate.Limiter](50_000)
+
 	s.server = &http.Server{
 		Addr:           addr,
-		Handler:        s.corsMiddleware(mux),
+		Handler:        newRateLimitMiddleware(globalLimiter, ipCache, perIPRPS)(s.corsMiddleware(mux)),
 		ReadTimeout:    15 * time.Second,
 		WriteTimeout:   15 * time.Second,
 		IdleTimeout:    60 * time.Second,
@@ -197,6 +241,38 @@ func (s *Server) ActiveCoordinator() *replication.ClusterCoordinator {
 
 // SetDataDir sets the data directory used for persisting cluster configuration.
 func (s *Server) SetDataDir(dir string) { s.dataDir = dir }
+
+// SetVersion sets the version string reported by the health endpoint.
+func (s *Server) SetVersion(v string) { s.version = v }
+
+// probeDBWritability runs a periodic background check of data directory writability.
+// It writes and deletes a small sentinel file every 30 seconds rather than on every
+// health request, so load-balancer probes (fired 2-10x/sec) never touch the disk.
+func (s *Server) probeDBWritability() {
+	probe := func() {
+		if s.dataDir == "" {
+			s.dbWritable.Store(true) // no data dir configured; treat as writable
+			return
+		}
+		testFile := s.dataDir + "/.health_probe"
+		err := os.WriteFile(testFile, []byte("1"), 0600)
+		if err == nil {
+			os.Remove(testFile)
+		}
+		s.dbWritable.Store(err == nil)
+	}
+	probe() // run immediately on startup
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			probe()
+		case <-s.shutdown:
+			return
+		}
+	}
+}
 
 // SetCoordinatorFactory wires in a factory function that creates and starts a
 // ClusterCoordinator from a ClusterConfig. Must be called before Serve.
@@ -257,6 +333,7 @@ func (s *Server) Serve(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", s.addr, err)
 	}
+	slog.Info("rest: listening", "addr", listener.Addr().String())
 
 	s.wg.Add(1)
 	close(s.ready) // signal that wg.Add(1) has run; Shutdown may now call wg.Wait safely
@@ -317,10 +394,23 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 // Middleware
 
-// withPublicMiddleware applies observability middleware only (no auth, no body limit).
-// Use for health checks, readiness probes, and the HELLO handshake.
+// withPublicMiddleware applies observability middleware + a 64 KB body size limit
+// (no auth). Use for health checks, readiness probes, and the HELLO handshake.
+// MaxBytesReader is a no-op on GET requests (no body), so it is safe to apply
+// universally across all public routes.
 func (s *Server) withPublicMiddleware(handler http.HandlerFunc) http.HandlerFunc {
-	return s.recoveryMiddleware(s.requestIDMiddleware(s.loggingMiddleware(handler)))
+	return s.recoveryMiddleware(s.requestIDMiddleware(s.loggingMiddleware(s.publicBodySizeMiddleware(handler))))
+}
+
+// publicBodySizeMiddleware limits request bodies to 64 KB on public (unauthenticated)
+// routes. This is smaller than the 4 MB limit used on authenticated routes because
+// public endpoints (health, ready, hello) never legitimately need large payloads.
+func (s *Server) publicBodySizeMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	const maxBody = 64 * 1024 // 64 KB
+	return func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, maxBody)
+		next(w, r)
+	}
 }
 
 // withMiddleware applies the full chain: observability + body size limit + vault auth.
@@ -365,8 +455,14 @@ func (s *Server) recoveryMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if err := recover(); err != nil {
-				slog.Error("panic", "error", err, "path", r.URL.Path)
-				s.sendError(w, http.StatusInternalServerError, ErrInternal, "internal server error")
+				// Re-panic for ErrAbortHandler so Go's HTTP server can close the
+				// connection cleanly. This is used by the export handler to signal
+				// a truncated stream when streaming has already begun.
+				if err == http.ErrAbortHandler {
+					panic(err)
+				}
+				slog.Error("panic", "error", err, "path", r.URL.Path, "stack", string(debug.Stack()))
+				s.sendError(r, w, http.StatusInternalServerError, ErrInternal, "internal server error")
 			}
 		}()
 		next(w, r)
@@ -380,15 +476,29 @@ func (s *Server) requestIDMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			requestID = uuid.New().String()
 		}
 		r.Header.Set("X-Request-ID", requestID)
-		next(w, r)
+		ctx := context.WithValue(r.Context(), ctxKeyRequestID{}, requestID)
+		next(w, r.WithContext(ctx))
 	}
 }
 
 func (s *Server) loggingMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		start := time.Now()
-		next(w, r)
-		elapsed := time.Since(start)
+		next(rec, r)
+		duration := time.Since(start).Seconds()
+		elapsed := time.Duration(duration * float64(time.Second))
+
+		// Use the route pattern (set by Go 1.22+ ServeMux) to avoid high-cardinality
+		// path labels from per-resource IDs.
+		path := r.Pattern
+		if path == "" {
+			path = "unknown"
+		}
+
+		statusClass := fmt.Sprintf("%dxx", rec.status/100)
+		metrics.RESTRequestDuration.WithLabelValues(r.Method, path, statusClass).Observe(duration)
+
 		slog.Info("request", "method", r.Method, "path", r.URL.Path, "duration_ms", elapsed.Milliseconds())
 	}
 }
@@ -398,12 +508,12 @@ func (s *Server) loggingMiddleware(next http.HandlerFunc) http.HandlerFunc {
 func (s *Server) handleHello(w http.ResponseWriter, r *http.Request) {
 	var req HelloRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "invalid request body")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "invalid request body")
 		return
 	}
 	resp, err := s.engine.Hello(r.Context(), &req)
 	if err != nil {
-		s.sendError(w, http.StatusUnauthorized, ErrAuthFailed, err.Error())
+		s.sendError(r, w, http.StatusUnauthorized, ErrAuthFailed, err.Error())
 		return
 	}
 	s.sendJSON(w, http.StatusOK, resp)
@@ -412,7 +522,7 @@ func (s *Server) handleHello(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleCreateEngram(w http.ResponseWriter, r *http.Request) {
 	var req WriteRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "invalid request body")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "invalid request body")
 		return
 	}
 	if req.Vault == "" {
@@ -420,21 +530,66 @@ func (s *Server) handleCreateEngram(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := s.engine.Write(r.Context(), &req)
 	if err != nil {
-		s.sendError(w, http.StatusInternalServerError, ErrStorageError, err.Error())
+		s.sendError(r, w, http.StatusInternalServerError, ErrStorageError, err.Error())
 		return
 	}
 	s.sendJSON(w, http.StatusCreated, resp)
 }
 
+func (s *Server) handleBatchCreate(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Engrams []WriteRequest `json:"engrams"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "invalid request body")
+		return
+	}
+	if len(body.Engrams) == 0 {
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "'engrams' array is required and must not be empty")
+		return
+	}
+	if len(body.Engrams) > 50 {
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "'engrams' exceeds maximum batch size of 50")
+		return
+	}
+
+	reqs := make([]*WriteRequest, len(body.Engrams))
+	for i := range body.Engrams {
+		if body.Engrams[i].Vault == "" {
+			body.Engrams[i].Vault = ctxVault(r)
+		}
+		reqs[i] = &body.Engrams[i]
+	}
+
+	responses, errs := s.engine.WriteBatch(r.Context(), reqs)
+
+	type batchItemResult struct {
+		Index  int    `json:"index"`
+		ID     string `json:"id,omitempty"`
+		Status string `json:"status"`
+		Error  string `json:"error,omitempty"`
+	}
+	results := make([]batchItemResult, len(reqs))
+	for i := range reqs {
+		if errs[i] != nil {
+			results[i] = batchItemResult{Index: i, Status: "error", Error: errs[i].Error()}
+		} else {
+			results[i] = batchItemResult{Index: i, ID: responses[i].ID, Status: "ok"}
+		}
+	}
+
+	s.sendJSON(w, http.StatusCreated, map[string]any{"results": results})
+}
+
 func (s *Server) handleGetEngram(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if id == "" {
-		s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "missing engram id")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "missing engram id")
 		return
 	}
 	resp, err := s.engine.Read(r.Context(), &ReadRequest{ID: id, Vault: ctxVault(r)})
 	if err != nil {
-		s.sendError(w, http.StatusNotFound, ErrEngramNotFound, err.Error())
+		s.sendError(r, w, http.StatusNotFound, ErrEngramNotFound, err.Error())
 		return
 	}
 	s.sendJSON(w, http.StatusOK, resp)
@@ -443,12 +598,12 @@ func (s *Server) handleGetEngram(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDeleteEngram(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if id == "" {
-		s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "missing engram id")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "missing engram id")
 		return
 	}
 	resp, err := s.engine.Forget(r.Context(), &ForgetRequest{ID: id, Vault: ctxVault(r)})
 	if err != nil {
-		s.sendError(w, http.StatusInternalServerError, ErrStorageError, err.Error())
+		s.sendError(r, w, http.StatusInternalServerError, ErrStorageError, err.Error())
 		return
 	}
 	s.sendJSON(w, http.StatusOK, resp)
@@ -457,7 +612,7 @@ func (s *Server) handleDeleteEngram(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleActivate(w http.ResponseWriter, r *http.Request) {
 	var req ActivateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "invalid request body")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "invalid request body")
 		return
 	}
 	if req.Vault == "" {
@@ -465,7 +620,7 @@ func (s *Server) handleActivate(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := s.engine.Activate(r.Context(), &req)
 	if err != nil {
-		s.sendError(w, http.StatusInternalServerError, ErrIndexError, err.Error())
+		s.sendError(r, w, http.StatusInternalServerError, ErrIndexError, err.Error())
 		return
 	}
 	s.sendJSON(w, http.StatusOK, resp)
@@ -474,7 +629,7 @@ func (s *Server) handleActivate(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleLink(w http.ResponseWriter, r *http.Request) {
 	var req LinkRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "invalid request body")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "invalid request body")
 		return
 	}
 	if req.Vault == "" {
@@ -489,16 +644,26 @@ func (s *Server) handleLink(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := s.engine.Link(r.Context(), mbpReq)
 	if err != nil {
-		s.sendError(w, http.StatusInternalServerError, ErrInvalidAssociation, err.Error())
+		if errors.Is(err, engine.ErrEngramNotFound) {
+			s.sendError(r, w, http.StatusNotFound, ErrEngramNotFound, err.Error())
+			return
+		}
+		if errors.Is(err, engine.ErrEngramSoftDeleted) {
+			s.sendError(r, w, http.StatusConflict, ErrInvalidAssociation, err.Error())
+			return
+		}
+		s.sendError(r, w, http.StatusInternalServerError, ErrInvalidAssociation, err.Error())
 		return
 	}
 	s.sendJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
-	resp, err := s.engine.Stat(r.Context(), &StatRequest{})
+	resp, err := s.engine.Stat(r.Context(), &StatRequest{
+		Vault: r.URL.Query().Get("vault"),
+	})
 	if err != nil {
-		s.sendError(w, http.StatusInternalServerError, ErrStorageError, err.Error())
+		s.sendError(r, w, http.StatusInternalServerError, ErrStorageError, err.Error())
 		return
 	}
 	s.sendJSON(w, http.StatusOK, resp)
@@ -510,11 +675,26 @@ func (s *Server) handleWorkerStats(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	ver := s.version
+	if ver == "" {
+		ver = "dev"
+	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(HealthResponse{Status: "ok"})
+	json.NewEncoder(w).Encode(HealthResponse{
+		Status:        "ok",
+		Version:       ver,
+		UptimeSeconds: int64(time.Since(s.startTime).Seconds()),
+		DBWritable:    s.dbWritable.Load(),
+	})
 }
 
 func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
+	if !s.subsystemsReady.Load() {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(map[string]string{"status": "initializing"})
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(ReadyResponse{Status: "ready"})
 }
@@ -537,7 +717,7 @@ func (s *Server) sendJSON(w http.ResponseWriter, statusCode int, data interface{
 	json.NewEncoder(w).Encode(data)
 }
 
-func (s *Server) sendError(w http.ResponseWriter, statusCode int, code ErrorCode, message string) {
+func (s *Server) sendError(r *http.Request, w http.ResponseWriter, statusCode int, code ErrorCode, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
 
@@ -547,10 +727,18 @@ func (s *Server) sendError(w http.ResponseWriter, statusCode int, code ErrorCode
 		displayMsg = "an internal error occurred"
 	}
 
+	var requestID string
+	if r != nil {
+		if id, ok := r.Context().Value(ctxKeyRequestID{}).(string); ok {
+			requestID = id
+		}
+	}
+
 	json.NewEncoder(w).Encode(ErrorResponse{
 		Error: ErrorDetail{
-			Code:    code,
-			Message: displayMsg,
+			Code:      code,
+			Message:   displayMsg,
+			RequestID: requestID,
 		},
 	})
 }
@@ -580,11 +768,149 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-func (s *Server) handleListEngrams(w http.ResponseWriter, r *http.Request) {
-	vault := r.URL.Query().Get("vault")
-	if vault == "" {
-		vault = "default"
+// envIntDefault reads an integer environment variable by key. If the variable is
+// unset, empty, non-numeric, or outside [1, 100000], the provided default is
+// returned and a warning is logged for invalid (non-empty) values.
+func envIntDefault(key string, def int) int {
+	s := os.Getenv(key)
+	if s == "" {
+		return def
 	}
+	v, err := strconv.Atoi(s)
+	if err != nil || v < 1 || v > 100000 {
+		slog.Warn("invalid env var value, using default", "key", key, "value", s, "default", def)
+		return def
+	}
+	return v
+}
+
+// newRateLimitMiddleware returns an http.Handler middleware that enforces both a
+// global token-bucket limiter and a per-IP token-bucket limiter. Requests that
+// exceed either limit receive an immediate 429 JSON response and never enter the
+// downstream recovery/logging chain.
+//
+// The client IP is taken from the direct TCP connection (r.RemoteAddr) only;
+// proxy headers are not trusted.
+func newRateLimitMiddleware(global *rate.Limiter, ipCache *lru.Cache[string, *rate.Limiter], perIPRPS int) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Check global limiter first.
+			if !global.Allow() {
+				res := global.Reserve()
+				delay := res.Delay()
+				res.Cancel()
+				retryAfter := int(delay.Seconds()) + 1
+				w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
+				metrics.RateLimitRejections.WithLabelValues("global").Inc()
+				writeError(w, http.StatusTooManyRequests, "rate_limit_exceeded", "rate limit exceeded")
+				return
+			}
+
+			// Resolve the client IP.
+			ip := clientIP(r)
+
+			// Look up or create the per-IP limiter.
+			limiter, ok := ipCache.Get(ip)
+			if !ok {
+				limiter = rate.NewLimiter(rate.Limit(perIPRPS), perIPRPS*2)
+				ipCache.Add(ip, limiter)
+			}
+
+			if !limiter.Allow() {
+				res := limiter.Reserve()
+				delay := res.Delay()
+				res.Cancel()
+				retryAfter := int(delay.Seconds()) + 1
+				w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
+				metrics.RateLimitRejections.WithLabelValues("per_ip").Inc()
+				writeError(w, http.StatusTooManyRequests, "rate_limit_exceeded", "rate limit exceeded")
+				return
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// clientIP returns the direct TCP peer IP from r.RemoteAddr with the port
+// stripped. Proxy headers (X-Forwarded-For, X-Real-IP) are intentionally
+// ignored because they are attacker-controlled without a trusted proxy list.
+func clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
+// clusterAuthWarnOnce ensures the misconfiguration warning is logged only once.
+var clusterAuthWarnOnce sync.Once
+
+// withClusterAuth returns a per-handler middleware that gates access to cluster
+// and replication routes based on whether the cluster is active and whether a
+// shared secret has been configured.
+//
+// Behaviour:
+//   - cluster inactive (coordinator == nil): pass through, no auth required.
+//   - cluster active + secret empty: reject all requests with 403; log once.
+//   - cluster active + secret non-empty: require "Authorization: Bearer <token>";
+//     reject with 401 on mismatch (constant-time compare).
+func withClusterAuth(secret string, clusterActive bool) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !clusterActive {
+				// Cluster is disabled; no auth required.
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			if secret == "" {
+				// Cluster is active but no secret is configured — this is a
+				// misconfiguration. Reject all callers and warn once.
+				clusterAuthWarnOnce.Do(func() {
+					slog.Warn("rest: cluster is active but no cluster secret is set; all replication/cluster requests will be rejected with 403")
+				})
+				writeError(w, http.StatusForbidden, "cluster_auth_misconfigured", "cluster auth is not configured")
+				return
+			}
+
+			// Extract Bearer token.
+			authHeader := r.Header.Get("Authorization")
+			const prefix = "Bearer "
+			if !strings.HasPrefix(authHeader, prefix) {
+				writeError(w, http.StatusUnauthorized, "cluster_auth_required", "cluster authorization required")
+				return
+			}
+			token := authHeader[len(prefix):]
+
+			// Constant-time comparison to prevent timing attacks.
+			if subtle.ConstantTimeCompare([]byte(token), []byte(secret)) != 1 {
+				writeError(w, http.StatusUnauthorized, "cluster_auth_failed", "invalid cluster token")
+				return
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// withClusterAuthMiddleware wraps a handler with cluster auth using the server's
+// current coordinator state. The coordinator state is evaluated per-request so
+// that routes added at construction time respect coordinator changes made later
+// via SetCoordinator / DisableCluster.
+func (s *Server) withClusterAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		clusterActive := s.coordinator != nil
+		var secret string
+		if clusterActive {
+			secret = s.coordinator.ClusterSecret()
+		}
+		withClusterAuth(secret, clusterActive)(next).ServeHTTP(w, r)
+	}
+}
+
+func (s *Server) handleListEngrams(w http.ResponseWriter, r *http.Request) {
+	vault := ctxVault(r)
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	if limit <= 0 || limit > 100 {
 		limit = 20
@@ -595,7 +921,7 @@ func (s *Server) handleListEngrams(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := s.engine.ListEngrams(r.Context(), &ListEngramsRequest{Vault: vault, Limit: limit, Offset: offset})
 	if err != nil {
-		s.sendError(w, http.StatusInternalServerError, ErrStorageError, err.Error())
+		s.sendError(r, w, http.StatusInternalServerError, ErrStorageError, err.Error())
 		return
 	}
 	s.sendJSON(w, http.StatusOK, resp)
@@ -604,16 +930,13 @@ func (s *Server) handleListEngrams(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGetEngramLinks(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if id == "" {
-		s.sendError(w, http.StatusBadRequest, ErrInvalidEngram, "missing engram id")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "missing engram id")
 		return
 	}
-	vault := r.URL.Query().Get("vault")
-	if vault == "" {
-		vault = "default"
-	}
+	vault := ctxVault(r)
 	resp, err := s.engine.GetEngramLinks(r.Context(), &GetEngramLinksRequest{ID: id, Vault: vault})
 	if err != nil {
-		s.sendError(w, http.StatusInternalServerError, ErrStorageError, err.Error())
+		s.sendError(r, w, http.StatusInternalServerError, ErrStorageError, err.Error())
 		return
 	}
 	s.sendJSON(w, http.StatusOK, resp)
@@ -622,17 +945,14 @@ func (s *Server) handleGetEngramLinks(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleListVaults(w http.ResponseWriter, r *http.Request) {
 	vaults, err := s.engine.ListVaults(r.Context())
 	if err != nil {
-		s.sendError(w, http.StatusInternalServerError, ErrStorageError, err.Error())
+		s.sendError(r, w, http.StatusInternalServerError, ErrStorageError, err.Error())
 		return
 	}
 	s.sendJSON(w, http.StatusOK, vaults)
 }
 
 func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
-	vault := r.URL.Query().Get("vault")
-	if vault == "" {
-		vault = "default"
-	}
+	vault := ctxVault(r)
 	sinceStr := r.URL.Query().Get("since")
 	since := time.Now().Add(-24 * time.Hour)
 	if sinceStr != "" {
@@ -650,7 +970,7 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := s.engine.GetSession(r.Context(), &GetSessionRequest{Vault: vault, Since: since, Limit: limit, Offset: offset})
 	if err != nil {
-		s.sendError(w, http.StatusInternalServerError, ErrStorageError, err.Error())
+		s.sendError(r, w, http.StatusInternalServerError, ErrStorageError, err.Error())
 		return
 	}
 	s.sendJSON(w, http.StatusOK, resp)
@@ -773,7 +1093,11 @@ func (s *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 		flusher.Flush()
 		return
 	}
-	defer s.engine.Unsubscribe(context.Background(), subID)
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		s.engine.Unsubscribe(ctx, subID)
+	}()
 
 	// Confirm subscription to client.
 	fmt.Fprintf(w, "event: subscribed\ndata: {\"id\":%q}\n\n", subID)

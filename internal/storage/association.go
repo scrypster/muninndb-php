@@ -101,22 +101,19 @@ func (ps *PebbleStore) WriteAssociation(ctx context.Context, wsPrefix [8]byte, s
 // Seeks are strictly forward (IDs sorted ascending) so Pebble never seeks backward.
 func (ps *PebbleStore) GetAssociations(ctx context.Context, wsPrefix [8]byte, ids []ULID, maxPerNode int) (map[ULID][]Association, error) {
 	result := make(map[ULID][]Association, len(ids))
-	nowNs := time.Now().UnixNano()
 
 	// Phase 1: serve all cache-warm IDs without touching Pebble.
+	// expirable.LRU handles TTL expiry automatically on Get.
 	var uncached []ULID
 	for _, id := range ids {
 		ck := assocCacheKey(wsPrefix, id)
-		if v, ok := ps.assocCache.Load(ck); ok {
-			entry := v.(*assocCacheEntry)
-			if entry.expires == 0 || nowNs < entry.expires {
-				if maxPerNode <= 0 || len(entry.assocs) <= maxPerNode {
-					result[id] = entry.assocs
-				} else {
-					result[id] = entry.assocs[:maxPerNode]
-				}
-				continue
+		if entry, ok := ps.assocCache.Get(ck); ok {
+			if maxPerNode <= 0 || len(entry.assocs) <= maxPerNode {
+				result[id] = entry.assocs
+			} else {
+				result[id] = entry.assocs[:maxPerNode]
 			}
+			continue
 		}
 		uncached = append(uncached, id)
 	}
@@ -140,8 +137,6 @@ func (ps *PebbleStore) GetAssociations(ctx context.Context, wsPrefix [8]byte, id
 		return nil, fmt.Errorf("assoc iterator: %w", err)
 	}
 	defer iter.Close()
-
-	expiry := nowNs + int64(assocCacheTTL)
 
 	for _, id := range uncached {
 		prefix := keys.AssocFwdPrefixForID(wsPrefix, id) // 0x03 | ws | id (25 bytes)
@@ -178,10 +173,7 @@ func (ps *PebbleStore) GetAssociations(ctx context.Context, wsPrefix [8]byte, id
 		}
 
 		result[id] = assocs
-		ps.assocCache.Store(assocCacheKey(wsPrefix, id), &assocCacheEntry{
-			assocs:  assocs,
-			expires: expiry,
-		})
+		ps.assocCache.Add(assocCacheKey(wsPrefix, id), &assocCacheEntry{assocs: assocs})
 	}
 
 	return result, nil
@@ -193,16 +185,13 @@ func (ps *PebbleStore) GetAssociations(ctx context.Context, wsPrefix [8]byte, id
 // the calling loop (which would defer until the outer function returned).
 func (ps *PebbleStore) associationsForOne(wsPrefix [8]byte, id ULID, maxPerNode int) ([]Association, error) {
 	// Fast path: check in-memory cache.
+	// expirable.LRU handles TTL expiry automatically on Get.
 	ck := assocCacheKey(wsPrefix, id)
-	now := time.Now().UnixNano()
-	if v, ok := ps.assocCache.Load(ck); ok {
-		entry := v.(*assocCacheEntry)
-		if entry.expires == 0 || now < entry.expires {
-			if maxPerNode <= 0 || len(entry.assocs) <= maxPerNode {
-				return entry.assocs, nil
-			}
-			return entry.assocs[:maxPerNode], nil
+	if entry, ok := ps.assocCache.Get(ck); ok {
+		if maxPerNode <= 0 || len(entry.assocs) <= maxPerNode {
+			return entry.assocs, nil
 		}
+		return entry.assocs[:maxPerNode], nil
 	}
 
 	// Build prefix: 0x03 | wsPrefix | id
@@ -245,11 +234,8 @@ func (ps *PebbleStore) associationsForOne(wsPrefix [8]byte, id ULID, maxPerNode 
 			LastActivated: lastActivated,
 		})
 	}
-	// Populate cache with TTL — repeated reads skip Pebble; stale weights are acceptable.
-	ps.assocCache.Store(ck, &assocCacheEntry{
-		assocs:  assocs,
-		expires: time.Now().Add(assocCacheTTL).UnixNano(),
-	})
+	// Populate cache — expirable.LRU enforces the TTL automatically.
+	ps.assocCache.Add(ck, &assocCacheEntry{assocs: assocs})
 	return assocs, nil
 }
 

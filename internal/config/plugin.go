@@ -20,6 +20,35 @@ type PluginConfig struct {
 	EnrichProvider string `json:"enrich_provider"` // "ollama", "openai", "anthropic"
 	EnrichURL      string `json:"enrich_url"`      // full provider URL
 	EnrichAPIKey   string `json:"enrich_api_key"`  // API key
+
+	// Per-stage enrichment flags (nil = default true)
+	EnrichEntities       *bool  `json:"enrich_entities,omitempty"`
+	EnrichRelationships  *bool  `json:"enrich_relationships,omitempty"`
+	EnrichClassification *bool  `json:"enrich_classification,omitempty"`
+	EnrichSummary        *bool  `json:"enrich_summary,omitempty"`
+	EnrichMode           string `json:"enrich_mode,omitempty"` // "full" (default) or "light"
+}
+
+// EnrichStageEnabled returns whether a given enrichment stage is enabled.
+// Nil pointer fields default to true.
+func (c *PluginConfig) EnrichStageEnabled(stage string) bool {
+	switch stage {
+	case "entities":
+		return c.EnrichEntities == nil || *c.EnrichEntities
+	case "relationships":
+		return c.EnrichRelationships == nil || *c.EnrichRelationships
+	case "classification":
+		return c.EnrichClassification == nil || *c.EnrichClassification
+	case "summary":
+		return c.EnrichSummary == nil || *c.EnrichSummary
+	default:
+		return true
+	}
+}
+
+// IsLightMode returns true when enrichment should use the light pipeline (summary only).
+func (c *PluginConfig) IsLightMode() bool {
+	return c.EnrichMode == "light"
 }
 
 // LoadPluginConfig reads plugin_config.json from dataDir.

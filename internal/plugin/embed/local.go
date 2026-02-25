@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 
 	"github.com/sugarme/tokenizer"
@@ -18,10 +19,10 @@ import (
 )
 
 const (
-	localModelDim    = 384   // all-MiniLM-L6-v2 output dimension
-	localMaxTokens   = 256   // model max sequence length
-	localMaxBatch    = 1     // sequential: one text at a time (safe for embedded ORT)
-	ortSentinelFile  = ".ort_extracted" // marker written after successful extraction
+	localModelDim   = 384  // all-MiniLM-L6-v2 output dimension
+	localMaxTokens  = 256  // model max sequence length
+	localMaxBatch   = 64   // texts per ORT inference call (DynamicAdvancedSession)
+	ortSentinelFile = ".ort_extracted"
 )
 
 // ortInitOnce guards the global ORT environment — there can only be one.
@@ -33,19 +34,17 @@ var (
 // LocalProvider implements Provider using the bundled all-MiniLM-L6-v2 ONNX model.
 // No external process or network connection is required; all assets are embedded
 // in the binary and extracted to DataDir on first Init.
+//
+// Uses DynamicAdvancedSession so tensors are allocated per-call at the actual
+// batch size, supporting variable-sized batches up to localMaxBatch.
 type LocalProvider struct {
-	// mu protects session and tokenizer after Init.
+	// mu serialises ORT session calls; DynamicAdvancedSession is not
+	// guaranteed thread-safe from the Go wrapper's perspective.
 	mu sync.Mutex
 
-	session   *ort.AdvancedSession
-	tok       *tokenizer.Tokenizer
-	dataDir   string
-
-	// pre-allocated tensors reused across EmbedBatch calls (avoids GC pressure)
-	inputIDs      *ort.Tensor[int64]
-	attentionMask *ort.Tensor[int64]
-	tokenTypeIDs  *ort.Tensor[int64]
-	outputTensor  *ort.Tensor[float32]
+	session *ort.DynamicAdvancedSession
+	tok     *tokenizer.Tokenizer
+	dataDir string
 }
 
 func (p *LocalProvider) Name() string { return "local" }
@@ -80,7 +79,11 @@ func (p *LocalProvider) Init(ctx context.Context, cfg ProviderHTTPConfig) (int, 
 		ortInitErr = ort.InitializeEnvironment()
 	})
 	if ortInitErr != nil {
-		return 0, fmt.Errorf("local provider: ORT environment init: %w", ortInitErr)
+		hint := ""
+		if runtime.GOOS == "windows" {
+			hint = " (if onnxruntime.dll fails to load, install the Visual C++ 2019 Redistributable: https://aka.ms/vs/17/release/vc_redist.x64.exe)"
+		}
+		return 0, fmt.Errorf("local provider: ORT environment init: %w%s", ortInitErr, hint)
 	}
 
 	// Load tokenizer.
@@ -90,41 +93,10 @@ func (p *LocalProvider) Init(ctx context.Context, cfg ProviderHTTPConfig) (int, 
 		return 0, fmt.Errorf("local provider: load tokenizer: %w", err)
 	}
 	p.tok = tok
-
-	// Pre-allocate tensors for one sequence of localMaxTokens tokens.
-	shape := ort.NewShape(1, int64(localMaxTokens))
-
-	inputIDs, err := ort.NewEmptyTensor[int64](shape)
-	if err != nil {
-		return 0, fmt.Errorf("local provider: alloc input_ids: %w", err)
-	}
-	attentionMask, err := ort.NewEmptyTensor[int64](shape)
-	if err != nil {
-		inputIDs.Destroy()
-		return 0, fmt.Errorf("local provider: alloc attention_mask: %w", err)
-	}
-	tokenTypeIDs, err := ort.NewEmptyTensor[int64](shape)
-	if err != nil {
-		inputIDs.Destroy()
-		attentionMask.Destroy()
-		return 0, fmt.Errorf("local provider: alloc token_type_ids: %w", err)
-	}
-	outputShape := ort.NewShape(1, int64(localMaxTokens), int64(localModelDim))
-	outputTensor, err := ort.NewEmptyTensor[float32](outputShape)
-	if err != nil {
-		inputIDs.Destroy()
-		attentionMask.Destroy()
-		tokenTypeIDs.Destroy()
-		return 0, fmt.Errorf("local provider: alloc output: %w", err)
-	}
-
-	p.inputIDs = inputIDs
-	p.attentionMask = attentionMask
-	p.tokenTypeIDs = tokenTypeIDs
-	p.outputTensor = outputTensor
 	p.dataDir = dataDir
 
-	// Create the ORT session.
+	// Create the ORT session. DynamicAdvancedSession does not bind tensors at
+	// init time — tensors are passed per Run() call at the actual batch size.
 	modelPath := filepath.Join(modelDir, "model_int8.onnx")
 	opts, err := ort.NewSessionOptions()
 	if err != nil {
@@ -132,15 +104,22 @@ func (p *LocalProvider) Init(ctx context.Context, cfg ProviderHTTPConfig) (int, 
 	}
 	defer opts.Destroy()
 
-	// Prefer speed over accuracy since this is INT8 quantized already.
-	opts.SetIntraOpNumThreads(1) //nolint:errcheck
+	// Allow ORT to use up to half the logical CPUs (min 1, max 4) for intra-op
+	// parallelism. This helps batch inference on multi-core hardware without
+	// over-subscribing when multiple goroutines share the process.
+	numThreads := runtime.NumCPU() / 2
+	if numThreads < 1 {
+		numThreads = 1
+	}
+	if numThreads > 4 {
+		numThreads = 4
+	}
+	opts.SetIntraOpNumThreads(numThreads) //nolint:errcheck
 
-	session, err := ort.NewAdvancedSession(
+	session, err := ort.NewDynamicAdvancedSession(
 		modelPath,
 		[]string{"input_ids", "attention_mask", "token_type_ids"},
 		[]string{"last_hidden_state"},
-		[]ort.Value{inputIDs, attentionMask, tokenTypeIDs},
-		[]ort.Value{outputTensor},
 		opts,
 	)
 	if err != nil {
@@ -157,9 +136,17 @@ func (p *LocalProvider) Init(ctx context.Context, cfg ProviderHTTPConfig) (int, 
 	return localModelDim, nil
 }
 
-// EmbedBatch encodes a single text and returns a 384-dim embedding.
-// MaxBatchSize() == 1 so BatchEmbedder always calls with len(texts)==1.
+// EmbedBatch tokenizes up to localMaxBatch texts, runs a single ORT inference
+// call for the whole batch, and returns the concatenated 384-dim embeddings.
+// The caller (BatchEmbedder) ensures len(texts) <= localMaxBatch.
 func (p *LocalProvider) EmbedBatch(ctx context.Context, texts []string) ([]float32, error) {
+	if len(texts) == 0 {
+		return nil, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -167,74 +154,90 @@ func (p *LocalProvider) EmbedBatch(ctx context.Context, texts []string) ([]float
 		return nil, fmt.Errorf("local provider not initialized")
 	}
 
-	result := make([]float32, 0, len(texts)*localModelDim)
+	batchSize := len(texts)
 
-	for i, text := range texts {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-
-		vec, err := p.embedOne(text)
-		if err != nil {
-			return nil, fmt.Errorf("local provider: embed text[%d]: %w", i, err)
-		}
-		result = append(result, vec...)
-	}
-
-	return result, nil
-}
-
-// embedOne tokenizes one text, runs ORT inference, and returns a mean-pooled
-// L2-normalized 384-dim vector.
-func (p *LocalProvider) embedOne(text string) ([]float32, error) {
-	// Tokenize with special tokens ([CLS], [SEP]).
-	enc, err := p.tok.EncodeSingle(text, true)
+	// Allocate input tensors at actual batch size. Zeroed on allocation.
+	inShape := ort.NewShape(int64(batchSize), int64(localMaxTokens))
+	inputIDs, err := ort.NewEmptyTensor[int64](inShape)
 	if err != nil {
-		return nil, fmt.Errorf("tokenize: %w", err)
+		return nil, fmt.Errorf("local provider: alloc input_ids: %w", err)
 	}
+	defer inputIDs.Destroy()
 
-	ids := enc.GetIds()
-	mask := enc.GetAttentionMask()
-	typeIDs := enc.GetTypeIds()
-
-	// Truncate to max sequence length.
-	seqLen := len(ids)
-	if seqLen > localMaxTokens {
-		ids = ids[:localMaxTokens]
-		mask = mask[:localMaxTokens]
-		typeIDs = typeIDs[:localMaxTokens]
-		seqLen = localMaxTokens
+	attentionMask, err := ort.NewEmptyTensor[int64](inShape)
+	if err != nil {
+		return nil, fmt.Errorf("local provider: alloc attention_mask: %w", err)
 	}
+	defer attentionMask.Destroy()
 
-	// Fill pre-allocated tensor buffers.
-	// Buffers are length localMaxTokens; zero out then fill the active prefix.
-	inputBuf := p.inputIDs.GetData()
-	maskBuf := p.attentionMask.GetData()
-	typeBuf := p.tokenTypeIDs.GetData()
+	tokenTypeIDs, err := ort.NewEmptyTensor[int64](inShape)
+	if err != nil {
+		return nil, fmt.Errorf("local provider: alloc token_type_ids: %w", err)
+	}
+	defer tokenTypeIDs.Destroy()
 
+	outShape := ort.NewShape(int64(batchSize), int64(localMaxTokens), int64(localModelDim))
+	outputTensor, err := ort.NewEmptyTensor[float32](outShape)
+	if err != nil {
+		return nil, fmt.Errorf("local provider: alloc output: %w", err)
+	}
+	defer outputTensor.Destroy()
+
+	inputBuf := inputIDs.GetData()
+	maskBuf := attentionMask.GetData()
+	typeBuf := tokenTypeIDs.GetData()
+
+	// Explicitly zero buffers — ORT allocator does not guarantee zeroed memory.
 	for i := range inputBuf {
 		inputBuf[i] = 0
 		maskBuf[i] = 0
 		typeBuf[i] = 0
 	}
-	for i := 0; i < seqLen; i++ {
-		inputBuf[i] = int64(ids[i])
-		maskBuf[i] = int64(mask[i])
-		typeBuf[i] = int64(typeIDs[i])
+
+	// Tokenize and pack each text into the batch tensor.
+	for i, text := range texts {
+		enc, encErr := p.tok.EncodeSingle(text, true)
+		if encErr != nil {
+			return nil, fmt.Errorf("local provider: tokenize text[%d]: %w", i, encErr)
+		}
+		ids := enc.GetIds()
+		mask := enc.GetAttentionMask()
+		typeIDs := enc.GetTypeIds()
+
+		seqLen := len(ids)
+		if seqLen > localMaxTokens {
+			seqLen = localMaxTokens
+		}
+		offset := i * localMaxTokens
+		for j := 0; j < seqLen; j++ {
+			inputBuf[offset+j] = int64(ids[j])
+			maskBuf[offset+j] = int64(mask[j])
+			typeBuf[offset+j] = int64(typeIDs[j])
+		}
 	}
 
-	// Run inference.
-	if err := p.session.Run(); err != nil {
-		return nil, fmt.Errorf("ORT run: %w", err)
+	// Single ORT inference call for the entire batch.
+	if err := p.session.Run(
+		[]ort.Value{inputIDs, attentionMask, tokenTypeIDs},
+		[]ort.Value{outputTensor},
+	); err != nil {
+		return nil, fmt.Errorf("local provider: ORT run: %w", err)
 	}
 
-	// last_hidden_state shape: [1, localMaxTokens, localModelDim]
-	// Mean pool over the non-padding tokens (where attention_mask == 1).
-	hidden := p.outputTensor.GetData()
-	vec := meanPool(hidden, maskBuf, seqLen, localModelDim)
-	l2Normalize(vec)
+	// Unpack output shape [batchSize, localMaxTokens, localModelDim].
+	// For each sequence: mean-pool over non-padding tokens, then L2-normalise.
+	hidden := outputTensor.GetData()
+	result := make([]float32, 0, batchSize*localModelDim)
+	seqStride := localMaxTokens * localModelDim
+	for i := 0; i < batchSize; i++ {
+		seqHidden := hidden[i*seqStride : (i+1)*seqStride]
+		seqMask := maskBuf[i*localMaxTokens : (i+1)*localMaxTokens]
+		vec := meanPool(seqHidden, seqMask, localMaxTokens, localModelDim)
+		l2Normalize(vec)
+		result = append(result, vec...)
+	}
 
-	return vec, nil
+	return result, nil
 }
 
 // meanPool computes the mean of token embeddings weighted by the attention mask.
@@ -275,7 +278,7 @@ func l2Normalize(v []float32) {
 	}
 }
 
-// Close releases ORT session and pre-allocated tensors.
+// Close releases the ORT session.
 func (p *LocalProvider) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -283,22 +286,6 @@ func (p *LocalProvider) Close() error {
 	if p.session != nil {
 		_ = p.session.Destroy()
 		p.session = nil
-	}
-	if p.inputIDs != nil {
-		_ = p.inputIDs.Destroy()
-		p.inputIDs = nil
-	}
-	if p.attentionMask != nil {
-		_ = p.attentionMask.Destroy()
-		p.attentionMask = nil
-	}
-	if p.tokenTypeIDs != nil {
-		_ = p.tokenTypeIDs.Destroy()
-		p.tokenTypeIDs = nil
-	}
-	if p.outputTensor != nil {
-		_ = p.outputTensor.Destroy()
-		p.outputTensor = nil
 	}
 	return nil
 }
@@ -344,10 +331,12 @@ func ensureExtracted(ctx context.Context, modelDir string) error {
 		return fmt.Errorf("write sentinel: %w", err)
 	}
 
-	// Make the native lib executable (required on unix).
-	libPath := filepath.Join(modelDir, nativeLibFilename)
-	if err := os.Chmod(libPath, 0o755); err != nil {
-		return fmt.Errorf("chmod native lib: %w", err)
+	// Make the native lib executable (required on unix, no-op on Windows).
+	if runtime.GOOS != "windows" {
+		libPath := filepath.Join(modelDir, nativeLibFilename)
+		if err := os.Chmod(libPath, 0o755); err != nil {
+			return fmt.Errorf("chmod native lib: %w", err)
+		}
 	}
 
 	slog.Info("local embed assets extracted", "dir", modelDir)

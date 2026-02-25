@@ -3,9 +3,11 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 
+	"github.com/scrypster/muninndb/internal/auth"
 	"github.com/scrypster/muninndb/internal/storage"
 	"github.com/scrypster/muninndb/internal/transport/mbp"
 )
@@ -41,13 +43,110 @@ func (s *MCPServer) handleRemember(ctx context.Context, w http.ResponseWriter, i
 		}
 		req.Confidence = float32(conf)
 	}
+	if caStr, ok := args["created_at"].(string); ok && caStr != "" {
+		t, err := time.Parse(time.RFC3339, caStr)
+		if err != nil {
+			sendError(w, id, -32602, "invalid 'created_at': must be ISO 8601 (e.g. 2026-01-15T09:00:00Z)")
+			return
+		}
+		req.CreatedAt = &t
+	}
+	applyTypeArgs(args, req)
+	applyEnrichmentArgs(args, req)
 
 	resp, err := s.engine.Write(ctx, req)
 	if err != nil {
 		sendError(w, id, -32000, "tool error: "+err.Error())
 		return
 	}
-	sendResult(w, id, textContent(mustJSON(WriteResult{ID: resp.ID})))
+	result := WriteResult{ID: resp.ID}
+	if len(content) > 500 {
+		result.Hint = "Tip: memories work best when each one captures a single concept. For future writes, consider using muninn_remember_batch to store multiple focused memories at once."
+	}
+	sendResult(w, id, textContent(mustJSON(result)))
+}
+
+func (s *MCPServer) handleRememberBatch(ctx context.Context, w http.ResponseWriter, id json.RawMessage, vault string, args map[string]any) {
+	memoriesAny, ok := args["memories"].([]any)
+	if !ok || len(memoriesAny) == 0 {
+		sendError(w, id, -32602, "invalid params: 'memories' is required and must be a non-empty array")
+		return
+	}
+	if len(memoriesAny) > 50 {
+		sendError(w, id, -32602, "invalid params: 'memories' exceeds maximum of 50")
+		return
+	}
+
+	reqs := make([]*mbp.WriteRequest, 0, len(memoriesAny))
+	for i, mAny := range memoriesAny {
+		m, ok := mAny.(map[string]any)
+		if !ok {
+			sendError(w, id, -32602, fmt.Sprintf("invalid params: memories[%d] must be an object", i))
+			return
+		}
+		content, ok := m["content"].(string)
+		if !ok || content == "" {
+			sendError(w, id, -32602, fmt.Sprintf("invalid params: memories[%d].content is required", i))
+			return
+		}
+		req := &mbp.WriteRequest{
+			Vault:   vault,
+			Content: content,
+		}
+		if c, ok := m["concept"].(string); ok {
+			req.Concept = c
+		}
+		if tags, ok := m["tags"].([]any); ok {
+			for _, t := range tags {
+				if s, ok := t.(string); ok && len(s) > 0 && len(s) <= 128 {
+					req.Tags = append(req.Tags, s)
+				}
+			}
+			if len(req.Tags) > 50 {
+				req.Tags = req.Tags[:50]
+			}
+		}
+		if conf, ok := m["confidence"].(float64); ok {
+			if conf < 0 {
+				conf = 0
+			} else if conf > 1 {
+				conf = 1
+			}
+			req.Confidence = float32(conf)
+		}
+		if caStr, ok := m["created_at"].(string); ok && caStr != "" {
+			t, err := time.Parse(time.RFC3339, caStr)
+			if err != nil {
+				sendError(w, id, -32602, fmt.Sprintf("invalid 'created_at' in memories[%d]: must be ISO 8601", i))
+				return
+			}
+			req.CreatedAt = &t
+		}
+		applyTypeArgs(m, req)
+		applyEnrichmentArgs(m, req)
+		reqs = append(reqs, req)
+	}
+
+	responses, errs := s.engine.WriteBatch(ctx, reqs)
+
+	type batchItemResult struct {
+		Index  int    `json:"index"`
+		ID     string `json:"id,omitempty"`
+		Status string `json:"status"`
+		Error  string `json:"error,omitempty"`
+	}
+	results := make([]batchItemResult, len(reqs))
+	for i := range reqs {
+		if errs[i] != nil {
+			results[i] = batchItemResult{Index: i, Status: "error", Error: errs[i].Error()}
+		} else {
+			results[i] = batchItemResult{Index: i, ID: responses[i].ID, Status: "ok"}
+		}
+	}
+	sendResult(w, id, textContent(mustJSON(map[string]any{
+		"results": results,
+		"total":   len(results),
+	})))
 }
 
 func (s *MCPServer) handleRecall(ctx context.Context, w http.ResponseWriter, id json.RawMessage, vault string, args map[string]any) {
@@ -84,13 +183,55 @@ func (s *MCPServer) handleRecall(ctx context.Context, w http.ResponseWriter, id 
 
 	profile, _ := args["profile"].(string)
 
-	resp, err := s.engine.Activate(ctx, &mbp.ActivateRequest{
+	// Mode shortcuts: resolve preset if provided.
+	var modePreset RecallMode
+	if modeStr, ok := args["mode"].(string); ok && modeStr != "" {
+		preset, modeErr := lookupMode(modeStr)
+		if modeErr != nil {
+			sendError(w, id, -32602, modeErr.Error())
+			return
+		}
+		modePreset = preset
+	}
+
+	req := &mbp.ActivateRequest{
 		Vault:      vault,
 		Context:    contexts,
 		Threshold:  threshold,
 		MaxResults: limit,
 		Profile:    profile,
-	})
+	}
+
+	// Apply non-zero mode preset fields.
+	// Explicit caller threshold/limit args always win (already parsed above).
+	if modePreset.Threshold > 0 {
+		if _, callerSet := args["threshold"]; !callerSet {
+			req.Threshold = modePreset.Threshold
+		}
+	}
+	if modePreset.MaxHops > 0 {
+		req.MaxHops = modePreset.MaxHops
+	}
+
+	// Temporal filters: since / before
+	if sinceStr, ok := args["since"].(string); ok && sinceStr != "" {
+		t, err := time.Parse(time.RFC3339, sinceStr)
+		if err != nil {
+			sendError(w, id, -32602, "invalid 'since': must be ISO 8601 (e.g. 2026-01-15T00:00:00Z)")
+			return
+		}
+		req.Filters = append(req.Filters, mbp.Filter{Field: "created_after", Op: ">=", Value: t})
+	}
+	if beforeStr, ok := args["before"].(string); ok && beforeStr != "" {
+		t, err := time.Parse(time.RFC3339, beforeStr)
+		if err != nil {
+			sendError(w, id, -32602, "invalid 'before': must be ISO 8601 (e.g. 2026-01-20T00:00:00Z)")
+			return
+		}
+		req.Filters = append(req.Filters, mbp.Filter{Field: "created_before", Op: "<", Value: t})
+	}
+
+	resp, err := s.engine.Activate(ctx, req)
 	if err != nil {
 		sendError(w, id, -32000, "tool error: "+err.Error())
 		return
@@ -450,6 +591,102 @@ func (s *MCPServer) handleRetryEnrich(ctx context.Context, w http.ResponseWriter
 		return
 	}
 	sendResult(w, id, textContent(mustJSON(result)))
+}
+
+func (s *MCPServer) handleGuide(ctx context.Context, w http.ResponseWriter, id json.RawMessage, vault string, args map[string]any) {
+	plasticity, err := s.engine.GetVaultPlasticity(ctx, vault)
+	if err != nil {
+		// Fall back to defaults if plasticity is unavailable.
+		defaults := auth.ResolvePlasticity(nil)
+		plasticity = &defaults
+	}
+
+	statResp, err := s.engine.Stat(ctx, &mbp.StatRequest{Vault: vault})
+	if err != nil {
+		sendError(w, id, -32000, "tool error: "+err.Error())
+		return
+	}
+
+	stats := engineStats{
+		EngramCount: statResp.EngramCount,
+		VaultCount:  statResp.VaultCount,
+	}
+	guide := generateGuide(vault, *plasticity, stats)
+	sendResult(w, id, textContent(guide))
+}
+
+// applyTypeArgs parses the "type" and "type_label" arguments from an MCP call
+// and sets MemoryType + TypeLabel on the WriteRequest accordingly.
+func applyTypeArgs(args map[string]any, req *mbp.WriteRequest) {
+	typeStr, _ := args["type"].(string)
+	explicitLabel, _ := args["type_label"].(string)
+
+	if typeStr != "" {
+		if mt, ok := storage.ParseMemoryType(typeStr); ok {
+			req.MemoryType = uint8(mt)
+			if explicitLabel == "" {
+				req.TypeLabel = typeStr
+			}
+		} else {
+			// Not a known enum name — store as free-form label, default to Fact.
+			req.MemoryType = uint8(storage.TypeFact)
+			if explicitLabel == "" {
+				req.TypeLabel = typeStr
+			}
+		}
+	}
+	if explicitLabel != "" {
+		req.TypeLabel = explicitLabel
+	}
+}
+
+// applyEnrichmentArgs parses optional inline enrichment fields (summary, entities,
+// relationships) from MCP tool call arguments onto the WriteRequest.
+func applyEnrichmentArgs(args map[string]any, req *mbp.WriteRequest) {
+	if summary, ok := args["summary"].(string); ok && summary != "" {
+		req.Summary = summary
+	}
+	if entitiesAny, ok := args["entities"].([]any); ok {
+		for _, eAny := range entitiesAny {
+			eMap, ok := eAny.(map[string]any)
+			if !ok {
+				continue
+			}
+			name, _ := eMap["name"].(string)
+			typ, _ := eMap["type"].(string)
+			if name == "" || typ == "" {
+				continue
+			}
+			req.Entities = append(req.Entities, mbp.InlineEntity{Name: name, Type: typ})
+		}
+	}
+	if relsAny, ok := args["relationships"].([]any); ok {
+		for _, rAny := range relsAny {
+			rMap, ok := rAny.(map[string]any)
+			if !ok {
+				continue
+			}
+			targetID, _ := rMap["target_id"].(string)
+			relation, _ := rMap["relation"].(string)
+			if targetID == "" || relation == "" {
+				continue
+			}
+			weight := float32(0.9)
+			if w, ok := rMap["weight"].(float64); ok {
+				if w < 0 {
+					w = 0
+				} else if w > 1 {
+					w = 1
+				}
+				weight = float32(w)
+			}
+			req.Relationships = append(req.Relationships, mbp.InlineRelationship{
+				TargetID: targetID,
+				Relation: relation,
+				Weight:   weight,
+			})
+		}
+	}
 }
 
 var relTypeMap = map[string]storage.RelType{

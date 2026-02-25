@@ -31,14 +31,14 @@ func testEnv(t *testing.T) (*Engine, func()) {
 		t.Fatal(err)
 	}
 
-	store := storage.NewPebbleStore(db, 1000)
+	store := storage.NewPebbleStore(db, storage.PebbleStoreConfig{CacheSize: 1000})
 	ftsIdx := fts.New(db)
 
 	// Minimal no-op embedder and adapters
 	embedder := &noopEmbedder{}
 	actEngine := activation.New(store, &ftsAdapter{ftsIdx}, nil, embedder)
 	trigSystem := trigger.New(store, &ftsTrigAdapter{ftsIdx}, nil, embedder)
-	eng := NewEngine(store, nil, ftsIdx, actEngine, trigSystem, nil, nil, nil, nil, embedder, nil)
+	eng := NewEngine(store, nil, ftsIdx, actEngine, trigSystem, nil, nil, nil, embedder, nil)
 
 	return eng, func() {
 		eng.Stop()    // stop FTS worker, novelty worker, coherence flush, autoAssoc
@@ -273,7 +273,7 @@ func TestActivateVaultIsolation(t *testing.T) {
 }
 
 // TestActivateThresholdFiltering verifies that results below the threshold
-// are not returned even when FTS or decay would score them above zero.
+// are not returned even when FTS or temporal scoring would score them above zero.
 func TestActivateThresholdFiltering(t *testing.T) {
 	eng, cleanup := testEnv(t)
 	defer cleanup()
@@ -330,6 +330,9 @@ func TestActivateConfidenceAffectsScore(t *testing.T) {
 		t.Fatalf("Write low confidence: %v", err)
 	}
 
+	// Allow async FTS worker to index (same as TestActivateReturnsResults).
+	time.Sleep(300 * time.Millisecond)
+
 	resp, err := eng.Activate(ctx, &mbp.ActivateRequest{
 		Vault:      "test",
 		Context:    []string{"compiled programming language Google systems"},
@@ -370,7 +373,7 @@ func TestEngineWorkersSubmit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store := storage.NewPebbleStore(db, 1000)
+	store := storage.NewPebbleStore(db, storage.PebbleStoreConfig{CacheSize: 1000})
 	ftsIdx := fts.New(db)
 
 	// Create embedder and adapters
@@ -378,7 +381,7 @@ func TestEngineWorkersSubmit(t *testing.T) {
 	actEngine := activation.New(store, &ftsAdapter{ftsIdx}, nil, embedder)
 	trigSystem := trigger.New(store, &ftsTrigAdapter{ftsIdx}, nil, embedder)
 
-	eng := NewEngine(store, nil, ftsIdx, actEngine, trigSystem, nil, nil, nil, nil, embedder, nil)
+	eng := NewEngine(store, nil, ftsIdx, actEngine, trigSystem, nil, nil, nil, embedder, nil)
 	defer func() {
 		eng.Stop()    // stop FTS worker and other background goroutines before closing db
 		store.Close() // stop PebbleStore background workers and close db
@@ -395,6 +398,9 @@ func TestEngineWorkersSubmit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Write: %v", err)
 	}
+
+	// Allow async FTS worker to index (same as TestActivateReturnsResults).
+	time.Sleep(300 * time.Millisecond)
 
 	// Activate (which should trigger worker submissions if workers were wired)
 	resp, err := eng.Activate(ctx, &mbp.ActivateRequest{
@@ -850,6 +856,9 @@ func TestActivateObserveModeDoesNotError(t *testing.T) {
 		t.Fatalf("Write: %v", err)
 	}
 
+	// Allow async FTS worker to index (same as TestActivateReturnsResults).
+	time.Sleep(300 * time.Millisecond)
+
 	// Normal activate (not observe mode) — baseline.
 	resp, err := eng.Activate(ctx, &mbp.ActivateRequest{
 		Vault:      "test",
@@ -945,7 +954,7 @@ func TestEngineStopFlushesCoherence(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Task 3: Plasticity gates Hebbian and Decay workers in Activate()
+// Task 3: Plasticity gates Hebbian and Temporal workers in Activate()
 // ---------------------------------------------------------------------------
 
 // TestActivate_PlasticityGatesHebbian verifies that the engine correctly resolves
@@ -963,7 +972,7 @@ func TestActivate_PlasticityGatesHebbian(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store := storage.NewPebbleStore(db, 1000)
+	store := storage.NewPebbleStore(db, storage.PebbleStoreConfig{CacheSize: 1000})
 	ftsIdx := fts.New(db)
 
 	embedder := &noopEmbedder{}
@@ -983,7 +992,7 @@ func TestActivate_PlasticityGatesHebbian(t *testing.T) {
 		t.Fatalf("SetVaultConfig: %v", err)
 	}
 
-	eng := NewEngine(store, as, ftsIdx, actEngine, trigSystem, nil, nil, nil, nil, embedder, nil)
+	eng := NewEngine(store, as, ftsIdx, actEngine, trigSystem, nil, nil, nil, embedder, nil)
 	defer func() {
 		eng.Stop()
 		store.Close()
@@ -1015,7 +1024,7 @@ func TestActivate_PlasticityGatesHebbian(t *testing.T) {
 	}
 
 	// Also verify that nil authStore (default test path) gives no panic.
-	eng2 := NewEngine(store, nil, ftsIdx, actEngine, trigSystem, nil, nil, nil, nil, embedder, nil)
+	eng2 := NewEngine(store, nil, ftsIdx, actEngine, trigSystem, nil, nil, nil, embedder, nil)
 	defer func() {
 		eng2.Stop()
 	}()
@@ -1071,7 +1080,7 @@ func TestEngine_LobeMode_CollectsEffects(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store := storage.NewPebbleStore(db, 1000)
+	store := storage.NewPebbleStore(db, storage.PebbleStoreConfig{CacheSize: 1000})
 	ftsIdx := fts.New(db)
 
 	embedder := &noopEmbedder{}
@@ -1079,7 +1088,7 @@ func TestEngine_LobeMode_CollectsEffects(t *testing.T) {
 	trigSystem := trigger.New(store, &ftsTrigAdapter{ftsIdx}, nil, embedder)
 
 	// nil workers — simulates Lobe mode
-	eng := NewEngine(store, nil, ftsIdx, actEngine, trigSystem, nil, nil, nil, nil, embedder, nil)
+	eng := NewEngine(store, nil, ftsIdx, actEngine, trigSystem, nil, nil, nil, embedder, nil)
 	defer func() {
 		eng.Stop()
 		store.Close()
@@ -1118,7 +1127,7 @@ func TestEngine_LobeMode_CollectsEffects(t *testing.T) {
 
 	// ForwardCognitiveEffects is called synchronously from engine before returning,
 	// but the mock is called directly (not via goroutine), so no sleep needed.
-	// However the default plasticity has HebbianEnabled=true and DecayEnabled=true,
+	// However the default plasticity has HebbianEnabled=true and TemporalEnabled=true,
 	// so at least one of co_activations or accessed_ids should be populated.
 	effects := fwd.received()
 	if len(effects) == 0 {
@@ -1176,7 +1185,7 @@ func TestEngine_CortexMode_NoForwarding(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store := storage.NewPebbleStore(db, 1000)
+	store := storage.NewPebbleStore(db, storage.PebbleStoreConfig{CacheSize: 1000})
 	ftsIdx := fts.New(db)
 
 	embedder := &noopEmbedder{}
@@ -1184,7 +1193,7 @@ func TestEngine_CortexMode_NoForwarding(t *testing.T) {
 	trigSystem := trigger.New(store, &ftsTrigAdapter{ftsIdx}, nil, embedder)
 
 	// nil workers — but we do NOT wire a coordinator
-	eng := NewEngine(store, nil, ftsIdx, actEngine, trigSystem, nil, nil, nil, nil, embedder, nil)
+	eng := NewEngine(store, nil, ftsIdx, actEngine, trigSystem, nil, nil, nil, embedder, nil)
 	defer func() {
 		eng.Stop()
 		store.Close()
@@ -1384,12 +1393,12 @@ func TestEngineRead_AfterRestart(t *testing.T) {
 		if err != nil {
 			t.Fatalf("OpenPebble: %v", err)
 		}
-		store := storage.NewPebbleStore(db, 1000)
+		store := storage.NewPebbleStore(db, storage.PebbleStoreConfig{CacheSize: 1000})
 		ftsIdx := fts.New(db)
 		embedder := &noopEmbedder{}
 		actEngine := activation.New(store, &ftsAdapter{ftsIdx}, nil, embedder)
 		trigSystem := trigger.New(store, &ftsTrigAdapter{ftsIdx}, nil, embedder)
-		eng := NewEngine(store, nil, ftsIdx, actEngine, trigSystem, nil, nil, nil, nil, embedder, nil)
+		eng := NewEngine(store, nil, ftsIdx, actEngine, trigSystem, nil, nil, nil, embedder, nil)
 		return eng, func() {
 			eng.Stop()
 			store.Close()
@@ -1467,5 +1476,141 @@ func TestEngineForget_HardDelete(t *testing.T) {
 	})
 	if err == nil {
 		t.Error("expected error reading hard-deleted engram, got nil")
+	}
+}
+
+func TestWriteBatch_HappyPath(t *testing.T) {
+	eng, cleanup := testEnv(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	reqs := make([]*mbp.WriteRequest, 5)
+	for i := range reqs {
+		reqs[i] = &mbp.WriteRequest{
+			Vault:   "test",
+			Concept: fmt.Sprintf("batch concept %d", i),
+			Content: fmt.Sprintf("batch content %d", i),
+		}
+	}
+
+	responses, errs := eng.WriteBatch(ctx, reqs)
+
+	if len(responses) != 5 {
+		t.Fatalf("expected 5 responses, got %d", len(responses))
+	}
+	if len(errs) != 5 {
+		t.Fatalf("expected 5 errors, got %d", len(errs))
+	}
+
+	for i, resp := range responses {
+		if errs[i] != nil {
+			t.Errorf("item %d: unexpected error: %v", i, errs[i])
+			continue
+		}
+		if resp == nil {
+			t.Errorf("item %d: response is nil", i)
+			continue
+		}
+		if resp.ID == "" {
+			t.Errorf("item %d: ID is empty", i)
+		}
+	}
+
+	// Verify all written engrams are readable
+	for i, resp := range responses {
+		readResp, err := eng.Read(ctx, &mbp.ReadRequest{ID: resp.ID, Vault: "test"})
+		if err != nil {
+			t.Errorf("item %d: read failed: %v", i, err)
+			continue
+		}
+		wantConcept := fmt.Sprintf("batch concept %d", i)
+		if readResp.Concept != wantConcept {
+			t.Errorf("item %d: concept = %q, want %q", i, readResp.Concept, wantConcept)
+		}
+	}
+}
+
+func TestWriteBatch_MaxSizeExceeded(t *testing.T) {
+	eng, cleanup := testEnv(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	reqs := make([]*mbp.WriteRequest, 51)
+	for i := range reqs {
+		reqs[i] = &mbp.WriteRequest{
+			Vault:   "test",
+			Concept: "too many",
+			Content: "content",
+		}
+	}
+
+	responses, errs := eng.WriteBatch(ctx, reqs)
+
+	if len(responses) != 51 {
+		t.Fatalf("expected 51 responses, got %d", len(responses))
+	}
+	if len(errs) != 51 {
+		t.Fatalf("expected 51 errors, got %d", len(errs))
+	}
+
+	for i, err := range errs {
+		if err == nil {
+			t.Errorf("item %d: expected error for batch too large, got nil", i)
+		}
+	}
+}
+
+func TestWriteBatch_MultipleVaults(t *testing.T) {
+	eng, cleanup := testEnv(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	reqs := []*mbp.WriteRequest{
+		{Vault: "vault-a", Concept: "concept-a", Content: "content-a"},
+		{Vault: "vault-b", Concept: "concept-b", Content: "content-b"},
+		{Vault: "vault-a", Concept: "concept-c", Content: "content-c"},
+	}
+
+	responses, errs := eng.WriteBatch(ctx, reqs)
+
+	for i := range reqs {
+		if errs[i] != nil {
+			t.Errorf("item %d: unexpected error: %v", i, errs[i])
+			continue
+		}
+		if responses[i] == nil || responses[i].ID == "" {
+			t.Errorf("item %d: missing response", i)
+		}
+	}
+
+	// Verify engrams are in the correct vaults
+	r1, err := eng.Read(ctx, &mbp.ReadRequest{ID: responses[0].ID, Vault: "vault-a"})
+	if err != nil {
+		t.Fatalf("read from vault-a: %v", err)
+	}
+	if r1.Concept != "concept-a" {
+		t.Errorf("vault-a concept = %q, want %q", r1.Concept, "concept-a")
+	}
+
+	r2, err := eng.Read(ctx, &mbp.ReadRequest{ID: responses[1].ID, Vault: "vault-b"})
+	if err != nil {
+		t.Fatalf("read from vault-b: %v", err)
+	}
+	if r2.Concept != "concept-b" {
+		t.Errorf("vault-b concept = %q, want %q", r2.Concept, "concept-b")
+	}
+}
+
+func TestWriteBatch_EmptyBatch(t *testing.T) {
+	eng, cleanup := testEnv(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	responses, errs := eng.WriteBatch(ctx, nil)
+	if len(responses) != 0 {
+		t.Errorf("expected 0 responses, got %d", len(responses))
+	}
+	if len(errs) != 0 {
+		t.Errorf("expected 0 errors, got %d", len(errs))
 	}
 }

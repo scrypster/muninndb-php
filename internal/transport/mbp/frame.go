@@ -18,17 +18,17 @@ type Frame struct {
 
 // Frame constants
 const (
-	FramePrefixSize = 16 // version(1) + type(1) + flags(2) + payloadLen(4) + correlationID(8)
+	FramePrefixSize = 16               // version(1) + type(1) + flags(2) + payloadLen(4) + correlationID(8)
 	MaxPayloadSize  = 16 * 1024 * 1024 // 16 MB
 )
 
 // Flag constants (bits in the Flags uint16)
 const (
-	FlagCompressed uint16 = 1 << 0  // payload is zstd compressed
-	FlagStreaming  uint16 = 1 << 1  // part of a multi-frame response
-	FlagLastFrame  uint16 = 1 << 2  // final frame in streaming response
-	FlagVault      uint16 = 1 << 3  // vault override in payload
-	FlagUrgent     uint16 = 1 << 4  // process before queued commands
+	FlagCompressed uint16 = 1 << 0 // payload is zstd compressed
+	FlagStreaming  uint16 = 1 << 1 // part of a multi-frame response
+	FlagLastFrame  uint16 = 1 << 2 // final frame in streaming response
+	FlagVault      uint16 = 1 << 3 // vault override in payload
+	FlagUrgent     uint16 = 1 << 4 // process before queued commands
 )
 
 // Message type constants
@@ -57,10 +57,10 @@ const (
 	TypeError        uint8 = 0xFF
 
 	// Cluster: replication stream
-	TypeReplEntry    uint8 = 0x20 // single replication log entry
-	TypeReplBatch    uint8 = 0x21 // batch of replication entries
-	TypeReplAck      uint8 = 0x22 // replica acknowledges seq
-	TypeReplNack     uint8 = 0x23 // replica requests resend from seq
+	TypeReplEntry uint8 = 0x20 // single replication log entry
+	TypeReplBatch uint8 = 0x21 // batch of replication entries
+	TypeReplAck   uint8 = 0x22 // replica acknowledges seq
+	TypeReplNack  uint8 = 0x23 // replica requests resend from seq
 
 	// Cluster: snapshot transfer
 	TypeSnapHeader   uint8 = 0x24 // snapshot header (seq, total keys)
@@ -69,8 +69,8 @@ const (
 	TypeSnapComplete uint8 = 0x27 // snapshot transfer complete
 
 	// Cluster: cognitive side-effect forwarding
-	TypeCogForward   uint8 = 0x28 // lobe forwards cognitive side effects to cortex
-	TypeCogAck       uint8 = 0x29 // cortex acknowledges cognitive forward
+	TypeCogForward uint8 = 0x28 // lobe forwards cognitive side effects to cortex
+	TypeCogAck     uint8 = 0x29 // cortex acknowledges cognitive forward
 
 	// Cluster: MSP protocol
 	TypeVoteRequest  uint8 = 0x30 // election vote request
@@ -103,7 +103,6 @@ var (
 	ErrPayloadTooLarge = errors.New("payload exceeds 16 MB limit")
 	ErrVersionMismatch = errors.New("unsupported frame version")
 )
-
 
 // ReadFrame reads exactly one frame from the reader.
 // Returns io.EOF if the connection is closed cleanly.
@@ -173,4 +172,3 @@ func WriteFrame(w io.Writer, f *Frame) error {
 	_, err := w.Write(buf)
 	return err
 }
-

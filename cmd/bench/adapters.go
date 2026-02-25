@@ -32,36 +32,6 @@ func (a *benchHebbianAdapter) UpdateAssocWeightBatch(ctx context.Context, update
 	return a.store.UpdateAssocWeightBatch(ctx, storageUpdates)
 }
 
-// benchDecayAdapter adapts PebbleStore to the DecayStore interface.
-type benchDecayAdapter struct{ store *storage.PebbleStore }
-
-func (a *benchDecayAdapter) GetMetadataBatch(ctx context.Context, ws [8]byte, ids [][16]byte) ([]cognitive.DecayMeta, error) {
-	ulidIDs := make([]storage.ULID, len(ids))
-	for i, id := range ids {
-		ulidIDs[i] = storage.ULID(id)
-	}
-	metas, err := a.store.GetMetadata(ctx, ws, ulidIDs)
-	if err != nil {
-		return nil, err
-	}
-	result := make([]cognitive.DecayMeta, len(metas))
-	for i, meta := range metas {
-		if meta != nil {
-			result[i] = cognitive.DecayMeta{
-				ID:          [16]byte(meta.ID),
-				LastAccess:  meta.LastAccess,
-				AccessCount: meta.AccessCount,
-				Stability:   meta.Stability,
-				Relevance:   meta.Relevance,
-			}
-		}
-	}
-	return result, nil
-}
-func (a *benchDecayAdapter) UpdateRelevance(ctx context.Context, ws [8]byte, id [16]byte, relevance, stability float32) error {
-	return a.store.UpdateRelevance(ctx, ws, storage.ULID(id), relevance, stability)
-}
-
 // benchConfidenceAdapter adapts PebbleStore to the ConfidenceStore interface.
 type benchConfidenceAdapter struct{ store *storage.PebbleStore }
 

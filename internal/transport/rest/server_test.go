@@ -8,13 +8,18 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/pebble"
 	"github.com/scrypster/muninndb/internal/cognitive"
+	"github.com/scrypster/muninndb/internal/config"
 	"github.com/scrypster/muninndb/internal/engine/trigger"
 	"github.com/scrypster/muninndb/internal/engine/vaultjob"
+	"github.com/scrypster/muninndb/internal/replication"
 	"github.com/scrypster/muninndb/internal/storage"
 	mbp "github.com/scrypster/muninndb/internal/transport/mbp"
 )
@@ -36,6 +41,18 @@ func (m *MockEngine) Write(ctx context.Context, req *WriteRequest) (*WriteRespon
 		ID:        "test-id",
 		CreatedAt: 1234567890,
 	}, nil
+}
+
+func (m *MockEngine) WriteBatch(ctx context.Context, reqs []*WriteRequest) ([]*WriteResponse, []error) {
+	responses := make([]*WriteResponse, len(reqs))
+	errs := make([]error, len(reqs))
+	for i := range reqs {
+		responses[i] = &WriteResponse{
+			ID:        fmt.Sprintf("batch-id-%d", i),
+			CreatedAt: 1234567890,
+		}
+	}
+	return responses, errs
 }
 
 func (m *MockEngine) Read(ctx context.Context, req *ReadRequest) (*ReadResponse, error) {
@@ -144,6 +161,30 @@ func (m *MockEngine) ExportVault(ctx context.Context, vaultName, embedderModel s
 }
 func (m *MockEngine) StartImport(ctx context.Context, vaultName, embedderModel string, dimension int, resetMeta bool, r io.Reader) (*vaultjob.Job, error) {
 	return &vaultjob.Job{ID: "mock-import-job", Operation: "import", Target: vaultName}, nil
+}
+
+func (m *MockEngine) ReindexFTSVault(ctx context.Context, vaultName string) (int64, error) {
+	return 0, nil
+}
+
+func (m *MockEngine) Checkpoint(destDir string) error {
+	return nil
+}
+
+// backupMockEngine embeds MockEngine but creates a real Pebble checkpoint so
+// the verification step has something to open.
+type backupMockEngine struct {
+	MockEngine
+	pebbleDir string // set in test to a temp pebble DB dir
+}
+
+func (b *backupMockEngine) Checkpoint(destDir string) error {
+	db, err := pebble.Open(b.pebbleDir, &pebble.Options{})
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	return db.Checkpoint(destDir)
 }
 
 // Ensure bytes import is used.
@@ -723,5 +764,246 @@ func TestActivate_EmptyContext(t *testing.T) {
 	// Should have Activations field (may be empty list)
 	if resp["Activations"] == nil {
 		t.Error("expected Activations field in response")
+	}
+}
+
+func TestOnlineBackupEndpoint(t *testing.T) {
+	// Create a real Pebble DB so the checkpoint and verification are exercised.
+	pebbleDir := filepath.Join(t.TempDir(), "pebble")
+	db, err := pebble.Open(pebbleDir, &pebble.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Set([]byte("backup-key"), []byte("backup-val"), pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	eng := &backupMockEngine{pebbleDir: pebbleDir}
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "")
+
+	outputDir := filepath.Join(t.TempDir(), "online-backup-out")
+	body := fmt.Sprintf(`{"output_dir":%q}`, outputDir)
+	req := httptest.NewRequest("POST", "/api/admin/backup", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	server.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp BackupResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.OutputDir != outputDir {
+		t.Errorf("expected output_dir=%q, got %q", outputDir, resp.OutputDir)
+	}
+	if resp.SizeBytes <= 0 {
+		t.Errorf("expected positive size_bytes, got %d", resp.SizeBytes)
+	}
+
+	// Verify the checkpoint directory exists and is readable.
+	checkpointDir := filepath.Join(outputDir, "pebble")
+	if _, err := os.Stat(checkpointDir); os.IsNotExist(err) {
+		t.Fatal("checkpoint directory does not exist")
+	}
+	verifyDB, err := pebble.Open(checkpointDir, &pebble.Options{ReadOnly: true})
+	if err != nil {
+		t.Fatalf("failed to open checkpoint for verification: %v", err)
+	}
+	defer verifyDB.Close()
+
+	val, closer, err := verifyDB.Get([]byte("backup-key"))
+	if err != nil {
+		t.Fatalf("key not found in checkpoint: %v", err)
+	}
+	if string(val) != "backup-val" {
+		t.Fatalf("expected backup-val, got %q", string(val))
+	}
+	closer.Close()
+}
+
+func TestOnlineBackupEndpoint_ConflictExistingDir(t *testing.T) {
+	eng := &MockEngine{}
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "")
+
+	existingDir := t.TempDir()
+	body := fmt.Sprintf(`{"output_dir":%q}`, existingDir)
+	req := httptest.NewRequest("POST", "/api/admin/backup", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	server.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestOnlineBackupEndpoint_MissingOutputDir(t *testing.T) {
+	eng := &MockEngine{}
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "")
+
+	body := `{}`
+	req := httptest.NewRequest("POST", "/api/admin/backup", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	server.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestRemoveNode_SelfRemoval_Returns400(t *testing.T) {
+	dir := t.TempDir()
+	db, err := pebble.Open(dir, &pebble.Options{})
+	if err != nil {
+		t.Fatalf("pebble.Open: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	repLog := replication.NewReplicationLog(db)
+	applier := replication.NewApplier(db)
+	epochStore, err := replication.NewEpochStore(db)
+	if err != nil {
+		t.Fatalf("NewEpochStore: %v", err)
+	}
+
+	cfg := &config.ClusterConfig{
+		Enabled:  true,
+		NodeID:   "cortex-1",
+		BindAddr: "127.0.0.1:0",
+		Role:     "primary",
+	}
+	coord := replication.NewClusterCoordinator(cfg, repLog, applier, epochStore)
+
+	eng := &MockEngine{}
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "")
+	server.SetCoordinator(coord)
+
+	req := httptest.NewRequest("DELETE", "/api/admin/cluster/nodes/cortex-1", nil)
+	w := httptest.NewRecorder()
+	server.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for self-removal, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var errResp ErrorResponse
+	if err := json.NewDecoder(w.Body).Decode(&errResp); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+	if errResp.Error.Message == "" {
+		t.Error("expected non-empty error message")
+	}
+}
+
+func TestRemoveNode_OtherNode_Returns200(t *testing.T) {
+	dir := t.TempDir()
+	db, err := pebble.Open(dir, &pebble.Options{})
+	if err != nil {
+		t.Fatalf("pebble.Open: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	repLog := replication.NewReplicationLog(db)
+	applier := replication.NewApplier(db)
+	epochStore, err := replication.NewEpochStore(db)
+	if err != nil {
+		t.Fatalf("NewEpochStore: %v", err)
+	}
+
+	cfg := &config.ClusterConfig{
+		Enabled:  true,
+		NodeID:   "cortex-1",
+		BindAddr: "127.0.0.1:0",
+		Role:     "primary",
+	}
+	coord := replication.NewClusterCoordinator(cfg, repLog, applier, epochStore)
+
+	eng := &MockEngine{}
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "")
+	server.SetCoordinator(coord)
+
+	req := httptest.NewRequest("DELETE", "/api/admin/cluster/nodes/lobe-2", nil)
+	w := httptest.NewRecorder()
+	server.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for removing other node, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestBatchCreateEngrams(t *testing.T) {
+	eng := &MockEngine{}
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "")
+
+	body := `{"engrams":[{"content":"one","concept":"c1"},{"content":"two","concept":"c2"},{"content":"three"}]}`
+	req := httptest.NewRequest("POST", "/api/engrams/batch", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	server.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Results []struct {
+			Index  int    `json:"index"`
+			ID     string `json:"id"`
+			Status string `json:"status"`
+			Error  string `json:"error"`
+		} `json:"results"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp.Results) != 3 {
+		t.Fatalf("expected 3 results, got %d", len(resp.Results))
+	}
+	for i, r := range resp.Results {
+		if r.Status != "ok" {
+			t.Errorf("result[%d]: status = %q, want 'ok'", i, r.Status)
+		}
+		if r.ID == "" {
+			t.Errorf("result[%d]: ID is empty", i)
+		}
+	}
+}
+
+func TestBatchCreateEngramsExceedsLimit(t *testing.T) {
+	eng := &MockEngine{}
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "")
+
+	engrams := make([]map[string]string, 51)
+	for i := range engrams {
+		engrams[i] = map[string]string{"content": fmt.Sprintf("item %d", i)}
+	}
+	bodyBytes, _ := json.Marshal(map[string]any{"engrams": engrams})
+	req := httptest.NewRequest("POST", "/api/engrams/batch", bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	server.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for >50 items, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestBatchCreateEngramsEmptyArray(t *testing.T) {
+	eng := &MockEngine{}
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "")
+
+	body := `{"engrams":[]}`
+	req := httptest.NewRequest("POST", "/api/engrams/batch", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	server.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for empty array, got %d: %s", w.Code, w.Body.String())
 	}
 }

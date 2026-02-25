@@ -16,6 +16,10 @@ const (
 	SchemeOpenAI    ProviderScheme = "openai"
 	SchemeAnthropic ProviderScheme = "anthropic"
 	SchemeVoyage    ProviderScheme = "voyage"
+	SchemeCohere    ProviderScheme = "cohere"
+	SchemeGoogle    ProviderScheme = "google"
+	SchemeJina      ProviderScheme = "jina"
+	SchemeMistral   ProviderScheme = "mistral"
 )
 
 // ProviderConfig holds the parsed provider configuration.
@@ -69,6 +73,14 @@ func ParseProviderURL(raw string) (*ProviderConfig, error) {
 		return parseAnthropicURL(parsed, config)
 	case SchemeVoyage:
 		return parseVoyageURL(parsed, config)
+	case SchemeCohere:
+		return parseCohereURL(parsed, config)
+	case SchemeGoogle:
+		return parseGoogleURL(parsed, config)
+	case SchemeJina:
+		return parseJinaURL(parsed, config)
+	case SchemeMistral:
+		return parseMistralURL(parsed, config)
 	default:
 		return nil, fmt.Errorf("unknown provider scheme: %q", scheme)
 	}
@@ -161,5 +173,81 @@ func parseVoyageURL(parsed *url.URL, config *ProviderConfig) (*ProviderConfig, e
 	config.Host = "api.voyageai.com"
 	config.Port = 443
 	config.BaseURL = "https://api.voyageai.com"
+	return config, nil
+}
+
+func parseCohereURL(parsed *url.URL, config *ProviderConfig) (*ProviderConfig, error) {
+	model := parsed.Hostname()
+	if model == "" {
+		model = strings.TrimPrefix(parsed.Path, "/")
+		if model == "" && parsed.Opaque != "" {
+			model = parsed.Opaque
+		}
+	}
+	if model == "" {
+		return nil, fmt.Errorf("cohere URL requires a model (e.g., cohere://embed-v4)")
+	}
+	config.Model = model
+
+	config.Host = "api.cohere.com"
+	config.Port = 443
+	config.BaseURL = "https://api.cohere.com"
+	return config, nil
+}
+
+func parseGoogleURL(parsed *url.URL, config *ProviderConfig) (*ProviderConfig, error) {
+	model := parsed.Hostname()
+	if model == "" {
+		model = strings.TrimPrefix(parsed.Path, "/")
+		if model == "" && parsed.Opaque != "" {
+			model = parsed.Opaque
+		}
+	}
+	if model == "" {
+		return nil, fmt.Errorf("google URL requires a model (e.g., google://text-embedding-004)")
+	}
+	config.Model = model
+
+	config.Host = "generativelanguage.googleapis.com"
+	config.Port = 443
+	config.BaseURL = "https://generativelanguage.googleapis.com"
+	return config, nil
+}
+
+func parseJinaURL(parsed *url.URL, config *ProviderConfig) (*ProviderConfig, error) {
+	model := parsed.Hostname()
+	if model == "" {
+		model = strings.TrimPrefix(parsed.Path, "/")
+		if model == "" && parsed.Opaque != "" {
+			model = parsed.Opaque
+		}
+	}
+	if model == "" {
+		return nil, fmt.Errorf("jina URL requires a model (e.g., jina://jina-embeddings-v3)")
+	}
+	config.Model = model
+
+	config.Host = "api.jina.ai"
+	config.Port = 443
+	config.BaseURL = "https://api.jina.ai"
+	return config, nil
+}
+
+func parseMistralURL(parsed *url.URL, config *ProviderConfig) (*ProviderConfig, error) {
+	model := parsed.Hostname()
+	if model == "" {
+		model = strings.TrimPrefix(parsed.Path, "/")
+		if model == "" && parsed.Opaque != "" {
+			model = parsed.Opaque
+		}
+	}
+	if model == "" {
+		return nil, fmt.Errorf("mistral URL requires a model (e.g., mistral://mistral-embed)")
+	}
+	config.Model = model
+
+	config.Host = "api.mistral.ai"
+	config.Port = 443
+	config.BaseURL = "https://api.mistral.ai"
 	return config, nil
 }

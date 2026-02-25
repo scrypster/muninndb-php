@@ -137,10 +137,10 @@ func (c *VaultCounters) Score() float64 {
 	orphanRatio := clamp01(float64(c.OrphanCount.Load()) / n)
 	contradictionDensity := clamp01(float64(c.Contradictions.Load()) / n)
 	duplicationPressure := clamp01(float64(c.RefinesCount.Load()) / n)
-	decayVariance := clamp01(c.Variance())
+	temporalVariance := clamp01(c.Variance())
 
 	penalty := orphanRatio*0.3 + contradictionDensity*0.3 +
-		decayVariance*0.2 + duplicationPressure*0.2
+		temporalVariance*0.2 + duplicationPressure*0.2
 	return math.Max(0, 1.0-penalty)
 }
 
@@ -161,7 +161,7 @@ type Result struct {
 	OrphanRatio          float64
 	ContradictionDensity float64
 	DuplicationPressure  float64
-	DecayVariance        float64
+	TemporalVariance        float64
 	TotalEngrams         int64
 }
 
@@ -174,16 +174,16 @@ func (c *VaultCounters) Snapshot(vaultName string) Result {
 	orphanRatio := clamp01(float64(c.OrphanCount.Load()) / n)
 	contradictionDensity := clamp01(float64(c.Contradictions.Load()) / n)
 	duplicationPressure := clamp01(float64(c.RefinesCount.Load()) / n)
-	decayVariance := clamp01(c.Variance())
+	temporalVariance := clamp01(c.Variance())
 	penalty := orphanRatio*0.3 + contradictionDensity*0.3 +
-		decayVariance*0.2 + duplicationPressure*0.2
+		temporalVariance*0.2 + duplicationPressure*0.2
 	return Result{
 		VaultName:            vaultName,
 		Score:                math.Max(0, 1.0-penalty),
 		OrphanRatio:          orphanRatio,
 		ContradictionDensity: contradictionDensity,
 		DuplicationPressure:  duplicationPressure,
-		DecayVariance:        decayVariance,
+		TemporalVariance:        temporalVariance,
 		TotalEngrams:         int64(n),
 	}
 }

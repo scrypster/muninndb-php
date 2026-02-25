@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -24,6 +25,12 @@ type DefaultWeights struct {
 	HebbianBoost       float32
 	AccessFrequency    float32
 	Recency            float32
+	// ACT-R mode: when true, the engine uses ACT-R base-level + Hebbian scoring
+	// instead of the additive weighted sum. This is the recommended production default.
+	// See computeACTR() for the formula (Anderson 1993).
+	UseACTR      bool
+	ACTRDecay    float32 // power-law exponent d (default 0.5)
+	ACTRHebScale float32 // Hebbian amplifier inside softplus (default 4.0)
 }
 
 // Weights is an optional client override.
@@ -34,6 +41,17 @@ type Weights struct {
 	HebbianBoost       float32
 	AccessFrequency    float32
 	Recency            float32
+	// CGDN mode: set UseCGDN=true to enable Cognitive-Gated Divisive Normalization.
+	UseCGDN   bool
+	CGDNAlpha float32 // Ebbinghaus gate exponent (0 → default 1.5)
+	CGDNBeta  float32 // Hebbian gate exponent (0 → default 0.5)
+	CGDNPower float32 // divisive normalization power (0 → default 2.0)
+	// ACT-R mode: set UseACTR=true to enable ACT-R base-level + Hebbian scoring.
+	// This is the recommended mode: resolves decay-vs-Hebbian tension, deterministic,
+	// total recall (no stored state mutation), grounded in 30+ years of cognitive science.
+	UseACTR      bool
+	ACTRDecay    float32 // power-law decay exponent d (0 → default 0.5)
+	ACTRHebScale float32 // Hebbian scaling inside softplus (0 → default 4.0)
 }
 
 type resolvedWeights struct {
@@ -43,6 +61,32 @@ type resolvedWeights struct {
 	HebbianBoost       float64
 	AccessFrequency    float64
 	Recency            float64
+
+	// CGDN: Cognitive-Gated Divisive Normalization (Carandini & Heeger 2012).
+	// When UseCGDN=true, replaces the additive weighted sum with:
+	//   g(d) = Ebbinghaus^Alpha * max(Hebbian, ε)^Beta  [cognitive gate]
+	//   a(d) = (w_vec*semantic + w_fts*fts) * g(d)       [gated content]
+	//   R(d) = a(d)^Power / (σ^Power + Σ a(j)^Power)     [divisive normalization]
+	// This replicates lateral inhibition in hippocampal retrieval networks where
+	// PFC inhibitory control (the gate) suppresses contextually stale candidates
+	// so that FTS/semantic signal cannot override temporal decay.
+	UseCGDN   bool
+	CGDNAlpha float64 // exponent on Ebbinghaus decay in the gate (default 1.5)
+	CGDNBeta  float64 // exponent on Hebbian boost in the gate (default 0.5)
+	CGDNPower float64 // exponent n in divisive normalization (default 2.0)
+
+	// ACT-R: Adaptive Control of Thought-Rational scoring (Anderson, 1993).
+	// When UseACTR=true, replaces the additive weighted sum with:
+	//   B(M) = ln(n+1) - d * ln(max(ageDays,0.1) / (n+1))  [base-level activation]
+	//   Score = ContentMatch × softplus(B(M) + scale×Hebbian) × Confidence
+	//
+	// This resolves the decay-vs-Hebbian tension: both are ADDITIVE inside softplus.
+	// Fresh memories: high B(M) → high score; Old memories + Hebbian link: low B(M)
+	// rescued by Hebbian → moderate score; Old memories no link: low B(M) → suppressed.
+	// TOTAL RECALL: no background worker degrades stored state. Time is query-time only.
+	UseACTR      bool
+	ACTRDecay    float64 // power-law decay exponent d (default 0.5 per Anderson 1993)
+	ACTRHebScale float64 // Hebbian scaling factor inside softplus (default 4.0)
 }
 
 // Filter is a query filter applied in Phase 6.
@@ -64,6 +108,7 @@ type ScoreComponents struct {
 	FullTextRelevance  float64
 	DecayFactor        float64
 	HebbianBoost       float64
+	TransitionBoost    float64
 	AccessFrequency    float64
 	Recency            float64
 	Confidence         float64
@@ -73,12 +118,13 @@ type ScoreComponents struct {
 
 // ScoredEngram is one activation result.
 type ScoredEngram struct {
-	Engram     *storage.Engram
-	Score      float64
-	Components ScoreComponents
-	Why        string
-	HopPath    []storage.ULID
-	Dormant    bool
+	Engram      *storage.Engram
+	Score       float64
+	Components  ScoreComponents
+	Why         string
+	HopPath     []storage.ULID
+	HopConcepts []string
+	Dormant     bool
 }
 
 // ActivateRequest is the internal activation request form.
@@ -97,6 +143,12 @@ type ActivateRequest struct {
 	Profile          string // traversal profile override: "default"|"causal"|"confirmatory"|"adversarial"|"structural"
 	VaultDefault     string // vault Plasticity default profile (set by engine.go, not by callers)
 	StructuredFilter interface{} // *query.Filter, applied as final post-retrieval predicate
+	// CandidatesPerIndex overrides the per-index candidate pool size for phase2.
+	// Zero means fall back to 30.
+	CandidatesPerIndex int
+	// PAS: Predictive Activation Signal — sequential transition tracking.
+	PASEnabled       bool // when true, inject transition candidates in Phase 2
+	PASMaxInjections int  // max transition candidates to inject (0 = default 5)
 }
 
 // ActivateResult is what the transport layer serializes and returns.
@@ -128,6 +180,7 @@ type ActivationStore interface {
 	// EngramLastAccessNs returns the nanosecond timestamp of the last cache access for id.
 	// Returns 0 if not in cache; callers fall back to eng.LastAccess.
 	EngramLastAccessNs(wsPrefix [8]byte, id storage.ULID) int64
+	EngramIDsByCreatedRange(ctx context.Context, wsPrefix [8]byte, since, until time.Time, limit int) ([]storage.ULID, error)
 }
 
 // FTSIndex is the full-text search interface.
@@ -146,6 +199,11 @@ type Embedder interface {
 	Tokenize(text string) []string
 }
 
+// PASTransitionStore reads transition targets for PAS candidate injection.
+type PASTransitionStore interface {
+	GetTopTransitions(ctx context.Context, ws [8]byte, srcID [16]byte, topK int) ([]storage.TransitionTarget, error)
+}
+
 // logItem is a queued activation log entry for the async drainer.
 // activations is the already-allocated result slice — the drainer extracts
 // ids and scores off the hot path, keeping Run() allocation-free for logging.
@@ -156,21 +214,25 @@ type logItem struct {
 
 // ActivationEngine is the main ACTIVATE pipeline orchestrator.
 type ActivationEngine struct {
-	store    ActivationStore
-	fts      FTSIndex
-	hnsw     HNSWIndex
-	embedder Embedder
-	assocLog *ActivationLog
-	weights  DefaultWeights
+	store      ActivationStore
+	fts        FTSIndex
+	hnsw       HNSWIndex
+	embedder   Embedder
+	assocLog   *ActivationLog
+	weights    DefaultWeights
+	transStore PASTransitionStore // optional, nil = PAS disabled at engine level
 	// logCh is a buffered channel for async activation log entries.
 	// A single drainer goroutine owns all writes to assocLog, eliminating
 	// Lock() contention against Phase 4's concurrent RLock() calls.
-	logCh   chan logItem
-	logDone chan struct{}
+	logCh     chan logItem
+	logDone   chan struct{}
+	closeOnce sync.Once
 }
 
 // New creates a new ActivationEngine.
 func New(store ActivationStore, fts FTSIndex, hnsw HNSWIndex, embedder Embedder) *ActivationEngine {
+	// DefaultWeights are only used when resolveWeights gets req.Weights == nil (e.g. tests).
+	// All production scoring goes through ACT-R; decay path is kept in code but not reachable.
 	w := DefaultWeights{
 		SemanticSimilarity: 0.35,
 		FullTextRelevance:  0.25,
@@ -183,9 +245,6 @@ func New(store ActivationStore, fts FTSIndex, hnsw HNSWIndex, embedder Embedder)
 	// Redistribute that 0.35 budget to active components so the score
 	// range isn't compressed by 35% of dead weight.
 	if hnsw == nil {
-		// Redistribute the 0.35 semantic budget proportionally across all remaining
-		// active dimensions: FTS(0.25) + Decay(0.20) + Hebbian(0.10) + AccessFreq(0.05) + Recency(0.05) = 0.65
-		// This keeps weights summing to exactly 1.0 so raw scores stay in [0,1].
 		scale := float32(1.0 / 0.65)
 		w.SemanticSimilarity = 0
 		w.FullTextRelevance = 0.25 * scale  // ≈ 0.385
@@ -231,13 +290,44 @@ func (e *ActivationEngine) drainLog() {
 	}
 }
 
-// Close shuts down the async activation log drainer. Call before engine shutdown.
-func (e *ActivationEngine) Close() {
-	close(e.logCh)
-	<-e.logDone
+// SetTransitionStore sets the PAS transition store for candidate injection.
+// Must be called before any activations. Pass nil to disable PAS at engine level.
+func (e *ActivationEngine) SetTransitionStore(ts PASTransitionStore) {
+	e.transStore = ts
 }
 
-const candidatesPerIndex = 30
+// AssocLog returns the activation log for reading previous activations.
+// Used by engine.go to determine previous activation results for transition recording.
+func (e *ActivationEngine) AssocLog() *ActivationLog {
+	return e.assocLog
+}
+
+// Close shuts down the async activation log drainer. Idempotent: safe to call
+// multiple times (e.g. from both test cleanup and Engine.Stop).
+func (e *ActivationEngine) Close() {
+	e.closeOnce.Do(func() {
+		close(e.logCh)
+		<-e.logDone
+	})
+}
+
+// CalcCandidatesPerIndex returns the per-index candidate pool size for phase2
+// based on vault size. Formula: clamp(sqrt(vaultSize), 30, 200).
+// Called by engine.go before constructing ActivateRequest.
+func CalcCandidatesPerIndex(vaultSize int64) int {
+	if vaultSize <= 0 {
+		return 30
+	}
+	c := int(math.Sqrt(float64(vaultSize)))
+	if c < 30 {
+		return 30
+	}
+	if c > 200 {
+		return 200
+	}
+	return c
+}
+
 const minFloor = float32(0.05)
 const frameSize = 100
 
@@ -273,6 +363,11 @@ func (e *ActivationEngine) Run(ctx context.Context, req *ActivateRequest) (*Acti
 
 	// Phase 4: Hebbian boost (always sequential — fast, in-memory ring buffer read).
 	e.phase4HebbianBoost(ctx, ws, req.VaultID, fused)
+
+	// Phase 4.5: PAS transition boost — applies to candidates already in the fused list.
+	if req.PASEnabled {
+		e.phase4_5TransitionBoost(ctx, ws, req.VaultID, fused)
+	}
 
 	// Resolve traversal profile for Phase 5 and for audit logging.
 	// Always resolved so ProfileUsed is set on every activation, regardless of HopDepth.
@@ -360,13 +455,46 @@ func (e *ActivationEngine) phase1(ctx context.Context, req *ActivateRequest) (*p
 
 // phase2 retrieves candidates from FTS, HNSW, and decay pool in parallel.
 type candidateSets struct {
-	fts    []ScoredID
-	vector []ScoredID
-	decay  []storage.ULID
+	fts        []ScoredID
+	vector     []ScoredID
+	decay      []storage.ULID
+	time       []storage.ULID // from time-bounded range scan when since/before filters present
+	transition []storage.ULID // PAS: transition-predicted candidates from previous activation
+}
+
+// extractTimeBounds extracts since/before time bounds from filter list.
+// Returns (since time.Time, before time.Time, hasTimeBounds bool).
+// If a bound is not present, it defaults to zero value.
+func extractTimeBounds(filters []Filter) (time.Time, time.Time, bool) {
+	var since, before time.Time
+	hasBounds := false
+
+	for _, f := range filters {
+		if f.Field == "created_after" {
+			if t, ok := f.Value.(time.Time); ok {
+				since = t
+				hasBounds = true
+			}
+		} else if f.Field == "created_before" {
+			if t, ok := f.Value.(time.Time); ok {
+				before = t
+				hasBounds = true
+			}
+		}
+	}
+
+	return since, before, hasBounds
 }
 
 func (e *ActivationEngine) phase2(ctx context.Context, req *ActivateRequest, p1 *phase1Result, ws [8]byte) (*candidateSets, error) {
 	var sets candidateSets
+	k := req.CandidatesPerIndex
+	if k <= 0 {
+		k = 30
+	}
+
+	// Extract time bounds from filters for Phase 3: time-bounded candidate injection.
+	since, before, hasTimeBounds := extractTimeBounds(req.Filters)
 
 	// Fast path: when HNSW is nil, there is nothing to parallelize.
 	// FTS and RecentActive are both in-memory with sub-10µs latency.
@@ -374,23 +502,43 @@ func (e *ActivationEngine) phase2(ctx context.Context, req *ActivateRequest, p1 
 	// (~3-5µs per activation at 12+ concurrent goroutines).
 	if e.hnsw == nil || len(p1.embedding) == 0 {
 		if e.fts != nil {
-			results, _ := e.fts.Search(ctx, ws, p1.queryStr, candidatesPerIndex)
+			results, err := e.fts.Search(ctx, ws, p1.queryStr, k)
+			if err != nil {
+				slog.Warn("activation: fts search degraded", "vault", req.VaultID, "error", err)
+			}
 			sets.fts = results
 		}
-		ids, _ := e.store.RecentActive(ctx, ws, candidatesPerIndex)
+		ids, _ := e.store.RecentActive(ctx, ws, k)
 		sets.decay = ids
+
+		// Phase 3: Time-bounded candidate injection
+		if hasTimeBounds {
+			if before.IsZero() {
+				before = time.Now()
+			}
+			ids, _ := e.store.EngramIDsByCreatedRange(ctx, ws, since, before, k*3)
+			sets.time = ids
+		}
+
+		// PAS: transition candidate retrieval (fast path)
+		if req.PASEnabled && e.transStore != nil {
+			sets.transition = e.getTransitionCandidates(ctx, ws, req.VaultID, req.PASMaxInjections)
+		}
+
 		return &sets, nil
 	}
 
-	// Full parallel path: FTS + HNSW + decay run concurrently.
+	// Full parallel path: FTS + HNSW + decay + time-bounded scan run concurrently.
 	g, gctx := errgroup.WithContext(ctx)
 
 	g.Go(func() error {
 		if e.fts == nil {
 			return nil
 		}
-		results, err := e.fts.Search(gctx, ws, p1.queryStr, candidatesPerIndex)
+		results, err := e.fts.Search(gctx, ws, p1.queryStr, k)
 		if err != nil {
+			slog.Warn("activation: fts search degraded", "vault", req.VaultID, "error", err)
+			// continue with empty FTS results
 			return nil
 		}
 		sets.fts = results
@@ -398,8 +546,9 @@ func (e *ActivationEngine) phase2(ctx context.Context, req *ActivateRequest, p1 
 	})
 
 	g.Go(func() error {
-		results, err := e.hnsw.Search(gctx, ws, p1.embedding, candidatesPerIndex)
+		results, err := e.hnsw.Search(gctx, ws, p1.embedding, k)
 		if err != nil {
+			slog.Warn("activation: hnsw search degraded", "vault", req.VaultID, "err", err)
 			return nil
 		}
 		sets.vector = results
@@ -407,13 +556,38 @@ func (e *ActivationEngine) phase2(ctx context.Context, req *ActivateRequest, p1 
 	})
 
 	g.Go(func() error {
-		ids, err := e.store.RecentActive(gctx, ws, candidatesPerIndex)
+		ids, err := e.store.RecentActive(gctx, ws, k)
 		if err != nil {
 			return nil
 		}
 		sets.decay = ids
 		return nil
 	})
+
+	// Phase 3: Time-bounded candidate injection (parallel with other indices)
+	if hasTimeBounds {
+		g.Go(func() error {
+			// Default before to now if not specified
+			before_ts := before
+			if before_ts.IsZero() {
+				before_ts = time.Now()
+			}
+			ids, err := e.store.EngramIDsByCreatedRange(gctx, ws, since, before_ts, k*3)
+			if err != nil {
+				return nil
+			}
+			sets.time = ids
+			return nil
+		})
+	}
+
+	// PAS: transition candidate retrieval (parallel with other indices)
+	if req.PASEnabled && e.transStore != nil {
+		g.Go(func() error {
+			sets.transition = e.getTransitionCandidates(gctx, ws, req.VaultID, req.PASMaxInjections)
+			return nil
+		})
+	}
 
 	if err := g.Wait(); err != nil {
 		return nil, err
@@ -423,24 +597,27 @@ func (e *ActivationEngine) phase2(ctx context.Context, req *ActivateRequest, p1 
 
 // fusedCandidate is a candidate after RRF fusion.
 type fusedCandidate struct {
-	id           storage.ULID
-	rrfScore     float64
-	ftsScore     float64
-	vectorScore  float64
-	inDecayPool  bool
-	hebbianBoost float64
+	id              storage.ULID
+	rrfScore        float64
+	ftsScore        float64
+	vectorScore     float64
+	inDecayPool     bool
+	hebbianBoost    float64
+	transitionBoost float64
 }
 
 const (
-	rrfK_HNSW  = 40.0
-	rrfK_FTS   = 60.0
-	rrfK_Decay = 120.0
+	rrfK_HNSW       = 40.0
+	rrfK_FTS        = 60.0
+	rrfK_Transition = 50.0 // PAS: between HNSW and FTS, strong but not dominant
+	rrfK_Decay      = 120.0
+	rrfK_Time       = 100.0 // time-bounded range scan; lower than decay to deprioritize vs semantic relevance
 )
 
-// phase3RRF merges the three candidate lists via Reciprocal Rank Fusion.
+// phase3RRF merges candidate lists via Reciprocal Rank Fusion.
 // Uses index-into-slice instead of map-of-pointers to reduce heap allocations.
 func phase3RRF(sets *candidateSets) []fusedCandidate {
-	totalCap := len(sets.fts) + len(sets.vector) + len(sets.decay)
+	totalCap := len(sets.fts) + len(sets.vector) + len(sets.decay) + len(sets.time) + len(sets.transition)
 	result := make([]fusedCandidate, 0, totalCap)
 	index := make(map[storage.ULID]int, totalCap)
 
@@ -472,6 +649,18 @@ func phase3RRF(sets *candidateSets) []fusedCandidate {
 		c.inDecayPool = true
 	}
 
+	// Phase 3: time-bounded candidate injection via RRF
+	for rank, id := range sets.time {
+		c := getOrCreate(id)
+		c.rrfScore += 1.0 / (rrfK_Time + float64(rank+1))
+	}
+
+	// PAS: transition-predicted candidate injection via RRF
+	for rank, id := range sets.transition {
+		c := getOrCreate(id)
+		c.rrfScore += 1.0 / (rrfK_Transition + float64(rank+1))
+	}
+
 	sort.Slice(result, func(i, j int) bool {
 		return result[i].rrfScore > result[j].rrfScore
 	})
@@ -488,7 +677,7 @@ func (e *ActivationEngine) phase4HebbianBoost(ctx context.Context, ws [8]byte, v
 	}
 
 	now := time.Now().Unix()
-	recentWeights := make(map[storage.ULID]float64, len(recent)*10)
+	recentWeights := make(map[storage.ULID]float64, len(recent))
 	const halfLife = 3600.0
 	for _, entry := range recent {
 		age := float64(now - entry.At.Unix())
@@ -509,6 +698,11 @@ func (e *ActivationEngine) phase4HebbianBoost(ctx context.Context, ws [8]byte, v
 		ids[i] = c.id
 	}
 
+	// Cap to top-50 candidates to bound GetAssociations work per activation cycle.
+	if len(ids) > 50 {
+		ids = ids[:50]
+	}
+
 	assocMap, err := e.store.GetAssociations(ctx, ws, ids, 20)
 	if err != nil {
 		return
@@ -526,6 +720,97 @@ func (e *ActivationEngine) phase4HebbianBoost(ctx context.Context, ws [8]byte, v
 			boost = 1.0
 		}
 		candidates[i].hebbianBoost = boost
+	}
+}
+
+// getTransitionCandidates retrieves PAS candidate IDs from the transition table.
+// Looks at the most recent activation for this vault and finds transition targets
+// for each result engram from that activation. Returns deduplicated IDs capped
+// at maxInjections.
+func (e *ActivationEngine) getTransitionCandidates(ctx context.Context, ws [8]byte, vaultID uint32, maxInjections int) []storage.ULID {
+	if maxInjections <= 0 {
+		maxInjections = 5
+	}
+
+	recent := e.assocLog.RecentForVault(vaultID, 1)
+	if len(recent) == 0 {
+		return nil
+	}
+
+	seen := make(map[storage.ULID]struct{})
+	var candidates []storage.ULID
+
+	for _, id := range recent[0].EngramIDs {
+		targets, err := e.transStore.GetTopTransitions(ctx, ws, [16]byte(id), maxInjections)
+		if err != nil {
+			slog.Warn("PAS: transition candidate retrieval degraded", "error", err)
+			continue
+		}
+		for _, t := range targets {
+			tid := storage.ULID(t.ID)
+			if _, dup := seen[tid]; dup {
+				continue
+			}
+			seen[tid] = struct{}{}
+			candidates = append(candidates, tid)
+			if len(candidates) >= maxInjections {
+				return candidates
+			}
+		}
+	}
+	return candidates
+}
+
+// phase4_5TransitionBoost applies PAS transition boost to candidates.
+// For each candidate already in the fused list, checks if it's a transition target
+// from the previous activation. If so, sets transitionBoost = normalized count.
+func (e *ActivationEngine) phase4_5TransitionBoost(ctx context.Context, ws [8]byte, vaultID uint32, candidates []fusedCandidate) {
+	if e.transStore == nil {
+		return
+	}
+
+	recent := e.assocLog.RecentForVault(vaultID, 1)
+	if len(recent) == 0 {
+		return
+	}
+
+	// Collect all transition targets from each previous result engram.
+	transTargets := make(map[storage.ULID]uint32)
+	var globalMax uint32
+
+	for _, id := range recent[0].EngramIDs {
+		targets, err := e.transStore.GetTopTransitions(ctx, ws, [16]byte(id), 20)
+		if err != nil {
+			slog.Warn("phase4.5: transition store read degraded", "error", err)
+			continue
+		}
+		for _, t := range targets {
+			tid := storage.ULID(t.ID)
+			if existing, ok := transTargets[tid]; ok {
+				if t.Count > existing {
+					transTargets[tid] = t.Count
+				}
+			} else {
+				transTargets[tid] = t.Count
+			}
+			if t.Count > globalMax {
+				globalMax = t.Count
+			}
+		}
+	}
+
+	if len(transTargets) == 0 || globalMax == 0 {
+		return
+	}
+
+	for i := range candidates {
+		if count, ok := transTargets[candidates[i].id]; ok {
+			boost := float64(count) / float64(globalMax)
+			if boost > 1.0 {
+				boost = 1.0
+			}
+			candidates[i].transitionBoost = boost
+		}
 	}
 }
 
@@ -624,6 +909,8 @@ func (e *ActivationEngine) phase5Traverse(
 		// One batched Pebble call for the entire level.
 		assocMap, err := e.store.GetAssociations(ctx, ws, ids, maxEdgesPerNode)
 		if err != nil {
+			slog.Warn("activation: bfs associations error, truncating traversal",
+				"vault", req.VaultID, "hop", eligible[0].hopDepth, "error", err)
 			break
 		}
 
@@ -707,43 +994,47 @@ func (e *ActivationEngine) phase6Score(
 	w := resolveWeights(req.Weights, e.weights)
 
 	type scoringCandidate struct {
-		id           storage.ULID
-		ftsScore     float64
-		vectorScore  float64
-		hebbianBoost float64
-		rrfScore     float64
-		hopPath      []storage.ULID
-		relType      uint16
+		id              storage.ULID
+		ftsScore        float64
+		vectorScore     float64
+		hebbianBoost    float64
+		transitionBoost float64
+		rrfScore        float64
+		hopPath         []storage.ULID
+		relType         uint16
 	}
 
 	// Deduplicate: fused candidates take priority; traversed candidates are
 	// only added if their ID has not already appeared in the fused set.
-	seen := make(map[storage.ULID]struct{}, len(fused)+len(traversed))
+	// Fused candidates are already deduplicated by RRF, so no seen-check needed for them.
 	all := make([]scoringCandidate, 0, len(fused)+len(traversed))
 	for _, c := range fused {
-		if _, dup := seen[c.id]; dup {
-			continue
-		}
-		seen[c.id] = struct{}{}
 		all = append(all, scoringCandidate{
-			id:           c.id,
-			ftsScore:     c.ftsScore,
-			vectorScore:  c.vectorScore,
-			hebbianBoost: c.hebbianBoost,
-			rrfScore:     c.rrfScore,
+			id:              c.id,
+			ftsScore:        c.ftsScore,
+			vectorScore:     c.vectorScore,
+			hebbianBoost:    c.hebbianBoost,
+			transitionBoost: c.transitionBoost,
+			rrfScore:        c.rrfScore,
 		})
 	}
-	for _, t := range traversed {
-		if _, dup := seen[t.id]; dup {
-			continue
+	// Only run dedup if there are traversed candidates to merge.
+	if len(traversed) > 0 {
+		seen := make(map[storage.ULID]struct{}, len(fused))
+		for _, c := range fused {
+			seen[c.id] = struct{}{}
 		}
-		seen[t.id] = struct{}{}
-		all = append(all, scoringCandidate{
-			id:       t.id,
-			rrfScore: t.propagated,
-			hopPath:  t.hopPath,
-			relType:  t.relType,
-		})
+		for _, t := range traversed {
+			if _, dup := seen[t.id]; dup {
+				continue
+			}
+			all = append(all, scoringCandidate{
+				id:       t.id,
+				rrfScore: t.propagated,
+				hopPath:  t.hopPath,
+				relType:  t.relType,
+			})
+		}
 	}
 
 	ids := make([]storage.ULID, len(all))
@@ -760,6 +1051,16 @@ func (e *ActivationEngine) phase6Score(
 	if err != nil {
 		return nil, fmt.Errorf("phase6 get engrams: %w", err)
 	}
+
+	// Filter out soft-deleted engrams (defense-in-depth; HNSW has no delete method).
+	var active []*storage.Engram
+	for _, eng := range allEngrams {
+		if eng != nil && eng.State != storage.StateSoftDeleted {
+			active = append(active, eng)
+		}
+	}
+	allEngrams = active
+
 	engramByID := make(map[storage.ULID]*storage.Engram, len(allEngrams))
 	for _, eng := range allEngrams {
 		if eng != nil {
@@ -787,35 +1088,100 @@ func (e *ActivationEngine) phase6Score(
 	now := time.Now()
 	scored := make([]scoredItem, 0, len(all))
 
-	for _, c := range all {
-		eng := engramByID[c.id]
-		if eng == nil {
-			continue
+	// CGDN path: two-pass scoring with divisive normalization.
+	// Pass 1 computes gated activations a(d) for all candidates; Pass 2 normalizes.
+	// This replicates lateral inhibition in hippocampal retrieval: cognitive state
+	// multiplicatively gates content relevance, then candidates compete via division.
+	if w.UseCGDN {
+		type cgdnItem struct {
+			c          interface{ getBase() (storage.ULID, float64, float64, float64, []storage.ULID) }
+			eng        *storage.Engram
+			activation float64
+			components ScoreComponents
+			hopPath    []storage.ULID
 		}
 
-		if !passesMetaFilter(eng, req.Filters) {
-			continue
+		// Pass 1: compute gated activations for all valid candidates.
+		type cgdnCandidate struct {
+			id         storage.ULID
+			activation float64
+			components ScoreComponents
+			hopPath    []storage.ULID
+		}
+		cgdnCands := make([]cgdnCandidate, 0, len(all))
+		for _, c := range all {
+			eng := engramByID[c.id]
+			if eng == nil || !passesMetaFilter(eng, req.Filters) {
+				continue
+			}
+			// Compute component scores (reuse existing helpers for decay, FTS normalization etc.)
+			comp := computeComponents(c.vectorScore, c.ftsScore, c.hebbianBoost, eng, lastAccessNsByID[c.id], now, w)
+			// Gated activation: content relevance × cognitive gate
+			a := computeGatedActivation(comp.SemanticSimilarity, comp.FullTextRelevance, comp.DecayFactor, comp.HebbianBoost, w)
+			cgdnCands = append(cgdnCands, cgdnCandidate{
+				id: c.id, activation: a, components: comp, hopPath: c.hopPath,
+			})
 		}
 
-		components := computeComponents(c.vectorScore, c.ftsScore, c.hebbianBoost, eng, lastAccessNsByID[c.id], now, w)
-		final := components.Raw * components.Confidence
+		if len(cgdnCands) > 0 {
+			// Compute σ = median activation (self-calibrating operating point).
+			acts := make([]float64, len(cgdnCands))
+			for i, cc := range cgdnCands {
+				acts[i] = cc.activation
+			}
+			sort.Float64s(acts)
+			sigma := acts[len(acts)/2]
+			if sigma <= 0 {
+				sigma = 0.01
+			}
 
-		if final < req.Threshold {
-			continue
+			// Compute divisive normalization denominator: σ^n + Σ a(j)^n
+			n := w.CGDNPower
+			var denomSum float64
+			for _, a := range acts {
+				denomSum += math.Pow(a, n)
+			}
+			denom := math.Pow(sigma, n) + denomSum
+
+			// Pass 2: compute R(d) = a(d)^n / denom, apply confidence, threshold.
+			for _, cc := range cgdnCands {
+				r := math.Pow(cc.activation, n) / denom
+				final := r * cc.components.Confidence
+				if final < req.Threshold {
+					continue
+				}
+				cc.components.Raw = r
+				cc.components.Final = final
+				scored = append(scored, scoredItem{
+					id: cc.id, final: final, components: cc.components, hopPath: cc.hopPath,
+				})
+			}
 		}
 
-		scored = append(scored, scoredItem{
-			id:         c.id,
-			final:      final,
-			components: components,
-			hopPath:    c.hopPath,
-		})
+		sort.Slice(scored, func(i, j int) bool { return scored[i].final > scored[j].final })
+		goto cgdnDone
 	}
 
-	sort.Slice(scored, func(i, j int) bool {
-		return scored[i].final > scored[j].final
-	})
+	// ACT-R path: single-pass, per-engram. No global normalization needed.
+	// Score = ContentMatch × softplus(BaseLevelActivation + scale×Hebbian + scale×Transition) × Confidence
+	if w.UseACTR {
+		for _, c := range all {
+			eng := engramByID[c.id]
+			if eng == nil || !passesMetaFilter(eng, req.Filters) {
+				continue
+			}
+			components := computeACTR(c.vectorScore, c.ftsScore, c.hebbianBoost, c.transitionBoost, eng, lastAccessNsByID[c.id], now, w)
+			final := components.Raw * components.Confidence
+			if final < req.Threshold {
+				continue
+			}
+			scored = append(scored, scoredItem{id: c.id, final: final, components: components, hopPath: c.hopPath})
+		}
+		sort.Slice(scored, func(i, j int) bool { return scored[i].final > scored[j].final })
+		goto cgdnDone
+	}
 
+cgdnDone:
 	totalFound := len(scored)
 	if len(scored) > req.MaxResults {
 		scored = scored[:req.MaxResults]
@@ -847,17 +1213,29 @@ func (e *ActivationEngine) phase6Score(
 		if eng == nil {
 			continue
 		}
+		// Build hopConcepts post-truncation: only for surviving items, saving
+		// allocation for all candidates that were filtered or truncated away.
+		var hopConcepts []string
+		if len(s.hopPath) > 0 {
+			hopConcepts = make([]string, 0, len(s.hopPath))
+			for _, hopID := range s.hopPath {
+				if hopEng := engramByID[hopID]; hopEng != nil {
+					hopConcepts = append(hopConcepts, hopEng.Concept)
+				}
+			}
+		}
 		var why string
 		if req.IncludeWhy {
-			why = buildWhy(eng, s.components, s.hopPath, p1.queryStr)
+			why = buildWhy(eng, s.components, s.hopPath, hopConcepts, p1.queryStr)
 		}
 		activations = append(activations, ScoredEngram{
-			Engram:     eng,
-			Score:      s.final,
-			Components: s.components,
-			Why:        why,
-			HopPath:    append([]storage.ULID(nil), s.hopPath...),
-			Dormant:    eng.Relevance <= minFloor*1.1,
+			Engram:      eng,
+			Score:       s.final,
+			Components:  s.components,
+			Why:         why,
+			HopPath:     append([]storage.ULID(nil), s.hopPath...),
+			HopConcepts: hopConcepts,
+			Dormant:     eng.Relevance <= minFloor*1.1,
 		})
 	}
 
@@ -927,6 +1305,126 @@ func computeComponents(vectorScore, ftsScore, hebbianBoost float64, eng *storage
 	}
 }
 
+// actrDenominator is the precomputed normalization denominator used in computeACTR.
+// It equals 1 + softplus(0) = 1 + ln(1 + exp(0)) = 1 + ln(2) ≈ 1.6931471805599453.
+// Precomputing this constant avoids recomputing softplus(0) on every engram scored.
+const actrDenominator = 1.6931471805599453
+
+// softplus computes ln(1 + exp(x)), mapping (-inf,+inf) to (0,+inf).
+// Used as the activation function in ACT-R scoring: ensures the contextual prior
+// is always positive and smoothly transitions from near-zero to near-linear.
+// Numerically stable: for large positive x, softplus(x) ≈ x; for large negative x, ≈ exp(x).
+func softplus(x float64) float64 {
+	if x > 20 {
+		return x // avoid overflow: softplus(x) ≈ x for large x
+	}
+	return math.Log1p(math.Exp(x))
+}
+
+// computeACTR computes the ACT-R scoring components for a candidate engram.
+// Formula (Anderson 1993):
+//   B(M) = ln(n+1) - d × ln(max(ageDays,0.1) / (n+1))   [base-level activation]
+//   Score = ContentMatch × softplus(B(M) + scale×Hebbian) × Confidence
+//
+// ContentMatch gates the score: zero semantic relevance = zero score regardless of recency.
+// B(M) + scale×Hebbian are additive: Hebbian can rescue old but linked memories.
+// This resolves the decay-vs-Hebbian tension without two separate pathways.
+func computeACTR(vectorScore, ftsScore, hebbianBoost, transitionBoost float64, eng *storage.Engram,
+	lastAccessNs int64, now time.Time, w resolvedWeights) ScoreComponents {
+
+	// Compute content relevance (same as standard path).
+	normalizedFTS := math.Tanh(ftsScore)
+	contentMatch := w.SemanticSimilarity*vectorScore + w.FullTextRelevance*normalizedFTS
+
+	// Compute ACT-R base-level activation B(M).
+	// B(M) = ln(n+1) - d × ln(max(ageDays, 0.1) / (n+1))
+	// High n + low ageDays → high B (fresh, frequently accessed → strong base level)
+	// Low n + high ageDays → low B (old, rarely accessed → weak base level)
+	var lastAccess time.Time
+	if lastAccessNs > 0 {
+		lastAccess = time.Unix(0, lastAccessNs)
+	} else {
+		lastAccess = eng.LastAccess
+	}
+	// Treat zero or pre-2000 LastAccess as "just now" — these are newly written
+	// engrams that have never been accessed. A fresh write = maximum recency.
+	if lastAccess.IsZero() || lastAccess.Year() < 2000 {
+		lastAccess = now
+	}
+	ageDays := math.Max(now.Sub(lastAccess).Hours()/24.0, 0.1)
+	n := float64(eng.AccessCount + 1) // +1 avoids ln(0) for never-accessed engrams
+	d := w.ACTRDecay                  // power-law forgetting exponent (default 0.5)
+	baseLevel := math.Log(n) - d*math.Log(math.Max(ageDays, 0.1)/n)
+
+	// Total activation = base-level + scaled Hebbian boost + scaled transition boost.
+	// ACTRHebScale (default 4.0) amplifies both Hebbian and transition signals so
+	// they can meaningfully rescue old memories, matching Anderson's spreading activation.
+	// Transition boost uses the same scale as Hebbian — both represent contextual priors.
+	totalActivation := baseLevel + w.ACTRHebScale*hebbianBoost + w.ACTRHebScale*transitionBoost
+
+	// Contextual prior: softplus maps total activation to (0, +inf).
+	contextualPrior := softplus(totalActivation)
+
+	// Final raw score: ContentMatch gates contextual prior.
+	// Normalize by actrDenominator = 1 + softplus(0) ≈ 1.693 so that a median-activation
+	// memory with perfect content match produces raw ≈ 1.0. Clamp to [0, 1] for contract.
+	raw := contentMatch * contextualPrior / actrDenominator
+	if raw > 1.0 {
+		raw = 1.0
+	}
+	if raw < 0.0 {
+		raw = 0.0
+	}
+	conf := float64(eng.Confidence)
+
+	return ScoreComponents{
+		SemanticSimilarity: vectorScore,
+		FullTextRelevance:  normalizedFTS,
+		DecayFactor:        math.Max(0.05, math.Exp(-ageDays/math.Max(float64(eng.Stability), 1.0))), // kept for reporting; guard against Stability=0
+		HebbianBoost:       hebbianBoost,
+		TransitionBoost:    transitionBoost,
+		AccessFrequency:    math.Log1p(float64(eng.AccessCount)) / math.Log1p(100),
+		Recency:            math.Exp(-ageDays * math.Log(2) / 7.0),
+		Confidence:         conf,
+		Raw:                raw,
+		Final:              raw * conf,
+	}
+}
+
+// computeGatedActivation computes the raw gated activation a(d) for CGDN.
+//
+// Formula (Hebbian-Rescue CGDN):
+//   rescue(d) = max(0, hebbianBoost - ε) * λ
+//   g(d)      = clamp(decayFactor^α + rescue(d), 0, 1)
+//   a(d)      = (w_semantic*vectorScore + w_fts*normalizedFTS) * g(d)
+//
+// The Hebbian rescue term (additive, not multiplicative) is the key.
+// Multiplicative gating `decay × hebbian` suppresses Hebbian-linked old memories
+// because decay dominates. The additive rescue replicates hippocampal CA3 pattern
+// completion where Hebbian activation partially RESTORES decayed memories:
+//
+//   Fresh, no Hebbian link:  g ≈ 0.85^1.5 + 0 ≈ 0.78  (high gate — surfaces)
+//   Stale, no Hebbian link:  g ≈ 0.05^1.5 + 0 ≈ 0.01  (near-zero — suppressed)
+//   Stale, Hebbian link 0.5: g ≈ 0.05^1.5 + 0.5*λ ≈ 0.01 + 0.40 = 0.41 (rescued!)
+//   Stale, no Hebbian link:  g ≈ 0.05^1.5 + 0 ≈ 0.01  (still suppressed)
+//
+// This creates a 41x advantage for the Hebbian-linked stale vs unlinked stale,
+// replicating retrieval-induced forgetting counteraction (Anderson & Bjork 1994)
+// and memory reconsolidation (Nader et al. 2000).
+func computeGatedActivation(vectorScore, normalizedFTS, decayFactor, hebbianBoost float64, w resolvedWeights) float64 {
+	const (
+		epsilon       = 0.01 // Hebbian floor — prevents zero rescue for unlinked engrams
+		rescueLambda  = 0.8  // Hebbian rescue strength — how much Hebbian can restore decay
+	)
+	rescue := math.Max(0, hebbianBoost-epsilon) * rescueLambda
+	gate := math.Pow(decayFactor, w.CGDNAlpha) + rescue
+	if gate > 1.0 {
+		gate = 1.0
+	}
+	contentRelevance := w.SemanticSimilarity*vectorScore + w.FullTextRelevance*normalizedFTS
+	return contentRelevance * gate
+}
+
 // passesMetaFilter evaluates filter predicates against a full engram.
 // Accepts *storage.Engram directly — avoids a separate GetMetadata call in phase6.
 func passesMetaFilter(eng *storage.Engram, filters []Filter) bool {
@@ -964,6 +1462,7 @@ func passesMetaFilter(eng *storage.Engram, filters []Filter) bool {
 
 func resolveWeights(req *Weights, def DefaultWeights) resolvedWeights {
 	if req == nil {
+		// No weights provided (e.g. tests): use ACT-R with defaults. Decay path is not reachable for now.
 		return resolvedWeights{
 			SemanticSimilarity: float64(def.SemanticSimilarity),
 			FullTextRelevance:  float64(def.FullTextRelevance),
@@ -971,19 +1470,49 @@ func resolveWeights(req *Weights, def DefaultWeights) resolvedWeights {
 			HebbianBoost:       float64(def.HebbianBoost),
 			AccessFrequency:    float64(def.AccessFrequency),
 			Recency:            float64(def.Recency),
+			UseACTR:            true,
+			ACTRDecay:          0.5,
+			ACTRHebScale:       4.0,
 		}
 	}
-	return resolvedWeights{
+	rw := resolvedWeights{
 		SemanticSimilarity: float64(req.SemanticSimilarity),
 		FullTextRelevance:  float64(req.FullTextRelevance),
 		DecayFactor:        float64(req.DecayFactor),
 		HebbianBoost:       float64(req.HebbianBoost),
 		AccessFrequency:    float64(req.AccessFrequency),
 		Recency:            float64(req.Recency),
+		UseCGDN:            req.UseCGDN,
+		UseACTR:            true, // only path for now; decay worker code kept for possible future use
 	}
+	// Apply CGDN defaults when enabled.
+	if req.UseCGDN {
+		rw.CGDNAlpha = 1.5
+		if req.CGDNAlpha > 0 {
+			rw.CGDNAlpha = float64(req.CGDNAlpha)
+		}
+		rw.CGDNBeta = 0.5
+		if req.CGDNBeta > 0 {
+			rw.CGDNBeta = float64(req.CGDNBeta)
+		}
+		rw.CGDNPower = 2.0
+		if req.CGDNPower > 0 {
+			rw.CGDNPower = float64(req.CGDNPower)
+		}
+	}
+	// ACT-R params (always used; decay path unreachable).
+	rw.ACTRDecay = 0.5
+	if req.ACTRDecay > 0 {
+		rw.ACTRDecay = float64(req.ACTRDecay)
+	}
+	rw.ACTRHebScale = 4.0
+	if req.ACTRHebScale > 0 {
+		rw.ACTRHebScale = float64(req.ACTRHebScale)
+	}
+	return rw
 }
 
-func buildWhy(eng *storage.Engram, c ScoreComponents, hopPath []storage.ULID, queryStr string) string {
+func buildWhy(eng *storage.Engram, c ScoreComponents, hopPath []storage.ULID, hopConcepts []string, queryStr string) string {
 	var parts []string
 
 	signals := map[string]float64{
@@ -1017,7 +1546,16 @@ func buildWhy(eng *storage.Engram, c ScoreComponents, hopPath []storage.ULID, qu
 	}
 
 	if len(hopPath) > 1 {
-		parts = append(parts, fmt.Sprintf("reached via %d association hop(s)", len(hopPath)-1))
+		if len(hopConcepts) > 0 {
+			// Build: "reached via: [concept A] → [concept B]"
+			hops := make([]string, len(hopConcepts))
+			for i, concept := range hopConcepts {
+				hops[i] = "[" + concept + "]"
+			}
+			parts = append(parts, "reached via: "+strings.Join(hops, " → "))
+		} else {
+			parts = append(parts, fmt.Sprintf("reached via %d association hop(s)", len(hopPath)-1))
+		}
 	}
 
 	if c.Confidence < 0.5 {

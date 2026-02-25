@@ -267,7 +267,6 @@ func (w *Worker[T]) Stats() WorkerStats {
 // EngineWorkerStats holds the combined statistics for all cognitive workers.
 type EngineWorkerStats struct {
 	Hebbian    WorkerStats `json:"hebbian"`
-	Decay      WorkerStats `json:"decay"`
 	Contradict WorkerStats `json:"contradict"`
 	Confidence WorkerStats `json:"confidence"`
 }

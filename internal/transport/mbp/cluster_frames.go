@@ -67,12 +67,12 @@ type GossipMessage struct {
 
 // JoinRequest is sent by a node joining the cluster.
 type JoinRequest struct {
-	NodeID       string   `msgpack:"node_id"`
-	Addr         string   `msgpack:"addr"`
-	LastApplied  uint64   `msgpack:"last_applied"`
-	Capabilities []string `msgpack:"capabilities"`
-	SecretHash   []byte   `msgpack:"secret_hash"`
-	ProtocolVersion uint16 `msgpack:"proto_ver,omitempty"`
+	NodeID          string   `msgpack:"node_id"`
+	Addr            string   `msgpack:"addr"`
+	LastApplied     uint64   `msgpack:"last_applied"`
+	Capabilities    []string `msgpack:"capabilities"`
+	SecretHash      []byte   `msgpack:"secret_hash"`
+	ProtocolVersion uint16   `msgpack:"proto_ver,omitempty"`
 }
 
 // JoinResponse is the cluster's reply to a join request.
@@ -90,7 +90,7 @@ type JoinResponse struct {
 	// SnapshotSeq is the Cortex's replication log seq at snapshot time.
 	// Entries after this seq were written during the transfer and must be
 	// caught up via NetworkStreamer starting from SnapshotSeq+1.
-	SnapshotSeq uint64 `msgpack:"snapshot_seq,omitempty"`
+	SnapshotSeq            uint64 `msgpack:"snapshot_seq,omitempty"`
 	MinProtocolVersion     uint16 `msgpack:"min_proto_ver,omitempty"`
 	CurrentProtocolVersion uint16 `msgpack:"current_proto_ver,omitempty"`
 }
@@ -119,8 +119,8 @@ type SnapHeader struct {
 
 // SnapChunk is a chunk of key-value pairs in a snapshot transfer.
 type SnapChunk struct {
-	ChunkNum  uint32  `msgpack:"chunk_num"`
-	LastChunk bool    `msgpack:"last_chunk"`
+	ChunkNum  uint32   `msgpack:"chunk_num"`
+	LastChunk bool     `msgpack:"last_chunk"`
 	Pairs     []KVPair `msgpack:"pairs"`
 }
 
@@ -205,6 +205,6 @@ type CCSProbeMsg struct {
 type CCSResponseMsg struct {
 	RequestID string `msgpack:"rid"`
 	NodeID    string `msgpack:"node_id"`
-	Hash      []byte `msgpack:"hash"`     // SHA-256 of sorted (key,weight) pairs
+	Hash      []byte `msgpack:"hash"`      // SHA-256 of sorted (key,weight) pairs
 	KeyCount  int    `msgpack:"key_count"` // number of keys the lobe found locally
 }

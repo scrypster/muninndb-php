@@ -468,3 +468,98 @@ func TestFilter_TagsEmptySlice(t *testing.T) {
 		t.Fatalf("expected 2 results, got %d", len(result))
 	}
 }
+
+// TestFilterValidate_LimitExceedsMax verifies that a Limit of 201 is rejected.
+func TestFilterValidate_LimitExceedsMax(t *testing.T) {
+	f := &Filter{Limit: 201}
+	if err := f.Validate(); err == nil {
+		t.Fatal("expected error for Limit=201, got nil")
+	}
+}
+
+// TestFilterValidate_NegativeOffset verifies that a negative Offset is rejected.
+func TestFilterValidate_NegativeOffset(t *testing.T) {
+	f := &Filter{Offset: -1}
+	if err := f.Validate(); err == nil {
+		t.Fatal("expected error for Offset=-1, got nil")
+	}
+}
+
+// TestFilterValidate_MinRelevanceOutOfRange verifies that MinRelevance values
+// outside [0.0, 1.0] are rejected.
+func TestFilterValidate_MinRelevanceOutOfRange(t *testing.T) {
+	cases := []struct {
+		name         string
+		minRelevance float32
+	}{
+		{"above 1.0", 1.5},
+		{"below 0.0", -0.1},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &Filter{MinRelevance: tc.minRelevance}
+			if err := f.Validate(); err == nil {
+				t.Fatalf("expected error for MinRelevance=%v, got nil", tc.minRelevance)
+			}
+		})
+	}
+}
+
+// TestFilterMatch_TemporalBounds verifies CreatedAfter and CreatedBefore filtering.
+func TestFilterMatch_TemporalBounds(t *testing.T) {
+	tenDaysAgo := time.Now().Add(-10 * 24 * time.Hour)
+	fiveDaysAgo := time.Now().Add(-5 * 24 * time.Hour)
+
+	engram := &storage.Engram{
+		CreatedAt: tenDaysAgo,
+	}
+
+	t.Run("CreatedAfter 5 days ago does not match engram from 10 days ago", func(t *testing.T) {
+		f := &Filter{CreatedAfter: &fiveDaysAgo}
+		if f.Match(engram) {
+			t.Fatal("expected no match: engram created 10 days ago should not pass CreatedAfter=5 days ago")
+		}
+	})
+
+	t.Run("CreatedBefore 5 days ago matches engram from 10 days ago", func(t *testing.T) {
+		f := &Filter{CreatedBefore: &fiveDaysAgo}
+		if !f.Match(engram) {
+			t.Fatal("expected match: engram created 10 days ago should pass CreatedBefore=5 days ago")
+		}
+	})
+}
+
+// TestFilterApply_OffsetBeyondSlice verifies that an Offset larger than the
+// result set returns an empty slice without panicking.
+func TestFilterApply_OffsetBeyondSlice(t *testing.T) {
+	engrams := []*storage.Engram{
+		{Concept: "a"},
+		{Concept: "b"},
+		{Concept: "c"},
+	}
+
+	f := &Filter{Offset: 10}
+	result := f.Apply(engrams)
+
+	if len(result) != 0 {
+		t.Fatalf("expected empty slice, got %d items", len(result))
+	}
+}
+
+// TestFilterApply_LimitDefault verifies that Limit=0 applies the default of 20.
+func TestFilterApply_LimitDefault(t *testing.T) {
+	// Build 25 engrams so we can observe whether default limit of 20 is applied.
+	engrams := make([]*storage.Engram, 25)
+	for i := range engrams {
+		engrams[i] = &storage.Engram{Concept: "item"}
+	}
+
+	f := &Filter{Limit: 0}
+	result := f.Apply(engrams)
+
+	const defaultLimit = 20
+	if len(result) != defaultLimit {
+		t.Fatalf("expected default limit of %d, got %d", defaultLimit, len(result))
+	}
+}

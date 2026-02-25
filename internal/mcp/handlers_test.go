@@ -22,23 +22,27 @@ func newTestServerWith(eng EngineInterface) *MCPServer {
 // extractInnerJSON decodes the MCP textContent envelope and returns the inner
 // JSON as a map. The result from sendResult(…, textContent(mustJSON(v))) is:
 //
-//	[{"type":"text","text":"<inner json>"}]
+//	{"content":[{"type":"text","text":"<inner json>"}]}
 func extractInnerJSON(t *testing.T, resp JSONRPCResponse) map[string]any {
 	t.Helper()
 	if resp.Error != nil {
 		t.Fatalf("unexpected JSON-RPC error: code=%d msg=%s", resp.Error.Code, resp.Error.Message)
 	}
-	contents, ok := resp.Result.([]any)
+	wrapper, ok := resp.Result.(map[string]any)
+	if !ok {
+		t.Fatalf("expected result to be an object, got %T", resp.Result)
+	}
+	contents, ok := wrapper["content"].([]any)
 	if !ok || len(contents) == 0 {
-		t.Fatal("expected result to be a non-empty array")
+		t.Fatal("expected result.content to be a non-empty array")
 	}
 	item, ok := contents[0].(map[string]any)
 	if !ok {
-		t.Fatalf("expected result[0] to be an object, got %T", contents[0])
+		t.Fatalf("expected result.content[0] to be an object, got %T", contents[0])
 	}
 	text, ok := item["text"].(string)
 	if !ok {
-		t.Fatalf("expected result[0].text to be a string, got %T", item["text"])
+		t.Fatalf("expected result.content[0].text to be a string, got %T", item["text"])
 	}
 	var out map[string]any
 	if err := json.Unmarshal([]byte(text), &out); err != nil {

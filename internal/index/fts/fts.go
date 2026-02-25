@@ -6,9 +6,12 @@ import (
 	"math"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
 
 	"github.com/cockroachdb/pebble"
+	"github.com/kljensen/snowball"
+	"github.com/scrypster/muninndb/internal/metrics"
 	"github.com/scrypster/muninndb/internal/storage/keys"
 )
 
@@ -60,6 +63,9 @@ type Index struct {
 	mu       sync.RWMutex
 	// In-memory IDF cache: term → idf
 	idfCache map[string]float64
+	// versionCache caches the FTS schema version per vault (0=legacy dual-path, 1=stemmed-only).
+	// Populated lazily on first Search() for each vault; FTSVersionKey is write-once.
+	versionCache sync.Map // key: [8]byte wsPrefix, value: byte
 }
 
 func New(db *pebble.DB) *Index {
@@ -78,8 +84,10 @@ func (idx *Index) InvalidateIDFCache() {
 	idx.mu.Unlock()
 }
 
-// Tokenize lowercases, removes non-letter chars, filters stop words.
-func Tokenize(text string) []string {
+// tokenizeRaw applies lowercase, character normalization, length filtering,
+// and stopword removal — but NOT stemming. Used for backward-compatible
+// dual-path search against un-migrated (pre-stemming) indexes.
+func tokenizeRaw(text string) []string {
 	text = strings.ToLower(text)
 	var b strings.Builder
 	for _, r := range text {
@@ -104,6 +112,22 @@ func Tokenize(text string) []string {
 		result = append(result, t)
 	}
 	return result
+}
+
+// Tokenize applies tokenizeRaw then Porter2 stemming.
+// New engrams are indexed with stemmed tokens via this function.
+func Tokenize(text string) []string {
+	raw := tokenizeRaw(text)
+	out := make([]string, 0, len(raw))
+	for _, tok := range raw {
+		stemmed, err := snowball.Stem(tok, "english", true)
+		if err == nil && stemmed != "" {
+			out = append(out, stemmed)
+		} else {
+			out = append(out, tok) // fallback: keep original
+		}
+	}
+	return out
 }
 
 // Trigrams extracts 3-character windows from a term.
@@ -158,14 +182,7 @@ func fieldWeight(field uint8) float64 {
 // IndexEngram writes FTS posting list entries for an engram.
 // ws is the 8-byte workspace prefix. id is the ULID.
 func (idx *Index) IndexEngram(ws [8]byte, id [16]byte, concept, createdBy, content string, tags []string) error {
-	batch := idx.db.NewBatch()
-
 	// Collect all (term, field, docLen) tuples
-	type entry struct {
-		term  string
-		field uint8
-		tf    float32
-	}
 	termCounts := make(map[string]map[uint8]int)
 	addTerms := func(text string, field uint8) {
 		tokens := Tokenize(text)
@@ -188,6 +205,16 @@ func (idx *Index) IndexEngram(ws [8]byte, id [16]byte, concept, createdBy, conte
 	allTokens := Tokenize(concept + " " + content + " " + createdBy + " " + strings.Join(tags, " "))
 	docLen := uint16(len(allTokens))
 
+	// Acquire lock BEFORE reading current DF values to prevent lost-update races
+	// under concurrent IndexEngram calls.
+	idx.mu.Lock()
+
+	// Build a single batch containing both posting lists AND DF updates so that
+	// the two writes are committed atomically. A crash after the old two-phase
+	// approach (posting batch committed first, DF written separately) could leave
+	// posting lists with stale DF counts.
+	batch := idx.db.NewBatch()
+
 	for term, fieldCounts := range termCounts {
 		for field, count := range fieldCounts {
 			pv := PostingValue{
@@ -205,47 +232,135 @@ func (idx *Index) IndexEngram(ws [8]byte, id [16]byte, concept, createdBy, conte
 			tkey := keys.TrigramKey(ws, tri, id)
 			batch.Set(tkey, nil, nil)
 		}
-	}
 
-	if err := batch.Commit(pebble.NoSync); err != nil {
-		return err
-	}
-
-	// Update per-term document frequency (df) for each unique term.
-	// Hold mu across the full read-modify-write to prevent lost updates
-	// under concurrent indexing calls.
-	for term := range termCounts {
+		// Read current DF and write updated DF into the same batch.
 		tkey := keys.TermStatsKey(ws, term)
-		idx.mu.Lock()
-		var df uint32
+		var currentDF uint32
 		val, closer, err := idx.db.Get(tkey)
 		if err == nil && len(val) >= 4 {
-			df = binary.BigEndian.Uint32(val[0:4])
+			currentDF = binary.BigEndian.Uint32(val[0:4])
 			closer.Close()
 		}
-		df++
-		buf := make([]byte, 8)
-		binary.BigEndian.PutUint32(buf[0:4], df)
-		_ = idx.db.Set(tkey, buf, pebble.NoSync)
+		newDF := currentDF + 1
+		var dfBuf [8]byte
+		binary.BigEndian.PutUint32(dfBuf[:4], newDF)
+		batch.Set(tkey, dfBuf[:], nil)
 
-		// Invalidate IDF cache for this term so it's recalculated
+		// Invalidate IDF cache for this term so it's recalculated on next search.
 		delete(idx.idfCache, term)
-		idx.mu.Unlock()
+	}
+
+	// Commit single atomic batch: posting lists + DF updates land together.
+	err := batch.Commit(pebble.Sync)
+	idx.mu.Unlock()
+
+	if err != nil {
+		return err
 	}
 
 	// Update global stats (TotalEngrams, AvgDocLen)
 	return idx.UpdateStats(ws, int(docLen))
 }
 
+// DeleteEngram removes FTS posting-list and trigram entries for an engram.
+// Called from SoftDelete to prevent soft-deleted engrams from appearing in search results.
+// Does NOT update global stats (stats are approximate; no need to recount on soft delete).
+func (idx *Index) DeleteEngram(ws [8]byte, id [16]byte, concept, createdBy, content string, tags []string) error {
+	// Collect all unique terms that were indexed for this engram.
+	termSet := make(map[string]struct{})
+	addTerms := func(text string) {
+		for _, t := range Tokenize(text) {
+			termSet[t] = struct{}{}
+		}
+	}
+
+	addTerms(concept)
+	addTerms(createdBy)
+	addTerms(content)
+	for _, tag := range tags {
+		addTerms(tag)
+	}
+
+	if len(termSet) == 0 {
+		return nil
+	}
+
+	idx.mu.Lock()
+	batch := idx.db.NewBatch()
+
+	for term := range termSet {
+		// Delete posting-list key for this (term, engram) pair.
+		key := keys.FTSPostingKey(ws, term, id)
+		batch.Delete(key, nil)
+
+		// Delete trigram keys for this term.
+		for _, tri := range Trigrams(term) {
+			tkey := keys.TrigramKey(ws, tri, id)
+			batch.Delete(tkey, nil)
+		}
+
+		// Invalidate IDF cache for this term — DF is now stale.
+		delete(idx.idfCache, term)
+	}
+
+	err := batch.Commit(pebble.Sync)
+	idx.mu.Unlock()
+	return err
+}
+
 // Search performs a BM25 search for the given query string.
 func (idx *Index) Search(ctx context.Context, ws [8]byte, query string, topK int) ([]ScoredID, error) {
-	tokens := Tokenize(query)
-	if len(tokens) == 0 {
-		return nil, nil
-	}
+	start := time.Now()
+	defer func() { metrics.FTSSearchDuration.Observe(time.Since(start).Seconds()) }()
+
+	// Dual-path: search both stemmed tokens (new index) and unstemmed tokens (legacy index).
+	// This ensures backward compatibility for vaults not yet re-indexed with stemming.
+	stemmedTokens := Tokenize(query)
+	rawTokens := tokenizeRaw(query)
 
 	// Read global stats
 	stats := idx.readStats(ws)
+
+	// Determine whether to use raw-token fallback.
+	// Vaults reindexed with ReindexFTSVault have FTSVersionKey=0x01 and skip the fallback.
+	useRawFallback := true
+	if cachedVer, ok := idx.versionCache.Load(ws); ok {
+		useRawFallback = cachedVer.(byte) == 0x00
+	} else {
+		versionKey := keys.FTSVersionKey(ws)
+		if val, closer, err := idx.db.Get(versionKey); err == nil {
+			ver := val[0]
+			closer.Close()
+			idx.versionCache.Store(ws, ver)
+			useRawFallback = ver == 0x00
+		}
+		// ErrNotFound means legacy vault — useRawFallback stays true
+	}
+
+	// Union: include both token forms when they differ
+	allTokens := make([]string, 0, len(stemmedTokens)*2)
+	seen := make(map[string]struct{})
+	// Always include stemmed tokens
+	for _, t := range stemmedTokens {
+		if _, exists := seen[t]; !exists {
+			allTokens = append(allTokens, t)
+			seen[t] = struct{}{}
+		}
+	}
+	// Only include raw tokens for legacy vaults (dual-path backward compat)
+	if useRawFallback {
+		for _, t := range rawTokens {
+			if _, exists := seen[t]; !exists {
+				allTokens = append(allTokens, t)
+				seen[t] = struct{}{}
+			}
+		}
+	}
+	tokens := allTokens
+
+	if len(tokens) == 0 {
+		return nil, nil
+	}
 	N := float64(stats.TotalEngrams)
 	avgdl := float64(stats.AvgDocLen)
 	if avgdl <= 0 {
@@ -258,63 +373,15 @@ func (idx *Index) Search(ctx context.Context, ws [8]byte, query string, topK int
 		avgdl = 1.0
 	}
 
-	// Per-engram accumulated scores
-	scores := make(map[[16]byte]float64)
+	// Per-engram accumulated scores; pre-allocate based on token count to reduce rehash overhead.
+	scores := make(map[[16]byte]float64, len(tokens)*20)
 
 	for _, term := range tokens {
 		idf := idx.getIDF(ws, term, N)
 		if idf <= 0 {
 			continue
 		}
-
-		// Prefix scan for this term
-		lowerBound := keys.FTSPostingKey(ws, term, [16]byte{})
-		// Upper bound: increment the separator byte after the term prefix.
-		// Allocate one byte longer than lowerBound so sepPos is always in bounds
-		// even when the term extends to the last position of lowerBound.
-		upperBound := make([]byte, len(lowerBound)+1)
-		copy(upperBound, lowerBound)
-		// Increment the separator byte position
-		sepPos := 1 + 8 + len(term)
-		upperBound[sepPos] = 0x01
-
-		iter, err := idx.db.NewIter(&pebble.IterOptions{
-			LowerBound: lowerBound,
-			UpperBound: upperBound,
-		})
-		if err != nil {
-			continue
-		}
-
-		for iter.First(); iter.Valid(); iter.Next() {
-			key := iter.Key()
-			if len(key) < 1+8+len(term)+1+16 {
-				continue
-			}
-			var engramID [16]byte
-			copy(engramID[:], key[1+8+len(term)+1:])
-
-			val := iter.Value()
-			pv := decodePosting(val)
-
-			tf := float64(pv.TF)
-			dl := float64(pv.DocLen)
-			if dl < 1 {
-				dl = avgdl
-			}
-
-			// BM25 formula
-			tfNorm := tf * (k1 + 1) / (tf + k1*(1-b+b*dl/avgdl))
-			bm25 := idf * tfNorm * fieldWeight(pv.Field)
-
-			// Guard against NaN/Inf scores that corrupt sorting
-			if math.IsNaN(bm25) || math.IsInf(bm25, 0) {
-				continue
-			}
-
-			scores[engramID] += bm25
-		}
-		iter.Close()
+		_ = idx.searchToken(ws, term, scores, idf, avgdl)
 	}
 
 	// Sort by score descending
@@ -328,6 +395,63 @@ func (idx *Index) Search(ctx context.Context, ws [8]byte, query string, topK int
 		results = results[:topK]
 	}
 	return results, nil
+}
+
+// searchToken performs a prefix scan for a single token and accumulates BM25
+// scores into the provided scores map. Extracting this into its own function
+// ensures that defer iter.Close() is scoped to the function lifetime rather
+// than the Search() loop body, which would otherwise defer all closes until
+// Search() returns (and risk double-close on the last iterator).
+func (idx *Index) searchToken(ws [8]byte, term string, scores map[[16]byte]float64, idf, avgdl float64) error {
+	// Prefix scan for this term
+	lowerBound := keys.FTSPostingKey(ws, term, [16]byte{})
+	// Upper bound: increment the separator byte after the term prefix.
+	// Allocate one byte longer than lowerBound so sepPos is always in bounds
+	// even when the term extends to the last position of lowerBound.
+	upperBound := make([]byte, len(lowerBound)+1)
+	copy(upperBound, lowerBound)
+	// Increment the separator byte position
+	sepPos := 1 + 8 + len(term)
+	upperBound[sepPos] = 0x01
+
+	iter, err := idx.db.NewIter(&pebble.IterOptions{
+		LowerBound: lowerBound,
+		UpperBound: upperBound,
+	})
+	if err != nil {
+		return err
+	}
+	defer iter.Close()
+
+	for iter.First(); iter.Valid(); iter.Next() {
+		key := iter.Key()
+		if len(key) < 1+8+len(term)+1+16 {
+			continue
+		}
+		var engramID [16]byte
+		copy(engramID[:], key[1+8+len(term)+1:])
+
+		val := iter.Value()
+		pv := decodePosting(val)
+
+		tf := float64(pv.TF)
+		dl := float64(pv.DocLen)
+		if dl < 1 {
+			dl = avgdl
+		}
+
+		// BM25 formula
+		tfNorm := tf * (k1 + 1) / (tf + k1*(1-b+b*dl/avgdl))
+		bm25 := idf * tfNorm * fieldWeight(pv.Field)
+
+		// Guard against NaN/Inf scores that corrupt sorting
+		if math.IsNaN(bm25) || math.IsInf(bm25, 0) {
+			continue
+		}
+
+		scores[engramID] += bm25
+	}
+	return nil
 }
 
 // sortScoredIDs sorts in descending order by score.
@@ -396,14 +520,13 @@ func (idx *Index) getIDF(ws [8]byte, term string, N float64) float64 {
 	idf = math.Log((N-df+0.5)/(df+0.5) + 1)
 
 	idx.mu.Lock()
+	defer idx.mu.Unlock()
 	// Double-check: another goroutine may have populated the cache while we
 	// held no lock (between RUnlock above and this Lock).
 	if cached, ok := idx.idfCache[term]; ok {
-		idx.mu.Unlock()
 		return cached
 	}
 	idx.idfCache[term] = idf
-	idx.mu.Unlock()
 	return idf
 }
 

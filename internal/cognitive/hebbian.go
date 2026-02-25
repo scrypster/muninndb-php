@@ -2,8 +2,6 @@ package cognitive
 
 import (
 	"context"
-	"encoding/binary"
-	"fmt"
 	"log/slog"
 	"math"
 	"time"
@@ -12,10 +10,8 @@ import (
 )
 
 const (
-	HebbianLearningRate  = 0.01
-	HebbianDormancyDecay = 0.001 // per day
-	HebbianPassInterval  = time.Minute
-	HebbianDecayInterval = 6 * time.Hour
+	HebbianLearningRate = 0.01
+	HebbianPassInterval = time.Minute
 )
 
 // hebbianMetadataKey returns the Pebble key for Hebbian worker metadata.
@@ -75,9 +71,7 @@ func canonicalPair(x, y [16]byte) pairKey {
 type HebbianWorker struct {
 	*Worker[CoActivationEvent]
 	store       HebbianStore
-	db          *pebble.DB // optional, for metadata persistence
-	lastDecayAt time.Time   // zero value causes decay to run on first processBatch
-	lastPersist time.Time   // last time metadata was persisted
+	db *pebble.DB // optional, reserved for future persistence
 
 	// OnWeightUpdate is called after each association weight update.
 	// Used by the Engine to forward cognitive events to the trigger system.
@@ -101,15 +95,6 @@ func NewHebbianWorkerWithDB(store HebbianStore, db *pebble.DB) *HebbianWorker {
 		db:     db,
 		stopCh: make(chan struct{}),
 		doneCh: make(chan struct{}),
-	}
-
-	// Load persisted metadata if DB is available
-	if db != nil {
-		if lastDecayAt, err := hw.loadMetadata(); err != nil {
-			slog.Warn("hebbian: failed to load metadata", "error", err)
-		} else {
-			hw.lastDecayAt = lastDecayAt
-		}
 	}
 
 	hw.Worker = NewWorker[CoActivationEvent](
@@ -147,9 +132,6 @@ func (hw *HebbianWorker) Run(ctx context.Context) {
 // Stop signals the HebbianWorker to flush pending work and shut down.
 // Blocks until the worker goroutine has exited.
 func (hw *HebbianWorker) Stop() {
-	if hw.db != nil {
-		_ = hw.persistMetadata()
-	}
 	select {
 	case <-hw.stopCh:
 		// already stopped
@@ -159,73 +141,12 @@ func (hw *HebbianWorker) Stop() {
 	<-hw.doneCh
 }
 
-// loadMetadata loads the lastDecayAt timestamp from Pebble.
-// Returns zero time if not found or DB is nil.
-func (hw *HebbianWorker) loadMetadata() (time.Time, error) {
-	if hw.db == nil {
-		return time.Time{}, nil
-	}
-	key := hebbianMetadataKey("hebbian_last_decay")
-	val, closer, err := hw.db.Get(key)
-	if err == pebble.ErrNotFound {
-		return time.Time{}, nil // first run
-	}
-	if err != nil {
-		return time.Time{}, err
-	}
-	defer closer.Close()
-	if len(val) < 8 {
-		return time.Time{}, nil
-	}
-	nanos := int64(binary.BigEndian.Uint64(val))
-	return time.Unix(0, nanos), nil
-}
-
-// persistMetadata persists the lastDecayAt timestamp to Pebble.
-func (hw *HebbianWorker) persistMetadata() error {
-	if hw.db == nil {
-		return nil
-	}
-	key := hebbianMetadataKey("hebbian_last_decay")
-	var buf [8]byte
-	binary.BigEndian.PutUint64(buf[:], uint64(hw.lastDecayAt.UnixNano()))
-	return hw.db.Set(key, buf[:], pebble.Sync)
-}
 
 func (hw *HebbianWorker) processBatch(ctx context.Context, batch []CoActivationEvent) error {
-	// Persist metadata every 30 seconds
-	now := time.Now()
-	if hw.db != nil && now.Sub(hw.lastPersist) >= 30*time.Second {
-		if err := hw.persistMetadata(); err != nil {
-			slog.Warn("hebbian: failed to persist metadata", "error", err)
-		}
-		hw.lastPersist = now
-	}
-
 	// Collect unique vault workspace prefixes in this batch.
 	wsSet := make(map[[8]byte]struct{})
 	for _, ev := range batch {
 		wsSet[ev.WS] = struct{}{}
-	}
-
-	// Dormancy decay: runs every HebbianDecayInterval (6 hours).
-	// All associations (Hebbian-learned and manual) decay equally — unused memories
-	// should weaken regardless of how they were created.
-	// Per-interval decay factor: 1 - HebbianDormancyDecay * (HebbianDecayInterval.Hours()/24)
-	// = 1 - 0.001 * 0.25 = 0.99975 → half-life ~693 days of zero activation.
-	if time.Since(hw.lastDecayAt) >= HebbianDecayInterval {
-		hw.lastDecayAt = now
-		daysSince := HebbianDecayInterval.Hours() / 24.0
-		factor := 1.0 - HebbianDormancyDecay*daysSince
-		for ws := range wsSet {
-			removed, err := hw.store.DecayAssocWeights(ctx, ws, factor, 0.001)
-			if err != nil {
-				hw.errors.Add(1)
-				slog.Warn("hebbian: dormancy decay failed", "ws", fmt.Sprintf("%x", ws), "error", err)
-			} else if removed > 0 {
-				slog.Debug("hebbian: dormancy decay pruned associations", "ws", fmt.Sprintf("%x", ws), "removed", removed)
-			}
-		}
 	}
 
 	// Aggregate co-activations per pair

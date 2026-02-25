@@ -28,7 +28,7 @@ Three things can fire a trigger:
 
 **`new_write`** — A new engram is written to the vault and its activation score against your subscription context exceeds your threshold. You find out immediately — before your next query cycle, before your next LLM call.
 
-**`threshold_crossed`** — An existing engram's relevance score changes and crosses your threshold. Time passed and a memory stabilized. A co-activation strengthened a Hebbian connection. The decay curve brought something back into range. The database found something for you that you didn't know was there.
+**`threshold_crossed`** — An existing engram's relevance score changes and crosses your threshold. Time passed and a memory stabilized. A co-activation strengthened a Hebbian connection. The temporal model shifted relevance back into range. The database found something for you that you didn't know was there.
 
 **`contradiction_detected`** — An engram within your activation set has a contradiction detected. This is highest priority. No rate limiting. Immediate delivery. You need to know that your agent is working with contradictory information.
 
@@ -46,7 +46,7 @@ No other database does this. The claim is worth defending precisely.
 
 **Graph databases** have adjacency and traversal. They have no continuous relevance scoring model that changes over time. They cannot detect when a node's relevance to a given context crosses a threshold.
 
-The key distinction: semantic triggers fire based on *meaning and relevance*, not on data mutations. The trigger condition is evaluated inside the cognitive model — against activation scores, decay curves, Hebbian weights, contradiction signals — not at the storage layer. The trigger system understands what the data means in context. Storage-layer triggers understand only that data changed.
+The key distinction: semantic triggers fire based on *meaning and relevance*, not on data mutations. The trigger condition is evaluated inside the cognitive model — against activation scores, temporal priority, Hebbian weights, contradiction signals — not at the storage layer. The trigger system understands what the data means in context. Storage-layer triggers understand only that data changed.
 
 This is what makes it novel. It's not a faster version of something that already exists. It's a different thing.
 
@@ -62,7 +62,7 @@ One shared worker handles all subscriptions. Not one goroutine per subscription 
 
 **Write events** — After every successful write ACK, the trigger system receives a notification. It scores the new engram against all active subscriptions. This is O(S) where S is the subscription count — linear, bounded, predictable. High-write vaults with many subscriptions are the design load, not the edge case.
 
-**Cognitive events** — The decay worker, Hebbian worker, and confidence worker all emit events when a score delta exceeds `NegligibleDelta`. Small score changes are filtered out. Only meaningful threshold crossings propagate into the event bus. This is the mechanism that fires `threshold_crossed` — an existing engram drifts into relevance because the cognitive model updated.
+**Cognitive events** — The Hebbian worker and confidence worker emit events when a score delta exceeds `NegligibleDelta`. Small score changes are filtered out. Only meaningful threshold crossings propagate into the event bus. This is the mechanism that fires `threshold_crossed` — an existing engram drifts into relevance because the cognitive model updated.
 
 **Contradiction events** — Fired immediately on contradiction detection. Highest priority queue position. No rate limiting — contradictions are urgent and rare. An agent working with contradictory information needs to know now.
 
@@ -215,7 +215,7 @@ The session flow:
 
 3. **Before each LLM call** — The agent's context window already contains the most relevant memories. No explicit retrieval query needed at each step.
 
-4. **The DB handles** — what's relevant now (decay scoring), what connects (Hebbian associations), what's uncertain (confidence weighting), what's contradictory (contradiction detection and notification).
+4. **The DB handles** — what's relevant now (temporal scoring), what connects (Hebbian associations), what's uncertain (confidence weighting), what's contradictory (contradiction detection and notification).
 
 5. **The agent handles** — using pushed memories to make better decisions.
 

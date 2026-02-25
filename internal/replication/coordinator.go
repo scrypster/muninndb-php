@@ -14,18 +14,13 @@ import (
 	"github.com/scrypster/muninndb/internal/cognitive"
 	"github.com/scrypster/muninndb/internal/config"
 	"github.com/scrypster/muninndb/internal/transport/mbp"
+	"github.com/scrypster/muninndb/internal/wal"
 )
 
 // hebbianSubmitter is the interface the coordinator uses to submit co-activation
 // events to the HebbianWorker. Defined as an interface for testability.
 type hebbianSubmitter interface {
 	Submit(item cognitive.CoActivationEvent) bool
-}
-
-// decaySubmitter is the interface the coordinator uses to submit decay candidates
-// to the DecayWorker. Defined as an interface for testability.
-type decaySubmitter interface {
-	Submit(item cognitive.DecayCandidate) bool
 }
 
 // cognitiveFlushable is implemented by cognitive workers that support graceful
@@ -45,10 +40,11 @@ const (
 // ErrDraining is returned when a write is attempted while the node is draining.
 var ErrDraining = errors.New("node is draining: not accepting new writes")
 
-// quorumLossTimeout is how long a Cortex tolerates being unable to reach a
-// quorum of live peers before pre-emptively demoting itself. This prevents a
-// partitioned Cortex from accepting writes that can never be replicated.
-const quorumLossTimeout = 5 * time.Second
+// ErrSelfRemoval is returned when RemoveNode is called with the local node's own ID.
+var ErrSelfRemoval = errors.New("cannot remove self from cluster")
+
+// defaultQuorumLossTimeout is the fallback if the config value is zero.
+const defaultQuorumLossTimeout = 5 * time.Second
 
 // ClusterCoordinator is the top-level cluster manager.
 // It owns and orchestrates: ConnManager, MSP, Election, JoinHandler, JoinClient,
@@ -80,11 +76,9 @@ type ClusterCoordinator struct {
 
 	// Cognitive workers (Cortex only): receive forwarded side effects from Lobes.
 	hebbianWorker hebbianSubmitter
-	decayWorker   decaySubmitter
 
 	// Flushable cognitive workers for graceful handoff. Set via SetCognitiveFlushers.
 	hebbianFlusher cognitiveFlushable
-	decayFlusher   cognitiveFlushable
 
 	// cogForwardedTotal counts co-activations received via CogForward frames.
 	cogForwardedTotal uint64
@@ -96,9 +90,22 @@ type ClusterCoordinator struct {
 	// Set via SetCCSProbe after the coordinator is created.
 	ccsProbe *CCSProbe
 
+	// mol is the Muninn Operation Log, used for periodic SafePrune.
+	// Set via SetMOL after the coordinator is created.
+	mol *wal.MOL
+
+	// snapshotInProgress tracks how many snapshot transfers are active.
+	// SafePrune is skipped while any snapshot is in progress to avoid
+	// deleting WAL segments that the snapshot receiver still needs.
+	snapshotInProgress atomic.Int32
+
 	// reconciler runs post-partition cognitive reconciliation.
 	// Set via SetReconciler after the coordinator is created.
 	reconciler *Reconciler
+
+	// reconDelay is how long to wait after a Lobe reconnects before triggering
+	// reconciliation, allowing initial WAL catch-up. Defaults to 2s.
+	reconDelay time.Duration
 
 	// failoverMu serializes GracefulFailover calls (only one at a time).
 	failoverMu sync.Mutex
@@ -135,6 +142,11 @@ func NewClusterCoordinator(
 	joinHandler := NewJoinHandler(cfg.NodeID, cfg.ClusterSecret, epochStore, repLog, mgr)
 	joinClient := NewJoinClient(cfg.NodeID, cfg.BindAddr, cfg.ClusterSecret, epochStore, applier, mgr)
 
+	reconDelay := time.Duration(cfg.ReconDelayMs) * time.Millisecond
+	if reconDelay <= 0 {
+		reconDelay = 2 * time.Second
+	}
+
 	c := &ClusterCoordinator{
 		cfg:         cfg,
 		repLog:      repLog,
@@ -147,11 +159,16 @@ func NewClusterCoordinator(
 		joinClient:  joinClient,
 		role:        RoleUnknown,
 		streamers:   make(map[string]context.CancelFunc),
+		reconDelay:  reconDelay,
 	}
 
 	// Wire token manager when a cluster secret is configured.
 	if cfg.ClusterSecret != "" {
-		c.tokenManager = NewJoinTokenManager(cfg.ClusterSecret, 15*time.Minute)
+		tokenTTL := time.Duration(cfg.JoinTokenTTLMin) * time.Minute
+		if tokenTTL <= 0 {
+			tokenTTL = 15 * time.Minute
+		}
+		c.tokenManager = NewJoinTokenManager(cfg.ClusterSecret, tokenTTL)
 	}
 
 	// Wire election callbacks
@@ -184,13 +201,13 @@ func NewClusterCoordinator(
 		c.checkQuorumHealth()
 	}
 
-	// Wire OnRecover to restart the streamer when a peer recovers from SDOWN.
+	// Wire OnRecover to restart the streamer when a peer recovers from SDOWN
+	// and trigger cognitive reconciliation after initial WAL catch-up.
 	msp.OnRecover = func(nodeID string) {
 		if !c.IsLeader() {
 			return // only restart streamer if we are Cortex
 		}
 		slog.Info("cluster: peer recovered from SDOWN, restarting streamer", "node", nodeID)
-		// Construct NodeInfo from known peer data.
 		peers := c.msp.AllPeers()
 		for _, p := range peers {
 			if p.NodeID == nodeID {
@@ -199,6 +216,28 @@ func NewClusterCoordinator(
 					Addr:   p.Addr,
 					Role:   p.Role,
 				})
+				if c.reconciler != nil {
+					go func() {
+						time.Sleep(c.reconDelay)
+						if !c.IsLeader() {
+							return
+						}
+						ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+						defer cancel()
+						slog.Info("cluster: triggering post-reconnect reconciliation", "node", nodeID)
+						result, err := c.TriggerReconciliation(ctx, []string{nodeID})
+						if err != nil {
+							slog.Warn("cluster: post-reconnect reconciliation failed",
+								"node", nodeID, "err", err)
+							return
+						}
+						slog.Info("cluster: post-reconnect reconciliation complete",
+							"node", nodeID,
+							"checked", result.EngramsChecked,
+							"divergent", result.EngramsDivergent,
+							"synced", result.WeightsSynced)
+					}()
+				}
 				return
 			}
 		}
@@ -264,6 +303,9 @@ func (c *ClusterCoordinator) Run(ctx context.Context) error {
 			slog.Error("cluster: MSP exited with error", "err", err)
 		}
 	}()
+
+	// Start periodic WAL pruning (only prunes on Cortex when replicas are caught up).
+	c.startPeriodicPrune(ctx)
 
 	switch c.cfg.Role {
 	case "primary":
@@ -492,7 +534,11 @@ func (c *ClusterCoordinator) checkQuorumHealth() {
 		return
 	}
 
-	needsDemotion := now.Sub(c.quorumLostSince) >= quorumLossTimeout
+	qTimeout := time.Duration(c.cfg.QuorumLossTimeoutSec) * time.Second
+	if qTimeout <= 0 {
+		qTimeout = defaultQuorumLossTimeout
+	}
+	needsDemotion := now.Sub(c.quorumLostSince) >= qTimeout
 	if needsDemotion {
 		slog.Error("cluster: quorum lost for >5s, pre-emptively demoting",
 			"alive", totalAlive, "quorum", quorum)
@@ -573,7 +619,9 @@ func (c *ClusterCoordinator) HandleIncomingFrame(fromNodeID string, frameType ui
 
 		// Phase 2: stream snapshot immediately after JoinResponse on same conn.
 		if resp.NeedsSnapshot {
+			c.IncrementSnapshotCount()
 			go func() {
+				defer c.DecrementSnapshotCount()
 				ctx := context.Background()
 				if _, err := c.joinHandler.StreamSnapshot(ctx, peer); err != nil {
 					slog.Error("cluster: snapshot stream failed; closing connection so lobe can reconnect and retry",
@@ -821,6 +869,15 @@ func (c *ClusterCoordinator) JoinTokenManager() *JoinTokenManager {
 	return c.tokenManager
 }
 
+// ClusterSecret returns the shared cluster secret used to authenticate
+// inter-node requests. Returns "" if no secret is configured.
+func (c *ClusterCoordinator) ClusterSecret() string {
+	if c.cfg == nil {
+		return ""
+	}
+	return c.cfg.ClusterSecret
+}
+
 // TLSManager returns the TLS manager, or nil if TLS is not configured.
 func (c *ClusterCoordinator) TLSManager() *ClusterTLS {
 	return c.tls
@@ -835,14 +892,13 @@ func (c *ClusterCoordinator) SetTLSManager(t *ClusterTLS) {
 	c.tls = t
 }
 
-// SetCognitiveWorkers wires the Hebbian and Decay workers into the coordinator.
+// SetCognitiveWorkers wires the Hebbian worker into the coordinator.
 // Must be called before Run().
-func (c *ClusterCoordinator) SetCognitiveWorkers(hebbian hebbianSubmitter, decay decaySubmitter) {
+func (c *ClusterCoordinator) SetCognitiveWorkers(hebbian hebbianSubmitter) {
 	if c.started.Load() {
 		panic("SetCognitiveWorkers called after Run()")
 	}
 	c.hebbianWorker = hebbian
-	c.decayWorker = decay
 }
 
 // CogForwardedTotal returns the total number of co-activations received via
@@ -880,21 +936,6 @@ func (c *ClusterCoordinator) handleCogForward(fromNodeID string, payload []byte)
 		c.hebbianWorker.Submit(ev) // non-blocking: drops if channel full
 	}
 
-	// Dispatch accessed IDs to DecayWorker.
-	if c.decayWorker != nil {
-		for _, id := range effect.AccessedIDs {
-			candidate := cognitive.DecayCandidate{
-				WS: [8]byte{}, // default workspace
-				ID: id,
-				// LastAccess, AccessCount, Stability, Relevance are zero-valued:
-				// the DecayWorker will compute decay from zero-initialized metadata.
-				// The full metadata path goes through the engine on the Lobe side;
-				// Cortex only reinforces decay scheduling from forwarded access hints.
-			}
-			c.decayWorker.Submit(candidate) // non-blocking: drops if channel full
-		}
-	}
-
 	// Increment observability counter by the number of co-activations received.
 	if n := uint64(len(effect.CoActivations)); n > 0 {
 		atomic.AddUint64(&c.cogForwardedTotal, n)
@@ -921,12 +962,11 @@ func (c *ClusterCoordinator) IsDraining() bool {
 
 // SetCognitiveFlushers wires the cognitive workers' flushable handles for
 // graceful handoff. Must be called before Run().
-func (c *ClusterCoordinator) SetCognitiveFlushers(hebbian, decay cognitiveFlushable) {
+func (c *ClusterCoordinator) SetCognitiveFlushers(hebbian cognitiveFlushable) {
 	if c.started.Load() {
 		panic("SetCognitiveFlushers called after Run()")
 	}
 	c.hebbianFlusher = hebbian
-	c.decayFlusher = decay
 }
 
 // SetCCSProbe wires a CCSProbe into the coordinator.
@@ -973,6 +1013,27 @@ func (c *ClusterCoordinator) ReplicaLag(nodeID string) uint64 {
 	return cortexSeq - replicaSeq
 }
 
+// MinReplicatedSeq returns the minimum confirmed sequence number across all
+// connected replicas. Returns 0 if no replicas are connected.
+func (c *ClusterCoordinator) MinReplicatedSeq() uint64 {
+	var minSeq uint64
+	hasReplicas := false
+
+	c.replicaSeqs.Range(func(key, value any) bool {
+		seq := value.(uint64)
+		if !hasReplicas || seq < minSeq {
+			minSeq = seq
+			hasReplicas = true
+		}
+		return true
+	})
+
+	if !hasReplicas {
+		return 0
+	}
+	return minSeq
+}
+
 // GracefulFailover initiates a planned handoff to targetNodeID.
 // Blocks until handoff completes or times out.
 // targetNodeID must be a known, connected Lobe.
@@ -1006,13 +1067,13 @@ func (c *ClusterCoordinator) GracefulFailover(ctx context.Context, targetNodeID 
 	if c.hebbianFlusher != nil {
 		c.hebbianFlusher.Stop()
 	}
-	if c.decayFlusher != nil {
-		c.decayFlusher.Stop()
-	}
 
 	// Step 3: Wait for replication convergence (all Lobes caught up).
 	cortexSeq := c.repLog.CurrentSeq()
-	convergenceTimeout := 30 * time.Second
+	convergenceTimeout := time.Duration(c.cfg.FailoverConvergenceTimeoutSec) * time.Second
+	if convergenceTimeout <= 0 {
+		convergenceTimeout = 30 * time.Second
+	}
 	convergenceCtx, convergenceCancel := context.WithTimeout(ctx, convergenceTimeout)
 	defer convergenceCancel()
 
@@ -1041,8 +1102,11 @@ func (c *ClusterCoordinator) GracefulFailover(ctx context.Context, targetNodeID 
 		return fmt.Errorf("graceful failover: send handoff: %w", err)
 	}
 
-	// Step 5: Wait for HANDOFF_ACK (up to 5s timeout).
-	ackTimeout := 5 * time.Second
+	// Step 5: Wait for HANDOFF_ACK.
+	ackTimeout := time.Duration(c.cfg.HandoffAckTimeoutSec) * time.Second
+	if ackTimeout <= 0 {
+		ackTimeout = 5 * time.Second
+	}
 	ackTimer := time.NewTimer(ackTimeout)
 	defer ackTimer.Stop()
 
@@ -1204,6 +1268,104 @@ func (c *ClusterCoordinator) SetReconciler(rec *Reconciler) {
 		panic("SetReconciler called after Run()")
 	}
 	c.reconciler = rec
+}
+
+// SetMOL wires the MOL for periodic SafePrune.
+// Must be called before Run().
+func (c *ClusterCoordinator) SetMOL(mol *wal.MOL) {
+	if c.started.Load() {
+		panic("SetMOL called after Run()")
+	}
+	c.mol = mol
+}
+
+// IncrementSnapshotCount marks the start of a snapshot transfer.
+// SafePrune is skipped while the count is positive.
+func (c *ClusterCoordinator) IncrementSnapshotCount() {
+	c.snapshotInProgress.Add(1)
+}
+
+// DecrementSnapshotCount marks the end of a snapshot transfer.
+func (c *ClusterCoordinator) DecrementSnapshotCount() {
+	c.snapshotInProgress.Add(-1)
+}
+
+// SnapshotInProgress returns true if any snapshot transfer is active.
+func (c *ClusterCoordinator) SnapshotInProgress() bool {
+	return c.snapshotInProgress.Load() > 0
+}
+
+// startPeriodicPrune launches a goroutine that prunes fully-replicated WAL
+// segments every 60 seconds. Only runs on the Cortex (leader) node.
+// Pruning is skipped while a snapshot transfer is in progress.
+func (c *ClusterCoordinator) startPeriodicPrune(ctx context.Context) {
+	if c.mol == nil {
+		return
+	}
+	go func() {
+		pruneInterval := time.Duration(c.cfg.PruneIntervalSec) * time.Second
+		if pruneInterval <= 0 {
+			pruneInterval = 60 * time.Second
+		}
+		ticker := time.NewTicker(pruneInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if !c.IsLeader() {
+					continue
+				}
+				if c.snapshotInProgress.Load() > 0 {
+					slog.Warn("cluster: skipping WAL prune — snapshot transfer in progress")
+					continue
+				}
+				minSeq := c.MinReplicatedSeq()
+				if minSeq == 0 {
+					continue
+				}
+				pruned, err := c.mol.SafePrune(minSeq)
+				if err != nil {
+					slog.Warn("cluster: periodic prune failed", "err", err)
+				} else if pruned > 0 {
+					slog.Info("cluster: pruned WAL segments", "pruned", pruned, "min_replicated_seq", minSeq)
+				}
+			}
+		}
+	}()
+}
+
+// RemoveNode gracefully removes a node from the cluster.
+// Stops the streamer, removes from MSP, cleans up replica tracking, and closes the connection.
+// Returns ErrSelfRemoval if nodeID matches the local node.
+func (c *ClusterCoordinator) RemoveNode(nodeID string) error {
+	if nodeID == c.cfg.NodeID {
+		return ErrSelfRemoval
+	}
+
+	// Stop the streamer for this node.
+	c.streamersMu.Lock()
+	if cancel, ok := c.streamers[nodeID]; ok {
+		cancel()
+		delete(c.streamers, nodeID)
+	}
+	c.streamersMu.Unlock()
+
+	// Remove from MSP peer tracking.
+	c.msp.RemovePeer(nodeID)
+
+	// Clean up replica sequence tracking.
+	c.replicaSeqs.Delete(nodeID)
+
+	// Remove from election quorum so removed nodes don't inflate the voter count.
+	c.election.UnregisterVoter(nodeID)
+
+	// Close the network connection.
+	c.mgr.RemovePeer(nodeID)
+
+	slog.Info("cluster: node removed", "node", nodeID)
+	return nil
 }
 
 // TriggerReconciliation runs a cognitive reconciliation against the given Lobe node IDs.

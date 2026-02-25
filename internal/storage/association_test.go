@@ -11,7 +11,7 @@ import (
 func newTestStore(t *testing.T) *PebbleStore {
 	t.Helper()
 	db := openTestPebble(t)
-	return NewPebbleStore(db, 100)
+	return NewPebbleStore(db, PebbleStoreConfig{CacheSize: 100})
 }
 
 // TestWriteAssociationGetAssociationsRoundtrip verifies that WriteAssociation persists
@@ -110,7 +110,7 @@ func TestUpdateAssocWeightPersistsCorrectly(t *testing.T) {
 	}
 
 	// Force a cache miss by creating a fresh store backed by the same DB.
-	store2 := NewPebbleStore(store.db, 100)
+	store2 := NewPebbleStore(store.db, PebbleStoreConfig{CacheSize: 100})
 	results2, err := store2.GetAssociations(ctx, ws, []ULID{src}, 10)
 	if err != nil {
 		t.Fatalf("GetAssociations (fresh store): %v", err)

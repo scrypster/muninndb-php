@@ -185,9 +185,9 @@ func (s *PebbleEpisodicStore) GetEpisode(ctx context.Context, ws [8]byte, episod
 // ListFrames retrieves all frames for an episode in position order.
 func (s *PebbleEpisodicStore) ListFrames(ctx context.Context, ws [8]byte, episodeID types.ULID) ([]*EpisodeFrame, error) {
 	// Construct the prefix for all frames in this episode
-	// Prefix: 0x15 | ws(8) | episode_id(16) | 0xFF
+	// Prefix: 0x1A | ws(8) | episode_id(16) | 0xFF
 	prefix := make([]byte, 1+8+16+1)
-	prefix[0] = 0x15
+	prefix[0] = 0x1A
 	copy(prefix[1:9], ws[:])
 	copy(prefix[9:25], episodeID[:])
 	prefix[25] = 0xFF
@@ -231,9 +231,9 @@ func (s *PebbleEpisodicStore) ListFrames(ctx context.Context, ws [8]byte, episod
 // Since episodes are stored with ULID keys (sorted by timestamp), we scan
 // the 0x15 | ws | episode_id prefix and return the N most recent (last N scanned in reverse).
 func (s *PebbleEpisodicStore) ListEpisodes(ctx context.Context, ws [8]byte, limit int) ([]*Episode, error) {
-	// Prefix for all episodes in this vault: 0x15 | ws(8)
+	// Prefix for all episodes in this vault: 0x1A | ws(8)
 	prefix := make([]byte, 1+8)
-	prefix[0] = 0x15
+	prefix[0] = 0x1A
 	copy(prefix[1:9], ws[:])
 
 	// Calculate upper bound

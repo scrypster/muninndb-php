@@ -202,7 +202,7 @@
         <!-- Cognitive Workers card -->
         <div class="stat-card" title="Background workers that continuously update memory relevance, strengthen associations, and detect contradictions">
           <div class="stat-label">Cognitive Workers</div>
-          <div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:0.5rem;">Decay · Associations · Contradictions</div>
+          <div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:0.5rem;">Temporal · Associations · Contradictions</div>
           <div style="display:flex;flex-direction:column;gap:0.5rem;margin-top:0.25rem;">
             <template x-for="w in workerStats" :key="w.name">
               <div style="display:flex;justify-content:space-between;align-items:center;font-size:0.8125rem;">
@@ -564,7 +564,7 @@
           <div class="card-polished">
             <h3 style="margin:0 0 0.25rem;font-size:1rem;">Cognitive Engine Workers</h3>
             <p style="color:var(--text-muted);font-size:0.8125rem;margin:0 0 1.25rem;">
-              Background workers that apply Hebbian learning, memory decay, contradiction detection, and confidence updates.
+              Background workers that apply Hebbian learning, temporal scoring, contradiction detection, and confidence updates.
               Configured via server startup flags.
             </p>
             <table style="width:100%;border-collapse:collapse;font-size:0.8125rem;">
@@ -604,7 +604,7 @@
         <div class="card-polished" x-init="$nextTick(() => initPlasticityChart())">
           <h3 style="margin:0 0 0.25rem;font-size:1rem;">Plasticity</h3>
           <p style="color:var(--text-muted);font-size:0.8125rem;margin:0 0 1.5rem;">
-            Controls how memories behave in this vault — decay rate, associative learning, and retrieval weights.
+            Controls how memories behave in this vault — temporal scoring, associative learning, and retrieval weights.
           </p>
 
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:2.5rem;align-items:start;">
@@ -623,7 +623,7 @@
                   <div style="display:flex;gap:0.3rem;flex-wrap:wrap;">
                     <span style="font-size:0.65rem;background:rgba(99,102,241,0.2);color:#a5b4fc;border-radius:9999px;padding:0.1rem 0.4rem;">2-hop</span>
                     <span style="font-size:0.65rem;background:rgba(99,102,241,0.2);color:#a5b4fc;border-radius:9999px;padding:0.1rem 0.4rem;">Hebbian</span>
-                    <span style="font-size:0.65rem;background:rgba(99,102,241,0.2);color:#a5b4fc;border-radius:9999px;padding:0.1rem 0.4rem;">Decay</span>
+                    <span style="font-size:0.65rem;background:rgba(99,102,241,0.2);color:#a5b4fc;border-radius:9999px;padding:0.1rem 0.4rem;">Temporal</span>
                   </div>
                 </div>
 
@@ -634,8 +634,8 @@
                   <div style="font-weight:600;font-size:0.875rem;margin-bottom:0.25rem;">Reference</div>
                   <div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:0.5rem;">Docs &amp; facts</div>
                   <div style="display:flex;gap:0.3rem;flex-wrap:wrap;">
-                    <span style="font-size:0.65rem;background:rgba(16,185,129,0.2);color:#6ee7b7;border-radius:9999px;padding:0.1rem 0.4rem;">2-hop</span>
-                    <span style="font-size:0.65rem;background:rgba(16,185,129,0.2);color:#6ee7b7;border-radius:9999px;padding:0.1rem 0.4rem;">No decay</span>
+                    <span style="font-size:0.65rem;background:rgba(16,185,129,0.2);color:#6ee7b7;border-radius:9999px;padding:0.1rem 0.4rem;">3-hop</span>
+                    <span style="font-size:0.65rem;background:rgba(16,185,129,0.2);color:#6ee7b7;border-radius:9999px;padding:0.1rem 0.4rem;">No fading</span>
                   </div>
                 </div>
 
@@ -646,7 +646,7 @@
                   <div style="font-weight:600;font-size:0.875rem;margin-bottom:0.25rem;">Scratchpad</div>
                   <div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:0.5rem;">Short-lived drafts</div>
                   <div style="display:flex;gap:0.3rem;flex-wrap:wrap;">
-                    <span style="font-size:0.65rem;background:rgba(245,158,11,0.2);color:#fcd34d;border-radius:9999px;padding:0.1rem 0.4rem;">Fast decay</span>
+                    <span style="font-size:0.65rem;background:rgba(245,158,11,0.2);color:#fcd34d;border-radius:9999px;padding:0.1rem 0.4rem;">Fast fading</span>
                     <span style="font-size:0.65rem;background:rgba(245,158,11,0.2);color:#fcd34d;border-radius:9999px;padding:0.1rem 0.4rem;">No assoc.</span>
                   </div>
                 </div>
@@ -660,7 +660,7 @@
                   <div style="display:flex;gap:0.3rem;flex-wrap:wrap;">
                     <span style="font-size:0.65rem;background:rgba(236,72,153,0.2);color:#f9a8d4;border-radius:9999px;padding:0.1rem 0.4rem;">4-hop</span>
                     <span style="font-size:0.65rem;background:rgba(236,72,153,0.2);color:#f9a8d4;border-radius:9999px;padding:0.1rem 0.4rem;">Strong assoc.</span>
-                    <span style="font-size:0.65rem;background:rgba(236,72,153,0.2);color:#f9a8d4;border-radius:9999px;padding:0.1rem 0.4rem;">Slow decay</span>
+                    <span style="font-size:0.65rem;background:rgba(236,72,153,0.2);color:#f9a8d4;border-radius:9999px;padding:0.1rem 0.4rem;">Slow fading</span>
                   </div>
                 </div>
               </div>
@@ -683,8 +683,8 @@
                     Hebbian learning
                   </label>
                   <label style="font-size:0.8125rem;display:flex;align-items:center;gap:0.5rem;cursor:pointer;">
-                    <input type="checkbox" x-model="plasticityForm.decayEnabled" @change="_updatePlasticityChart()" />
-                    Memory decay
+                    <input type="checkbox" x-model="plasticityForm.temporalEnabled" @change="_updatePlasticityChart()" />
+                    Temporal scoring
                   </label>
                 </div>
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem;">
@@ -701,12 +701,12 @@
                     <input class="input-field" type="number" step="0.01" min="0" max="1" x-model.number="plasticityForm.ftsWeight" placeholder="preset" @input="$nextTick(() => _updatePlasticityChart())" />
                   </div>
                   <div class="form-group">
-                    <label style="font-size:0.75rem;">Decay Floor (0–1)</label>
-                    <input class="input-field" type="number" step="0.01" min="0" max="1" x-model.number="plasticityForm.decayFloor" placeholder="preset" @input="$nextTick(() => _updatePlasticityChart())" />
+                    <label style="font-size:0.75rem;">Relevance Floor (0–1)</label>
+                    <input class="input-field" type="number" step="0.01" min="0" max="1" x-model.number="plasticityForm.relevanceFloor" placeholder="preset" @input="$nextTick(() => _updatePlasticityChart())" />
                   </div>
                   <div class="form-group">
-                    <label style="font-size:0.75rem;">Decay Stability (days)</label>
-                    <input class="input-field" type="number" step="1" min="1" x-model.number="plasticityForm.decayStability" placeholder="preset" @input="$nextTick(() => _updatePlasticityChart())" />
+                    <label style="font-size:0.75rem;">Temporal Halflife (days)</label>
+                    <input class="input-field" type="number" step="1" min="1" x-model.number="plasticityForm.temporalHalflife" placeholder="preset" @input="$nextTick(() => _updatePlasticityChart())" />
                   </div>
                 </div>
               </div>
@@ -1227,6 +1227,27 @@
     }
   }
 }</pre>
+            </template>
+          </div>
+
+          <!-- Codex -->
+          <div class="card-polished">
+            <h3 style="margin:0 0 0.75rem;font-size:1rem;">Codex</h3>
+            <p style="color:var(--text-muted);font-size:0.8125rem;margin:0 0 0.5rem;">
+              Run <code style="font-family:monospace;background:var(--bg-elevated);padding:0.1rem 0.35rem;border-radius:0.25rem;">muninn init --tool codex --yes</code> or edit <code style="font-family:monospace;background:var(--bg-elevated);padding:0.1rem 0.35rem;border-radius:0.25rem;">~/.codex/config.toml</code>:
+            </p>
+            <!-- No token -->
+            <template x-if="!mcpInfo || !mcpInfo.token_configured">
+              <pre style="background:var(--bg-elevated);border-radius:0.5rem;padding:0.75rem;font-size:0.8125rem;overflow-x:auto;color:var(--text-primary);margin:0;">[mcp_servers.muninn]
+url = "<span x-text="mcpInfo ? mcpInfo.url : 'http://localhost:8750/mcp'"></span>"</pre>
+            </template>
+            <!-- Token configured -->
+            <template x-if="mcpInfo && mcpInfo.token_configured">
+              <pre style="background:var(--bg-elevated);border-radius:0.5rem;padding:0.75rem;font-size:0.8125rem;overflow-x:auto;color:var(--text-primary);margin:0;">[mcp_servers.muninn]
+url = "<span x-text="mcpInfo.url"></span>"
+
+[mcp_servers.muninn.http_headers]
+Authorization = "Bearer &lt;token from ~/.muninn/mcp.token&gt;"</pre>
             </template>
           </div>
 

@@ -31,13 +31,6 @@ func Bootstrap(store *Store, secretPath string) (secret []byte, err error) {
 			return nil, fmt.Errorf("create root admin: %w", err)
 		}
 
-		// Set the default vault to public so any MCP client can connect
-		// without needing an API key. Users can lock this down via the
-		// admin UI once they are ready.
-		if err = store.SetVaultConfig(VaultConfig{Name: "default", Public: true}); err != nil {
-			return nil, fmt.Errorf("configure default vault: %w", err)
-		}
-
 		fmt.Println("┌──────────────────────────────────────────────────┐")
 		fmt.Println("│            MuninnDB — First Run Setup             │")
 		fmt.Println("│                                                    │")
@@ -49,6 +42,17 @@ func Bootstrap(store *Store, secretPath string) (secret []byte, err error) {
 		fmt.Println("│  Change your password and review vault settings    │")
 		fmt.Println("│  in the admin UI before exposing to a network.     │")
 		fmt.Println("└──────────────────────────────────────────────────┘")
+	}
+
+	// Ensure at least one vault config exists. Covers both fresh installs
+	// and upgrades from versions that didn't create vault configs during
+	// bootstrap. Without this, fail-closed mode locks out all MCP clients.
+	cfgs, cfgErr := store.ListVaultConfigs()
+	if cfgErr == nil && len(cfgs) == 0 {
+		if err = store.SetVaultConfig(VaultConfig{Name: "default", Public: true}); err != nil {
+			return nil, fmt.Errorf("configure default vault: %w", err)
+		}
+		slog.Info("created default vault config (public)")
 	}
 
 	return secret, nil

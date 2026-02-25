@@ -242,6 +242,83 @@ func TestSaveClusterConfig_EmptyDataDir(t *testing.T) {
 	}
 }
 
+func TestClusterConfig_Validate_NegativeTimeoutFields(t *testing.T) {
+	base := ClusterConfig{
+		Enabled:     true,
+		NodeID:      "node-1",
+		Seeds:       []string{"seed:8474"},
+		Role:        "auto",
+		LeaseTTL:    10,
+		HeartbeatMS: 1000,
+	}
+
+	fields := []struct {
+		name string
+		set  func(*ClusterConfig)
+	}{
+		{"quorum_loss_timeout_sec", func(c *ClusterConfig) { c.QuorumLossTimeoutSec = -1 }},
+		{"join_token_ttl_min", func(c *ClusterConfig) { c.JoinTokenTTLMin = -1 }},
+		{"failover_convergence_timeout_sec", func(c *ClusterConfig) { c.FailoverConvergenceTimeoutSec = -1 }},
+		{"handoff_ack_timeout_sec", func(c *ClusterConfig) { c.HandoffAckTimeoutSec = -1 }},
+		{"prune_interval_sec", func(c *ClusterConfig) { c.PruneIntervalSec = -1 }},
+		{"recon_delay_ms", func(c *ClusterConfig) { c.ReconDelayMs = -1 }},
+	}
+
+	for _, f := range fields {
+		t.Run(f.name, func(t *testing.T) {
+			cfg := base
+			f.set(&cfg)
+			err := cfg.Validate()
+			if err == nil {
+				t.Fatalf("expected error for negative %s, got nil", f.name)
+			}
+			if !strings.Contains(err.Error(), f.name) {
+				t.Errorf("expected error to mention %q, got: %v", f.name, err)
+			}
+		})
+	}
+}
+
+func TestClusterConfig_Validate_ZeroTimeoutFieldsOK(t *testing.T) {
+	cfg := ClusterConfig{
+		Enabled:                       true,
+		NodeID:                        "node-1",
+		Seeds:                         []string{"seed:8474"},
+		Role:                          "auto",
+		LeaseTTL:                      10,
+		HeartbeatMS:                   1000,
+		QuorumLossTimeoutSec:          0,
+		JoinTokenTTLMin:               0,
+		FailoverConvergenceTimeoutSec: 0,
+		HandoffAckTimeoutSec:          0,
+		PruneIntervalSec:              0,
+		ReconDelayMs:                  0,
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected zero values to be valid, got: %v", err)
+	}
+}
+
+func TestClusterConfig_Validate_PositiveTimeoutFieldsOK(t *testing.T) {
+	cfg := ClusterConfig{
+		Enabled:                       true,
+		NodeID:                        "node-1",
+		Seeds:                         []string{"seed:8474"},
+		Role:                          "auto",
+		LeaseTTL:                      10,
+		HeartbeatMS:                   1000,
+		QuorumLossTimeoutSec:          5,
+		JoinTokenTTLMin:               15,
+		FailoverConvergenceTimeoutSec: 30,
+		HandoffAckTimeoutSec:          5,
+		PruneIntervalSec:              60,
+		ReconDelayMs:                  2000,
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected positive values to be valid, got: %v", err)
+	}
+}
+
 func TestClusterConfig_InvalidEnvVars(t *testing.T) {
 	// Test that bad env vars log warnings but use defaults
 	t.Setenv("MUNINN_CLUSTER_LEASE_TTL", "not-a-number")

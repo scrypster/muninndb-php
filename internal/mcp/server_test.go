@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/scrypster/muninndb/internal/auth"
 	"github.com/scrypster/muninndb/internal/transport/mbp"
 )
 
@@ -17,7 +19,15 @@ import (
 type fakeEngine struct{}
 
 func (f *fakeEngine) Write(ctx context.Context, req *mbp.WriteRequest) (*mbp.WriteResponse, error) {
-	return &mbp.WriteResponse{}, nil
+	return &mbp.WriteResponse{ID: "fake-id"}, nil
+}
+func (f *fakeEngine) WriteBatch(ctx context.Context, reqs []*mbp.WriteRequest) ([]*mbp.WriteResponse, []error) {
+	responses := make([]*mbp.WriteResponse, len(reqs))
+	errs := make([]error, len(reqs))
+	for i := range reqs {
+		responses[i] = &mbp.WriteResponse{ID: fmt.Sprintf("batch-id-%d", i)}
+	}
+	return responses, errs
 }
 func (f *fakeEngine) Activate(ctx context.Context, req *mbp.ActivateRequest) (*mbp.ActivateResponse, error) {
 	return &mbp.ActivateResponse{}, nil
@@ -68,6 +78,10 @@ func (f *fakeEngine) ListDeleted(ctx context.Context, vault string, limit int) (
 }
 func (f *fakeEngine) RetryEnrich(ctx context.Context, vault string, id string) (*RetryEnrichResult, error) {
 	return &RetryEnrichResult{EngramID: id, PluginsQueued: []string{}, AlreadyComplete: []string{}}, nil
+}
+func (f *fakeEngine) GetVaultPlasticity(_ context.Context, _ string) (*auth.ResolvedPlasticity, error) {
+	r := auth.ResolvePlasticity(nil)
+	return &r, nil
 }
 
 func newTestServer() *MCPServer {
@@ -167,8 +181,8 @@ func TestListTools(t *testing.T) {
 	var result map[string]any
 	json.NewDecoder(w.Body).Decode(&result)
 	tools, _ := result["tools"].([]any)
-	if len(tools) != 17 {
-		t.Errorf("expected 17 tools, got %d", len(tools))
+	if len(tools) != 19 {
+		t.Errorf("expected 19 tools, got %d", len(tools))
 	}
 }
 
@@ -200,6 +214,61 @@ func TestHandleRecallHappyPath(t *testing.T) {
 	json.NewDecoder(w.Body).Decode(&resp)
 	if resp.Error != nil {
 		t.Errorf("unexpected error: %v", resp.Error)
+	}
+}
+
+func TestHandleRememberBatchHappyPath(t *testing.T) {
+	srv := newTestServer()
+	body := `{"jsonrpc":"2.0","method":"tools/call","id":1,"params":{"name":"muninn_remember_batch","arguments":{"vault":"default","memories":[{"content":"memory one","concept":"c1"},{"content":"memory two","tags":["tag1"]}]}}}`
+	w := postRPC(t, srv, body)
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", w.Code)
+	}
+	var resp JSONRPCResponse
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp.Error != nil {
+		t.Errorf("unexpected error: %v", resp.Error)
+	}
+	if resp.Result == nil {
+		t.Error("expected non-nil result")
+	}
+}
+
+func TestHandleRememberBatchEmptyMemories(t *testing.T) {
+	srv := newTestServer()
+	body := `{"jsonrpc":"2.0","method":"tools/call","id":1,"params":{"name":"muninn_remember_batch","arguments":{"vault":"default","memories":[]}}}`
+	w := postRPC(t, srv, body)
+	var resp JSONRPCResponse
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp.Error == nil || resp.Error.Code != -32602 {
+		t.Errorf("expected -32602 for empty memories, got %v", resp.Error)
+	}
+}
+
+func TestHandleRememberBatchExceedsLimit(t *testing.T) {
+	srv := newTestServer()
+	memories := make([]map[string]any, 51)
+	for i := range memories {
+		memories[i] = map[string]any{"content": fmt.Sprintf("item %d", i)}
+	}
+	args, _ := json.Marshal(map[string]any{"vault": "default", "memories": memories})
+	body := fmt.Sprintf(`{"jsonrpc":"2.0","method":"tools/call","id":1,"params":{"name":"muninn_remember_batch","arguments":%s}}`, string(args))
+	w := postRPC(t, srv, body)
+	var resp JSONRPCResponse
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp.Error == nil || resp.Error.Code != -32602 {
+		t.Errorf("expected -32602 for >50 memories, got %v", resp.Error)
+	}
+}
+
+func TestHandleRememberBatchMissingContent(t *testing.T) {
+	srv := newTestServer()
+	body := `{"jsonrpc":"2.0","method":"tools/call","id":1,"params":{"name":"muninn_remember_batch","arguments":{"vault":"default","memories":[{"concept":"no content"}]}}}`
+	w := postRPC(t, srv, body)
+	var resp JSONRPCResponse
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp.Error == nil || resp.Error.Code != -32602 {
+		t.Errorf("expected -32602 for missing content, got %v", resp.Error)
 	}
 }
 
@@ -252,5 +321,291 @@ func TestHandleSessionInvalidSince(t *testing.T) {
 	json.NewDecoder(w.Body).Decode(&resp)
 	if resp.Error == nil || resp.Error.Code != -32602 {
 		t.Errorf("expected -32602 for invalid since, got %v", resp.Error)
+	}
+}
+
+func TestApplyTypeArgs(t *testing.T) {
+	tests := []struct {
+		name       string
+		args       map[string]any
+		wantType   uint8
+		wantLabel  string
+	}{
+		{
+			name:      "enum name sets both type and label",
+			args:      map[string]any{"type": "decision"},
+			wantType:  1, // TypeDecision
+			wantLabel: "decision",
+		},
+		{
+			name:      "issue alias for bugfix",
+			args:      map[string]any{"type": "bugfix"},
+			wantType:  4, // TypeIssue
+			wantLabel: "bugfix",
+		},
+		{
+			name:      "new enum type procedure",
+			args:      map[string]any{"type": "procedure"},
+			wantType:  6, // TypeProcedure
+			wantLabel: "procedure",
+		},
+		{
+			name:      "free-form label defaults to TypeFact",
+			args:      map[string]any{"type": "architectural_decision"},
+			wantType:  0, // TypeFact (default)
+			wantLabel: "architectural_decision",
+		},
+		{
+			name:      "explicit type_label overrides inferred",
+			args:      map[string]any{"type": "decision", "type_label": "architectural_decision"},
+			wantType:  1, // TypeDecision
+			wantLabel: "architectural_decision",
+		},
+		{
+			name:      "type_label alone",
+			args:      map[string]any{"type_label": "custom_label"},
+			wantType:  0, // default
+			wantLabel: "custom_label",
+		},
+		{
+			name:      "no type params",
+			args:      map[string]any{},
+			wantType:  0,
+			wantLabel: "",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := &mbp.WriteRequest{}
+			applyTypeArgs(tc.args, req)
+			if req.MemoryType != tc.wantType {
+				t.Errorf("MemoryType = %d, want %d", req.MemoryType, tc.wantType)
+			}
+			if req.TypeLabel != tc.wantLabel {
+				t.Errorf("TypeLabel = %q, want %q", req.TypeLabel, tc.wantLabel)
+			}
+		})
+	}
+}
+
+func TestApplyEnrichmentArgs(t *testing.T) {
+	tests := []struct {
+		name         string
+		args         map[string]any
+		wantSummary  string
+		wantEntities int
+		wantRels     int
+	}{
+		{
+			name:    "no enrichment fields",
+			args:    map[string]any{},
+		},
+		{
+			name:        "summary only",
+			args:        map[string]any{"summary": "A quick summary"},
+			wantSummary: "A quick summary",
+		},
+		{
+			name: "entities only",
+			args: map[string]any{
+				"entities": []any{
+					map[string]any{"name": "PostgreSQL", "type": "database"},
+					map[string]any{"name": "Auth Service", "type": "service"},
+				},
+			},
+			wantEntities: 2,
+		},
+		{
+			name: "relationships only",
+			args: map[string]any{
+				"relationships": []any{
+					map[string]any{"target_id": "01ABC", "relation": "depends_on", "weight": 0.9},
+					map[string]any{"target_id": "01DEF", "relation": "supports"},
+				},
+			},
+			wantRels: 2,
+		},
+		{
+			name: "all fields together",
+			args: map[string]any{
+				"summary": "Full enrichment",
+				"entities": []any{
+					map[string]any{"name": "Redis", "type": "cache"},
+				},
+				"relationships": []any{
+					map[string]any{"target_id": "01XYZ", "relation": "relates_to"},
+				},
+			},
+			wantSummary:  "Full enrichment",
+			wantEntities: 1,
+			wantRels:     1,
+		},
+		{
+			name: "invalid entity skipped",
+			args: map[string]any{
+				"entities": []any{
+					map[string]any{"name": "Valid", "type": "tool"},
+					map[string]any{"name": "", "type": "tool"},       // empty name
+					map[string]any{"name": "NoType"},                  // missing type
+					"not an object",                                   // wrong type
+				},
+			},
+			wantEntities: 1,
+		},
+		{
+			name: "invalid relationship skipped",
+			args: map[string]any{
+				"relationships": []any{
+					map[string]any{"target_id": "01ABC", "relation": "supports"},
+					map[string]any{"target_id": "", "relation": "supports"},        // empty target
+					map[string]any{"target_id": "01ABC", "relation": ""},           // empty relation
+				},
+			},
+			wantRels: 1,
+		},
+		{
+			name: "relationship default weight",
+			args: map[string]any{
+				"relationships": []any{
+					map[string]any{"target_id": "01ABC", "relation": "supports"},
+				},
+			},
+			wantRels: 1,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := &mbp.WriteRequest{}
+			applyEnrichmentArgs(tc.args, req)
+			if req.Summary != tc.wantSummary {
+				t.Errorf("Summary = %q, want %q", req.Summary, tc.wantSummary)
+			}
+			if len(req.Entities) != tc.wantEntities {
+				t.Errorf("Entities count = %d, want %d", len(req.Entities), tc.wantEntities)
+			}
+			if len(req.Relationships) != tc.wantRels {
+				t.Errorf("Relationships count = %d, want %d", len(req.Relationships), tc.wantRels)
+			}
+		})
+	}
+}
+
+func TestApplyEnrichmentArgs_RelationshipWeight(t *testing.T) {
+	args := map[string]any{
+		"relationships": []any{
+			map[string]any{"target_id": "01ABC", "relation": "supports"},
+			map[string]any{"target_id": "01DEF", "relation": "depends_on", "weight": 0.5},
+		},
+	}
+	req := &mbp.WriteRequest{}
+	applyEnrichmentArgs(args, req)
+	if len(req.Relationships) != 2 {
+		t.Fatalf("expected 2 relationships, got %d", len(req.Relationships))
+	}
+	if req.Relationships[0].Weight != 0.9 {
+		t.Errorf("default weight = %f, want 0.9", req.Relationships[0].Weight)
+	}
+	if req.Relationships[1].Weight != 0.5 {
+		t.Errorf("explicit weight = %f, want 0.5", req.Relationships[1].Weight)
+	}
+}
+
+func TestHandleRememberWithEnrichment(t *testing.T) {
+	srv := newTestServer()
+	body := `{"jsonrpc":"2.0","method":"tools/call","id":1,"params":{"name":"muninn_remember","arguments":{
+		"vault":"default",
+		"content":"PostgreSQL chosen for persistence layer",
+		"summary":"Chose PostgreSQL for persistence",
+		"entities":[{"name":"PostgreSQL","type":"database"}],
+		"relationships":[{"target_id":"01ABC","relation":"depends_on","weight":0.9}]
+	}}}`
+	w := postRPC(t, srv, body)
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", w.Code)
+	}
+	var resp JSONRPCResponse
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp.Error != nil {
+		t.Errorf("unexpected error: %v", resp.Error)
+	}
+}
+
+func TestHandleRememberBatchWithEnrichment(t *testing.T) {
+	srv := newTestServer()
+	body := `{"jsonrpc":"2.0","method":"tools/call","id":1,"params":{"name":"muninn_remember_batch","arguments":{
+		"vault":"default",
+		"memories":[
+			{"content":"memory one","summary":"Summary for memory one","entities":[{"name":"Redis","type":"cache"}]},
+			{"content":"memory two","type":"decision"}
+		]
+	}}}`
+	w := postRPC(t, srv, body)
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", w.Code)
+	}
+	var resp JSONRPCResponse
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp.Error != nil {
+		t.Errorf("unexpected error: %v", resp.Error)
+	}
+}
+
+func TestToolsCallResponseFormat(t *testing.T) {
+	srv := newTestServer()
+	body := `{"jsonrpc":"2.0","method":"tools/call","id":42,"params":{"name":"muninn_remember","arguments":{"vault":"default","content":"MCP envelope test"}}}`
+	w := postRPC(t, srv, body)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var raw map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&raw); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	if raw["jsonrpc"] != "2.0" {
+		t.Errorf("jsonrpc = %v, want \"2.0\"", raw["jsonrpc"])
+	}
+	if raw["id"] == nil {
+		t.Error("missing \"id\" in response")
+	}
+
+	result, ok := raw["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("result should be an object (map), got %T", raw["result"])
+	}
+
+	contentRaw, exists := result["content"]
+	if !exists {
+		t.Fatal("result missing \"content\" key — bare array is no longer MCP-compliant")
+	}
+	content, ok := contentRaw.([]any)
+	if !ok {
+		t.Fatalf("result.content should be []any, got %T", contentRaw)
+	}
+	if len(content) == 0 {
+		t.Fatal("result.content is empty")
+	}
+
+	elem, ok := content[0].(map[string]any)
+	if !ok {
+		t.Fatalf("result.content[0] should be an object, got %T", content[0])
+	}
+	if elem["type"] != "text" {
+		t.Errorf("content[0].type = %v, want \"text\"", elem["type"])
+	}
+
+	text, ok := elem["text"].(string)
+	if !ok || text == "" {
+		t.Fatalf("content[0].text should be a non-empty string, got %T", elem["text"])
+	}
+
+	var inner map[string]any
+	if err := json.Unmarshal([]byte(text), &inner); err != nil {
+		t.Fatalf("content[0].text is not valid JSON: %v", err)
+	}
+	if _, hasID := inner["id"]; !hasID {
+		t.Error("inner JSON payload missing \"id\" field")
 	}
 }

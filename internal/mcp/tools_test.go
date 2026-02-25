@@ -7,8 +7,8 @@ import (
 
 func TestAllToolDefinitionsCount(t *testing.T) {
 	tools := allToolDefinitions()
-	if len(tools) != 17 {
-		t.Errorf("expected 17 tools, got %d", len(tools))
+	if len(tools) != 19 {
+		t.Errorf("expected 19 tools, got %d", len(tools))
 	}
 }
 
@@ -53,12 +53,14 @@ func TestExpectedToolNames(t *testing.T) {
 		names[tool.Name] = true
 	}
 	expected := []string{
-		"muninn_remember", "muninn_recall", "muninn_read", "muninn_forget",
+		"muninn_remember", "muninn_remember_batch", "muninn_recall", "muninn_read", "muninn_forget",
 		"muninn_link", "muninn_contradictions", "muninn_status",
 		"muninn_evolve", "muninn_consolidate", "muninn_session", "muninn_decide",
 		// Epic 18
 		"muninn_restore", "muninn_traverse", "muninn_explain",
 		"muninn_state", "muninn_list_deleted", "muninn_retry_enrich",
+		// Guide
+		"muninn_guide",
 	}
 	for _, name := range expected {
 		if !names[name] {
@@ -239,6 +241,53 @@ func TestMuninnRecallTool_ProfileNotInRequired(t *testing.T) {
 			if r == "profile" {
 				t.Error("'profile' must not be in muninn_recall required list — it is optional")
 			}
+		}
+	}
+}
+
+func TestMuninnRememberTool_HasEnrichmentFields(t *testing.T) {
+	tools := allToolDefinitions()
+	var rememberTool *ToolDefinition
+	for i := range tools {
+		if tools[i].Name == "muninn_remember" {
+			rememberTool = &tools[i]
+			break
+		}
+	}
+	if rememberTool == nil {
+		t.Fatal("muninn_remember not found")
+	}
+	schema := rememberTool.InputSchema.(map[string]any)
+	props := schema["properties"].(map[string]any)
+
+	for _, field := range []string{"summary", "entities", "relationships"} {
+		if _, ok := props[field]; !ok {
+			t.Errorf("muninn_remember missing enrichment field %q", field)
+		}
+	}
+}
+
+func TestMuninnRememberBatchTool_HasEnrichmentFields(t *testing.T) {
+	tools := allToolDefinitions()
+	var batchTool *ToolDefinition
+	for i := range tools {
+		if tools[i].Name == "muninn_remember_batch" {
+			batchTool = &tools[i]
+			break
+		}
+	}
+	if batchTool == nil {
+		t.Fatal("muninn_remember_batch not found")
+	}
+	schema := batchTool.InputSchema.(map[string]any)
+	props := schema["properties"].(map[string]any)
+	memories := props["memories"].(map[string]any)
+	items := memories["items"].(map[string]any)
+	itemProps := items["properties"].(map[string]any)
+
+	for _, field := range []string{"summary", "entities", "relationships"} {
+		if _, ok := itemProps[field]; !ok {
+			t.Errorf("muninn_remember_batch item schema missing enrichment field %q", field)
 		}
 	}
 }

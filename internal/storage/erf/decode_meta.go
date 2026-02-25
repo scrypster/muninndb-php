@@ -58,6 +58,7 @@ func DecodeMeta(data []byte) (*EngramMeta, error) {
 	meta.State = data[OffsetState]
 	meta.AssocCount = binary.BigEndian.Uint16(data[OffsetAssocCount : OffsetAssocCount+2])
 	meta.EmbedDim = data[OffsetEmbedDim]
+	meta.MemoryType = data[OffsetMemoryType]
 
 	return meta, nil
 }

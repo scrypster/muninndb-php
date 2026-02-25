@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -126,9 +127,8 @@ func TestReadTokenFile_Missing(t *testing.T) {
 // TestReadTokenFile_Present verifies token is read correctly.
 func TestReadTokenFile_Present(t *testing.T) {
 	dir := t.TempDir()
-	home := os.Getenv("HOME")
-	os.Setenv("HOME", dir)
-	defer os.Setenv("HOME", home)
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir) // os.UserHomeDir() checks USERPROFILE on Windows
 
 	muninnDir := filepath.Join(dir, ".muninn")
 	os.MkdirAll(muninnDir, 0755)
@@ -191,7 +191,11 @@ func TestPrintEmbedderNote(t *testing.T) {
 		{"2", "Ollama"},
 		{"3", "OpenAI"},
 		{"4", "Voyage"},
-		{"5", ""},         // unknown — no output (falls to default)
+		{"5", "Cohere"},
+		{"6", "Google"},
+		{"7", "Jina"},
+		{"8", "Mistral"},
+		{"9", ""},         // unknown — no output (falls to default)
 		{"", ""},          // empty — falls to default
 	}
 	for _, tc := range cases {
@@ -271,6 +275,9 @@ func intSliceEqual(a, b []int) bool {
 // configure (e.g. due to a read-only home directory), the error is collected
 // into the returned []string rather than silently discarded.
 func TestConfigureNamedToolsReturnsErrorsSlice(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not enforce read-only directory permissions via chmod")
+	}
 	// Create a read-only temp directory and set it as HOME so that the config
 	// directory cannot be created inside it — this forces a write failure.
 	roDir := t.TempDir()

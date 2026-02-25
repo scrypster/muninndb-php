@@ -430,6 +430,46 @@ func TestProveContradiction_Symmetry(t *testing.T) {
 
 // TestLiveIntegration_WriteAndActivate is a live integration test hitting the running server.
 // Run with: go test -run TestLiveIntegration -v
+// cleanupVault registers a t.Cleanup that deletes the test vault when the test finishes.
+// It authenticates with the admin API first (default creds root/password via the UI login endpoint).
+func cleanupVault(t *testing.T, base, vault string) {
+	t.Helper()
+	t.Cleanup(func() {
+		client := &http.Client{Timeout: 5 * time.Second}
+
+		// Authenticate to get a session cookie.
+		loginBody := strings.NewReader(`{"username":"root","password":"password"}`)
+		loginResp, err := client.Post("http://localhost:8476/api/auth/login", "application/json", loginBody)
+		if err != nil {
+			t.Logf("vault cleanup: login failed: %v", err)
+			return
+		}
+		var sessionCookie string
+		for _, c := range loginResp.Cookies() {
+			if c.Name == "muninn_session" || c.Name == "session" {
+				sessionCookie = c.Value
+			}
+		}
+		loginResp.Body.Close()
+
+		req, err := http.NewRequest("DELETE", base+"/api/admin/vaults/"+vault, nil)
+		if err != nil {
+			return
+		}
+		req.Header.Set("X-Allow-Default", "true")
+		if sessionCookie != "" {
+			req.AddCookie(&http.Cookie{Name: "muninn_session", Value: sessionCookie})
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Logf("vault cleanup failed: %v", err)
+			return
+		}
+		resp.Body.Close()
+		t.Logf("cleaned up vault %s (status %d)", vault, resp.StatusCode)
+	})
+}
+
 func TestLiveIntegration_WriteAndActivate(t *testing.T) {
 	base := "http://localhost:8475"
 
@@ -442,6 +482,7 @@ func TestLiveIntegration_WriteAndActivate(t *testing.T) {
 
 	vault := "proof-test-" + fmt.Sprintf("%d", time.Now().UnixNano())
 	t.Logf("Using vault: %s", vault)
+	cleanupVault(t, base, vault)
 
 	// Write a cluster of related engrams
 	type writeReq struct {
@@ -782,6 +823,7 @@ func TestLiveIntegration_ContradictionDetection(t *testing.T) {
 
 	vault := "proof-contra-" + fmt.Sprintf("%d", time.Now().UnixNano())
 	t.Logf("Using vault: %s", vault)
+	cleanupVault(t, base, vault)
 
 	// Define write request type matching API expectations
 	type writeReq struct {
@@ -945,6 +987,7 @@ func TestLiveIntegration_ScoreComposition(t *testing.T) {
 
 	vault := "proof-score-" + fmt.Sprintf("%d", time.Now().UnixNano())
 	t.Logf("Using vault: %s", vault)
+	cleanupVault(t, base, vault)
 
 	type writeReq struct {
 		Concept    string   `json:"concept"`
@@ -1106,6 +1149,7 @@ func TestLiveIntegration_HNSWRetroactiveProcessing(t *testing.T) {
 
 	vault := "proof-hnsw-" + fmt.Sprintf("%d", time.Now().UnixNano())
 	t.Logf("Using vault: %s", vault)
+	cleanupVault(t, base, vault)
 
 	type writeReq struct {
 		Concept    string   `json:"concept"`

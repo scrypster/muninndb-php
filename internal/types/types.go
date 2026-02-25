@@ -149,13 +149,22 @@ const (
 type MemoryType uint8
 
 const (
-	TypeFact        MemoryType = 0
-	TypeDecision    MemoryType = 1
-	TypeObservation MemoryType = 2
-	TypePreference  MemoryType = 3
-	TypeBugfix      MemoryType = 4
-	TypeTask        MemoryType = 5
+	TypeFact        MemoryType = 0  // factual information
+	TypeDecision    MemoryType = 1  // choices made with rationale
+	TypeObservation MemoryType = 2  // something noticed, insight
+	TypePreference  MemoryType = 3  // opinions, personal choices
+	TypeIssue       MemoryType = 4  // bugs, problems, defects (renamed from TypeBugfix)
+	TypeTask        MemoryType = 5  // action items, to-dos
+	TypeProcedure   MemoryType = 6  // how-to, workflows, processes
+	TypeEvent       MemoryType = 7  // something that happened, temporal
+	TypeGoal        MemoryType = 8  // objectives, targets, intentions
+	TypeConstraint  MemoryType = 9  // rules, limitations, requirements
+	TypeIdentity    MemoryType = 10 // about a person, role, entity
+	TypeReference   MemoryType = 11 // documentation, specifications
 )
+
+// TypeBugfix is a backward-compatible alias for TypeIssue.
+const TypeBugfix = TypeIssue
 
 // ERF flags byte (offset 5 in the record).
 const (

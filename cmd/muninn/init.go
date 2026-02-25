@@ -39,6 +39,7 @@ func detectInstalledTools() []toolChoice {
 		{key: "cursor", displayName: "Cursor", configPath: cursorConfigPath()},
 		{key: "openclaw", displayName: "OpenClaw", configPath: openClawConfigPath()},
 		{key: "windsurf", displayName: "Windsurf", configPath: windsurfConfigPath()},
+		{key: "codex", displayName: "Codex", configPath: codexConfigPath()},
 		{key: "vscode", displayName: "VS Code", configPath: ""},
 		{key: "manual", displayName: "Other / manual config", configPath: ""},
 	}
@@ -56,14 +57,17 @@ func detectInstalledTools() []toolChoice {
 // runInit runs the first-time onboarding wizard (or non-interactive setup via flags).
 func runInit() {
 	fs := flag.NewFlagSet("init", flag.ExitOnError)
-	toolFlag := fs.String("tool", "", "AI tools to configure, comma-separated: claude,claude-code,cursor,openclaw,windsurf,vscode,manual")
+	toolFlag := fs.String("tool", "", "AI tools to configure, comma-separated: claude,claude-code,cursor,openclaw,windsurf,codex,vscode,manual")
 	tokenFlag := fs.String("token", "", "Use this specific token (skip generation)")
 	noToken := fs.Bool("no-token", false, "Disable token authentication (open MCP endpoint)")
 	noStart := fs.Bool("no-start", false, "Skip starting the server")
 	yes := fs.Bool("yes", false, "Accept all defaults non-interactively")
+	fs.Usage = func() { subcommandHelp["init"]() }
 
-	// Strip "init" from args before parsing
-	args := os.Args[2:]
+	var args []string
+	if len(os.Args) > 2 {
+		args = os.Args[2:]
+	}
 	fs.Parse(args)
 
 	mcpURL := "http://localhost:8750/mcp"
@@ -77,7 +81,7 @@ For non-interactive setup, use flags:
   muninn init --tool cursor,claude --no-token --yes
   muninn init --yes   (manual instructions only)
 
-  --tool <tools>   Comma-separated: claude, cursor, openclaw, windsurf, vscode, manual
+  --tool <tools>   Comma-separated: claude, cursor, openclaw, windsurf, codex, vscode, manual
   --token <tok>    Use specific token
   --no-token       Open MCP (no auth)
   --no-start       Skip starting server
@@ -101,7 +105,6 @@ func runInteractiveInit(mcpURL string, tokenFlag *string, noToken *bool, noStart
 	fmt.Println("  Scanning for AI tools...")
 	fmt.Println()
 	fmt.Println("  Which AI tools would you like to configure?")
-	fmt.Println("  (enter numbers to change selection, Enter to confirm)")
 	fmt.Println()
 
 	selectedTools := runToolMultiSelect(tools)
@@ -114,6 +117,10 @@ func runInteractiveInit(mcpURL string, tokenFlag *string, noToken *bool, noStart
 	fmt.Println("       2)  Ollama           ·  self-hosted")
 	fmt.Println("       3)  OpenAI           ·  cloud, requires API key")
 	fmt.Println("       4)  Voyage           ·  cloud, requires API key")
+	fmt.Println("       5)  Cohere           ·  cloud, requires API key")
+	fmt.Println("       6)  Google (Gemini)  ·  cloud, requires API key")
+	fmt.Println("       7)  Jina             ·  cloud, requires API key")
+	fmt.Println("       8)  Mistral          ·  cloud, requires API key")
 	fmt.Println()
 	fmt.Print("  Choice [1]: ")
 	scanner := bufio.NewScanner(os.Stdin)
@@ -123,6 +130,31 @@ func runInteractiveInit(mcpURL string, tokenFlag *string, noToken *bool, noStart
 		embedderChoice = "1"
 	}
 	printEmbedderNote(embedderChoice)
+
+	// Step 3: Behavior mode selection
+	fmt.Println()
+	fmt.Println("  How should your AI use memory?")
+	fmt.Println()
+	fmt.Println("    ▶  1)  Autonomous   ·  AI remembers proactively   (recommended)")
+	fmt.Println("       2)  Prompted     ·  only when you ask")
+	fmt.Println("       3)  Selective    ·  decisions & errors auto, rest on request")
+	fmt.Println("       4)  Custom       ·  provide your own instructions")
+	fmt.Println()
+	fmt.Print("  Choice [1]: ")
+	scanner.Scan()
+	behaviorChoice := strings.TrimSpace(scanner.Text())
+	if behaviorChoice == "" {
+		behaviorChoice = "1"
+	}
+	behaviorMode := parseBehaviorChoice(behaviorChoice)
+	var customInstructions string
+	if behaviorMode == "custom" {
+		fmt.Println()
+		fmt.Print("  Enter your custom instructions: ")
+		scanner.Scan()
+		customInstructions = strings.TrimSpace(scanner.Text())
+	}
+	printBehaviorNote(behaviorMode, customInstructions)
 
 	// Auto: generate token (no prompt)
 	var token string
@@ -152,6 +184,10 @@ func runInteractiveInit(mcpURL string, tokenFlag *string, noToken *bool, noStart
 			fmt.Printf("  ⚠  %d tool(s) failed to configure — check errors above.\n", len(toolErrs))
 			fmt.Println("     You can re-run: muninn init")
 		}
+
+		if hasClaudeCode(selectedTools) {
+			promptClaudeMD()
+		}
 	}
 
 	// Auto: start server (no "start now?" prompt)
@@ -175,13 +211,129 @@ func runInteractiveInit(mcpURL string, tokenFlag *string, noToken *bool, noStart
 	fmt.Println()
 }
 
-// runToolMultiSelect renders a checkbox list and returns selected tool keys.
+// runToolMultiSelect renders an interactive checkbox list with arrow-key
+// navigation and spacebar toggling. Falls back to text input for non-TTY.
 func runToolMultiSelect(tools []toolChoice) []string {
+	fd := int(os.Stdin.Fd())
+	if !term.IsTerminal(fd) {
+		return runToolMultiSelectFallback(tools)
+	}
+
+	oldState, err := term.MakeRaw(fd)
+	if err != nil {
+		return runToolMultiSelectFallback(tools)
+	}
+
+	cursor := 0
+	totalLines := len(tools) + 2 // tool rows + blank line + help line
+
+	render := func(first bool) {
+		if !first {
+			fmt.Printf("\r\033[%dA", totalLines)
+		}
+		for i, t := range tools {
+			arrow := "  "
+			if i == cursor {
+				arrow = "▸ "
+			}
+			check := "○"
+			if t.selected {
+				check = "●"
+			}
+			suffix := ""
+			if t.detected && t.configPath != "" {
+				suffix = "  \033[2mdetected\033[0m"
+			}
+			fmt.Printf("\r\033[K    %s%s  %s%s\r\n", arrow, check, t.displayName, suffix)
+		}
+		fmt.Print("\r\033[K\r\n")
+		fmt.Print("\r\033[K  \033[2m↑/↓ navigate  ·  space select  ·  enter confirm\033[0m")
+	}
+
+	render(true)
+
+	buf := make([]byte, 3)
+	for {
+		n, readErr := os.Stdin.Read(buf)
+		if readErr != nil {
+			break
+		}
+
+		switch {
+		case n == 1 && buf[0] == ' ':
+			tools[cursor].selected = !tools[cursor].selected
+		case n == 1 && (buf[0] == '\r' || buf[0] == '\n'):
+			// Clear the help line, print final state, restore terminal
+			fmt.Printf("\r\033[%dA", totalLines)
+			for i, t := range tools {
+				check := "○"
+				if t.selected {
+					check = "●"
+				}
+				suffix := ""
+				if t.detected && t.configPath != "" {
+					suffix = "  \033[2mdetected\033[0m"
+				}
+				sel := "  "
+				if i == cursor {
+					sel = "▸ "
+				}
+				fmt.Printf("\r\033[K    %s%s  %s%s\r\n", sel, check, t.displayName, suffix)
+			}
+			fmt.Print("\r\033[K\r\n")
+			fmt.Print("\r\033[K")
+			term.Restore(fd, oldState)
+
+			var keys []string
+			for _, t := range tools {
+				if t.selected {
+					keys = append(keys, t.key)
+				}
+			}
+			return keys
+		case n == 1 && buf[0] == 3: // Ctrl+C
+			fmt.Print("\r\n")
+			term.Restore(fd, oldState)
+			os.Exit(0)
+		case n == 1 && (buf[0] == 'k' || buf[0] == 'K'):
+			if cursor > 0 {
+				cursor--
+			}
+		case n == 1 && (buf[0] == 'j' || buf[0] == 'J'):
+			if cursor < len(tools)-1 {
+				cursor++
+			}
+		case n == 3 && buf[0] == 27 && buf[1] == 91 && buf[2] == 65: // Up
+			if cursor > 0 {
+				cursor--
+			}
+		case n == 3 && buf[0] == 27 && buf[1] == 91 && buf[2] == 66: // Down
+			if cursor < len(tools)-1 {
+				cursor++
+			}
+		}
+
+		render(false)
+	}
+
+	term.Restore(fd, oldState)
+	var keys []string
+	for _, t := range tools {
+		if t.selected {
+			keys = append(keys, t.key)
+		}
+	}
+	return keys
+}
+
+// runToolMultiSelectFallback handles non-interactive (non-TTY) environments
+// with simple number-based input.
+func runToolMultiSelectFallback(tools []toolChoice) []string {
 	for i, t := range tools {
 		check := "○"
 		suffix := ""
 		if t.selected {
-			check = "✓"
+			check = "●"
 		}
 		if t.detected && t.configPath != "" {
 			suffix = "   detected  ·  " + t.configPath
@@ -205,7 +357,6 @@ func runToolMultiSelect(tools []toolChoice) []string {
 		return keys
 	}
 
-	// Parse new explicit selection
 	selected := map[int]bool{}
 	for _, part := range strings.FieldsFunc(input, func(r rune) bool { return r == ',' || r == ' ' }) {
 		for _, c := range part {
@@ -238,6 +389,18 @@ func printEmbedderNote(choice string) {
 	case "4":
 		fmt.Println()
 		fmt.Println("  Voyage selected. Set MUNINN_VOYAGE_KEY to configure.")
+	case "5":
+		fmt.Println()
+		fmt.Println("  Cohere selected. Set MUNINN_COHERE_KEY to configure.")
+	case "6":
+		fmt.Println()
+		fmt.Println("  Google (Gemini) selected. Set MUNINN_GOOGLE_KEY to configure.")
+	case "7":
+		fmt.Println()
+		fmt.Println("  Jina selected. Set MUNINN_JINA_KEY to configure.")
+	case "8":
+		fmt.Println()
+		fmt.Println("  Mistral selected. Set MUNINN_MISTRAL_KEY to configure.")
 	default:
 		// Local bundled — works out of the box, no message needed
 	}
@@ -282,6 +445,12 @@ func runNonInteractiveInit(mcpURL, toolStr, tokenStr string, noToken, noStart, y
 			}
 			fmt.Println("  Re-run: muninn init --tool <toolname>")
 		}
+
+		if hasClaudeCode(tools) {
+			if err := configureClaudeMD(); err != nil {
+				fmt.Fprintf(os.Stderr, "  ⚠  CLAUDE.md: %v\n", err)
+			}
+		}
 	}
 
 	fmt.Println()
@@ -298,7 +467,7 @@ func printWelcomeBanner() {
 	fmt.Println()
 	fmt.Println("  ┌────────────────────────────────────────────────────┐")
 	fmt.Println("  │                                                    │")
-	fmt.Printf("  │   muninn  ·  cognitive memory database  %-7s  │\n", muninnVersion())
+	fmt.Printf("  │   muninn  ·  cognitive memory database  %-9s│\n", muninnVersion())
 	fmt.Println("  │                                                    │")
 	fmt.Println("  └────────────────────────────────────────────────────┘")
 	fmt.Println()
@@ -367,10 +536,15 @@ func configureNamedTools(tools []string, mcpURL, token string) []string {
 				errs = append(errs, fmt.Sprintf("OpenClaw: %v", err))
 				fmt.Fprintf(os.Stderr, "  ✗ OpenClaw: %v\n", err)
 			}
+		case "codex":
+			if err := configureCodex(mcpURL, token); err != nil {
+				errs = append(errs, fmt.Sprintf("Codex: %v", err))
+				fmt.Fprintf(os.Stderr, "  ✗ Codex: %v\n", err)
+			}
 		case "manual", "other":
 			printManualInstructions(mcpURL, token)
 		default:
-			fmt.Fprintf(os.Stderr, "  unknown tool: %q (use: claude, claude-code, cursor, vscode, windsurf, openclaw, manual)\n", t)
+			fmt.Fprintf(os.Stderr, "  unknown tool: %q (use: claude, claude-code, cursor, vscode, windsurf, openclaw, codex, manual)\n", t)
 		}
 	}
 	return errs
@@ -401,4 +575,66 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func parseBehaviorChoice(choice string) string {
+	switch choice {
+	case "2":
+		return "prompted"
+	case "3":
+		return "selective"
+	case "4":
+		return "custom"
+	default:
+		return "autonomous"
+	}
+}
+
+func printBehaviorNote(mode, customInstructions string) {
+	fmt.Println()
+	switch mode {
+	case "prompted":
+		fmt.Println("  Behavior: prompted — AI will only remember when asked.")
+	case "selective":
+		fmt.Println("  Behavior: selective — decisions & errors auto-remembered.")
+	case "custom":
+		fmt.Println("  Behavior: custom — using your provided instructions.")
+	default:
+		fmt.Println("  Behavior: autonomous — AI will proactively remember.")
+	}
+	fmt.Println()
+	fmt.Println("  To apply this setting, run:")
+	cmd := fmt.Sprintf("    muninn vault config default --behavior %s", mode)
+	fmt.Println(cmd)
+	if mode == "custom" && customInstructions != "" {
+		fmt.Printf("    muninn vault config default --behavior-instructions %q\n", customInstructions)
+	}
+}
+
+// hasClaudeCode returns true if "claude-code" or "claudecode" is in the tool list.
+func hasClaudeCode(tools []string) bool {
+	for _, t := range tools {
+		if t == "claude-code" || t == "claudecode" {
+			return true
+		}
+	}
+	return false
+}
+
+// promptClaudeMD asks interactively whether to configure CLAUDE.md for MuninnDB memory.
+func promptClaudeMD() {
+	fmt.Println()
+	fmt.Print("  Configure CLAUDE.md to prefer MuninnDB for memory? [Y/n]: ")
+
+	scanner := bufio.NewScanner(os.Stdin)
+	scanner.Scan()
+	answer := strings.TrimSpace(strings.ToLower(scanner.Text()))
+
+	if answer == "" || answer == "y" || answer == "yes" {
+		if err := configureClaudeMD(); err != nil {
+			fmt.Fprintf(os.Stderr, "  ⚠  CLAUDE.md: %v\n", err)
+		}
+	} else {
+		printClaudeMDInstructions()
+	}
 }

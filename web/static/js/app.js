@@ -121,12 +121,12 @@ document.addEventListener('alpine:init', () => {
       preset: 'default',
       showAdvanced: false,
       hebbianEnabled: true,
-      decayEnabled: true,
+      temporalEnabled: true,
       hopDepth: null,
       semanticWeight: null,
       ftsWeight: null,
-      decayFloor: null,
-      decayStability: null,
+      relevanceFloor: null,
+      temporalHalflife: null,
     },
     plasticitySaving: false,
     plasticitySaveOk: false,
@@ -381,14 +381,10 @@ document.addEventListener('alpine:init', () => {
         if (this._prevEngramCount > 0 && newCount > this._prevEngramCount) {
           this._fetchNewestEngram();
         }
-        this._prevEngramCount = newCount;
 
-        this.stats = {
-          engramCount:  msg.data.engramCount  || 0,
-          vaultCount:   msg.data.vaultCount   || 0,
-          storageBytes: msg.data.storageBytes || 0,
-          indexSize:    msg.data.indexSize    || 0,
-        };
+        // Re-fetch stats scoped to the selected vault instead of using
+        // the global broadcast values.
+        this.loadStats();
       } else if (msg.type === 'memory_added') {
         this.liveFeed.unshift(msg.data);
         if (this.liveFeed.length > 20) this.liveFeed.pop();
@@ -429,7 +425,7 @@ document.addEventListener('alpine:init', () => {
     // ── Dashboard ──────────────────────────────────────────────────────────
     async loadStats() {
       try {
-        const data = await this.apiCall('/api/stats');
+        const data = await this.apiCall('/api/stats?vault=' + encodeURIComponent(this.vault));
         this.stats = {
           engramCount:  data.engram_count   || data.engramCount  || 0,
           vaultCount:   data.vault_count    || data.vaultCount   || 0,
@@ -446,7 +442,7 @@ document.addEventListener('alpine:init', () => {
       try {
         const data = await this.apiCall('/api/workers');
         this.workerStats = [
-          { name: 'Decay',       state: data.decay?.state      ?? 0 },
+          { name: 'Temporal',    state: data.decay?.state      ?? 0 },
           { name: 'Hebbian',     state: data.hebbian?.state    ?? 0 },
           { name: 'Contradict',  state: data.contradict?.state ?? 0 },
           { name: 'Confidence',  state: data.confidence?.state ?? 0 },
@@ -873,7 +869,7 @@ document.addEventListener('alpine:init', () => {
         });
         return [
             toRow('Hebbian Learning', ws.hebbian),
-            toRow('Memory Decay', ws.decay),
+            toRow('Temporal Scoring', ws.decay),
             toRow('Contradiction Detection', ws.contradict),
             toRow('Confidence Updates', ws.confidence),
         ];
@@ -889,12 +885,12 @@ document.addEventListener('alpine:init', () => {
             const cfg = data.config || {};
             this.plasticityForm.preset         = cfg.preset || 'default';
             this.plasticityForm.hebbianEnabled = data.resolved?.hebbian_enabled ?? true;
-            this.plasticityForm.decayEnabled   = data.resolved?.decay_enabled   ?? true;
+            this.plasticityForm.temporalEnabled   = data.resolved?.temporal_enabled   ?? true;
             this.plasticityForm.hopDepth       = cfg.hop_depth       ?? null;
             this.plasticityForm.semanticWeight = cfg.semantic_weight ?? null;
             this.plasticityForm.ftsWeight      = cfg.fts_weight      ?? null;
-            this.plasticityForm.decayFloor     = cfg.decay_floor     ?? null;
-            this.plasticityForm.decayStability = cfg.decay_stability ?? null;
+            this.plasticityForm.relevanceFloor     = cfg.relevance_floor     ?? null;
+            this.plasticityForm.temporalHalflife = cfg.temporal_halflife ?? null;
         } catch (err) {
             console.error('loadPlasticity error:', err);
             this.plasticitySaveErr = 'Failed to load Plasticity settings';
@@ -904,15 +900,15 @@ document.addEventListener('alpine:init', () => {
         this.plasticityForm.hopDepth       = null;
         this.plasticityForm.semanticWeight = null;
         this.plasticityForm.ftsWeight      = null;
-        this.plasticityForm.decayFloor     = null;
-        this.plasticityForm.decayStability = null;
+        this.plasticityForm.relevanceFloor     = null;
+        this.plasticityForm.temporalHalflife = null;
         this.plasticityForm.hebbianEnabled = true;
-        this.plasticityForm.decayEnabled   = true;
+        this.plasticityForm.temporalEnabled   = true;
         this._updatePlasticityChart();
     },
     _plasticityData: {
         'default':         [0.30, 0.40, 0.50, 0.70, 0.60],
-        'reference':       [1.00, 0.35, 0.50, 0.80, 0.70],
+        'reference':       [1.00, 0.35, 0.375, 0.80, 0.70],
         'scratchpad':      [0.05, 0.00, 0.00, 0.70, 0.60],
         'knowledge-graph': [0.70, 1.00, 1.00, 0.75, 0.50],
     },
@@ -970,9 +966,9 @@ document.addEventListener('alpine:init', () => {
             const base = this._plasticityData[p] || this._plasticityData['default'];
             const f    = this.plasticityForm;
             // dimensions: [Memory Lifespan, Associative Learning, Graph Depth, Semantic Match, FTS Relevance]
-            const lifespan = f.decayFloor     != null ? Math.min(1, Math.max(0, f.decayFloor))     : base[0];
+            const lifespan = f.relevanceFloor     != null ? Math.min(1, Math.max(0, f.relevanceFloor))     : base[0];
             const assoc    = f.hebbianEnabled
-                ? (f.decayStability != null ? Math.min(1, f.decayStability / 60) : base[1])
+                ? (f.temporalHalflife != null ? Math.min(1, f.temporalHalflife / 60) : base[1])
                 : 0;
             const depth    = f.hopDepth       != null ? Math.min(1, f.hopDepth / 8)                : base[2];
             const semW     = f.semanticWeight != null ? Math.min(1, Math.max(0, f.semanticWeight)) : base[3];
@@ -993,10 +989,10 @@ document.addEventListener('alpine:init', () => {
     },
     plasticityPresetDescription(preset) {
         const d = {
-            'default':         'General-purpose. Decay on, Hebbian on, 2-hop BFS. Balanced weights.',
-            'reference':       'Documentation and facts. Decay OFF — memories persist indefinitely.',
-            'scratchpad':      'Ephemeral drafts. Aggressive decay (7-day stability, 0.01 floor). No Hebbian, no hops.',
-            'knowledge-graph': 'Dense interlinked concepts. 4-hop BFS, slow decay (60-day stability).',
+            'default':         'General-purpose. Temporal scoring on, Hebbian on, 2-hop BFS. Balanced weights.',
+            'reference':       'Documentation and facts. Temporal scoring OFF — memories persist indefinitely.',
+            'scratchpad':      'Ephemeral drafts. Aggressive fading (7-day halflife, 0.01 floor). No Hebbian, no hops.',
+            'knowledge-graph': 'Dense interlinked concepts. 4-hop BFS, slow fading (60-day halflife).',
         };
         return d[preset] || '';
     },
@@ -1010,10 +1006,10 @@ document.addEventListener('alpine:init', () => {
                 if (this.plasticityForm.hopDepth       !== null) payload.hop_depth       = this.plasticityForm.hopDepth;
                 if (this.plasticityForm.semanticWeight !== null) payload.semantic_weight = this.plasticityForm.semanticWeight;
                 if (this.plasticityForm.ftsWeight      !== null) payload.fts_weight      = this.plasticityForm.ftsWeight;
-                if (this.plasticityForm.decayFloor     !== null) payload.decay_floor     = this.plasticityForm.decayFloor;
-                if (this.plasticityForm.decayStability !== null) payload.decay_stability = this.plasticityForm.decayStability;
+                if (this.plasticityForm.relevanceFloor     !== null) payload.relevance_floor     = this.plasticityForm.relevanceFloor;
+                if (this.plasticityForm.temporalHalflife !== null) payload.temporal_halflife = this.plasticityForm.temporalHalflife;
                 payload.hebbian_enabled = this.plasticityForm.hebbianEnabled;
-                payload.decay_enabled   = this.plasticityForm.decayEnabled;
+                payload.temporal_enabled   = this.plasticityForm.temporalEnabled;
             }
             await this.apiCall(
                 '/api/admin/vault/' + encodeURIComponent(this.vault) + '/plasticity',

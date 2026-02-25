@@ -42,31 +42,6 @@ func (m *mockHebbianSubmitter) Received() []cognitive.CoActivationEvent {
 	return out
 }
 
-// mockDecaySubmitter records submitted DecayCandidates for test assertions.
-type mockDecaySubmitter struct {
-	mu         sync.Mutex
-	candidates []cognitive.DecayCandidate
-	full       bool
-}
-
-func (m *mockDecaySubmitter) Submit(item cognitive.DecayCandidate) bool {
-	if m.full {
-		return false
-	}
-	m.mu.Lock()
-	m.candidates = append(m.candidates, item)
-	m.mu.Unlock()
-	return true
-}
-
-func (m *mockDecaySubmitter) Received() []cognitive.DecayCandidate {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	out := make([]cognitive.DecayCandidate, len(m.candidates))
-	copy(out, m.candidates)
-	return out
-}
-
 // newTestCoordinator creates a ClusterCoordinator backed by an in-memory Pebble DB.
 func newTestCoordinator(t *testing.T, role string) (*ClusterCoordinator, *pebble.DB) {
 	t.Helper()
@@ -659,12 +634,10 @@ func TestClusterCoordinator_HandleCogForward_DispatchesToWorkers(t *testing.T) {
 	coord, _ := newTestCoordinator(t, "primary")
 
 	hebbian := &mockHebbianSubmitter{}
-	decay := &mockDecaySubmitter{}
-	coord.SetCognitiveWorkers(hebbian, decay)
+	coord.SetCognitiveWorkers(hebbian)
 
 	id1 := [16]byte{1}
 	id2 := [16]byte{2}
-	accessedID := [16]byte{3}
 
 	effect := mbp.CognitiveSideEffect{
 		QueryID:      "q-1",
@@ -674,7 +647,6 @@ func TestClusterCoordinator_HandleCogForward_DispatchesToWorkers(t *testing.T) {
 			{ID: id1, Score: 0.8},
 			{ID: id2, Score: 0.6},
 		},
-		AccessedIDs: [][16]byte{accessedID},
 	}
 	payload, err := msgpack.Marshal(effect)
 	if err != nil {
@@ -700,15 +672,6 @@ func TestClusterCoordinator_HandleCogForward_DispatchesToWorkers(t *testing.T) {
 	if events[0].Engrams[0].Score != 0.8 {
 		t.Errorf("expected engram[0].Score=0.8, got %v", events[0].Engrams[0].Score)
 	}
-
-	// DecayWorker should have received one candidate.
-	candidates := decay.Received()
-	if len(candidates) != 1 {
-		t.Fatalf("expected 1 DecayCandidate, got %d", len(candidates))
-	}
-	if candidates[0].ID != accessedID {
-		t.Errorf("expected candidate ID=%v, got %v", accessedID, candidates[0].ID)
-	}
 }
 
 func TestClusterCoordinator_HandleCogForward_DropsOnFullChannel(t *testing.T) {
@@ -716,15 +679,13 @@ func TestClusterCoordinator_HandleCogForward_DropsOnFullChannel(t *testing.T) {
 
 	// Workers simulate a full channel — Submit always returns false.
 	hebbian := &mockHebbianSubmitter{full: true}
-	decay := &mockDecaySubmitter{full: true}
-	coord.SetCognitiveWorkers(hebbian, decay)
+	coord.SetCognitiveWorkers(hebbian)
 
 	effect := mbp.CognitiveSideEffect{
 		QueryID: "q-drop",
 		CoActivations: []mbp.CoActivationRef{
 			{ID: [16]byte{9}, Score: 0.5},
 		},
-		AccessedIDs: [][16]byte{{10}},
 	}
 	payload, err := msgpack.Marshal(effect)
 	if err != nil {
@@ -745,18 +706,15 @@ func TestClusterCoordinator_HandleCogForward_DropsOnFullChannel(t *testing.T) {
 		t.Fatal("handleCogForward blocked when channel was full")
 	}
 
-	// Nothing should have been recorded by the mock workers.
+	// Nothing should have been recorded by the mock worker.
 	if got := len(hebbian.Received()); got != 0 {
 		t.Errorf("expected 0 hebbian events on full channel, got %d", got)
-	}
-	if got := len(decay.Received()); got != 0 {
-		t.Errorf("expected 0 decay candidates on full channel, got %d", got)
 	}
 }
 
 func TestClusterCoordinator_HandleCogForward_SendsAck(t *testing.T) {
 	coord, _ := newTestCoordinator(t, "primary")
-	coord.SetCognitiveWorkers(&mockHebbianSubmitter{}, &mockDecaySubmitter{})
+	coord.SetCognitiveWorkers(&mockHebbianSubmitter{})
 
 	// Create a net.Pipe() to inject a real conn into PeerConn so Send works.
 	serverSide, clientSide := net.Pipe()
@@ -816,7 +774,7 @@ func TestClusterCoordinator_HandleCogForward_SendsAck(t *testing.T) {
 
 func TestClusterCoordinator_CogForwardedTotal(t *testing.T) {
 	coord, _ := newTestCoordinator(t, "primary")
-	coord.SetCognitiveWorkers(&mockHebbianSubmitter{}, &mockDecaySubmitter{})
+	coord.SetCognitiveWorkers(&mockHebbianSubmitter{})
 
 	if total := coord.CogForwardedTotal(); total != 0 {
 		t.Errorf("expected CogForwardedTotal=0 initially, got %d", total)
@@ -924,7 +882,7 @@ func TestGracefulFailover_Success(t *testing.T) {
 	coord.mgr.mu.Unlock()
 
 	// Wire mock flushers (immediate return).
-	coord.SetCognitiveFlushers(newMockFlushableImmediate(), newMockFlushableImmediate())
+	coord.SetCognitiveFlushers(newMockFlushableImmediate())
 
 	// Pre-seed a replica seq so convergence check sees it caught up.
 	coord.UpdateReplicaSeq(targetID, coord.repLog.CurrentSeq())
@@ -992,7 +950,7 @@ func TestGracefulFailover_ConvergenceTimeout(t *testing.T) {
 	coord.mgr.AddPeer(targetID, "127.0.0.1:9999")
 
 	// Wire immediate flushers.
-	coord.SetCognitiveFlushers(newMockFlushableImmediate(), newMockFlushableImmediate())
+	coord.SetCognitiveFlushers(newMockFlushableImmediate())
 
 	// Append an entry so cortexSeq > 0.
 	coord.repLog.Append(OpSet, []byte("k"), []byte("v"))
@@ -1035,7 +993,7 @@ func TestGracefulFailover_AckTimeout(t *testing.T) {
 	coord.mgr.peers[targetID] = targetPeer
 	coord.mgr.mu.Unlock()
 
-	coord.SetCognitiveFlushers(newMockFlushableImmediate(), newMockFlushableImmediate())
+	coord.SetCognitiveFlushers(newMockFlushableImmediate())
 
 	// No entries → convergence is immediate.
 
@@ -1077,7 +1035,7 @@ func TestGracefulFailover_DrainRejectsWrites(t *testing.T) {
 
 	// Use a blocking flusher so we can observe DRAINING state while blocked.
 	blockingFlusher := newMockFlushable()
-	coord.SetCognitiveFlushers(blockingFlusher, newMockFlushableImmediate())
+	coord.SetCognitiveFlushers(blockingFlusher)
 
 	// Signal channels for state observation.
 	drainingObserved := make(chan bool, 1)

@@ -179,7 +179,7 @@ func TestScoreFormula(t *testing.T) {
 	// orphanRatio = 0.3
 	// contradictionDensity = 0.1
 	// duplicationPressure = 0.2
-	// decayVariance = clamped(0.25 - 0.25) = 0.0
+	// temporalVariance = clamped(0.25 - 0.25) = 0.0
 	// penalty = 0.3*0.3 + 0.1*0.3 + 0.0*0.2 + 0.2*0.2 = 0.09 + 0.03 + 0 + 0.04 = 0.16
 	// score = 1.0 - 0.16 = 0.84
 

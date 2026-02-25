@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"sync"
 
+	"github.com/scrypster/muninndb/internal/config"
 	"github.com/scrypster/muninndb/internal/plugin"
 	"github.com/scrypster/muninndb/internal/storage"
 )
@@ -29,14 +30,15 @@ type LLMProviderConfig struct {
 
 // EnrichService implements plugin.EnrichPlugin.
 type EnrichService struct {
-	provider LLMProvider
-	pipeline *EnrichmentPipeline
-	limiter  *TokenBucketLimiter
-	cfg      plugin.PluginConfig
-	name     string
-	provCfg  *plugin.ProviderConfig
-	mu       sync.Mutex
-	closed   bool
+	provider  LLMProvider
+	pipeline  *EnrichmentPipeline
+	limiter   *TokenBucketLimiter
+	cfg       plugin.PluginConfig
+	enrichCfg *config.PluginConfig
+	name      string
+	provCfg   *plugin.ProviderConfig
+	mu        sync.Mutex
+	closed    bool
 }
 
 // NewEnrichService creates an EnrichService from a provider URL.
@@ -114,8 +116,22 @@ func (s *EnrichService) Init(ctx context.Context, cfg plugin.PluginConfig) error
 
 	// Set up pipeline
 	s.pipeline = NewPipeline(s.provider, s.limiter)
+	if s.enrichCfg != nil {
+		s.pipeline.SetConfig(s.enrichCfg)
+	}
 
 	return nil
+}
+
+// SetEnrichConfig applies server-level enrichment configuration (per-stage flags, mode).
+// Must be called before Init, or the pipeline will use defaults.
+func (s *EnrichService) SetEnrichConfig(cfg *config.PluginConfig) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.enrichCfg = cfg
+	if s.pipeline != nil {
+		s.pipeline.SetConfig(cfg)
+	}
 }
 
 // Enrich processes one engram and returns enrichment data.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/scrypster/muninndb/internal/auth"
 	"github.com/scrypster/muninndb/internal/transport/mbp"
 )
 
@@ -14,6 +15,7 @@ import (
 type EngineInterface interface {
 	// MBP-backed methods
 	Write(ctx context.Context, req *mbp.WriteRequest) (*mbp.WriteResponse, error)
+	WriteBatch(ctx context.Context, reqs []*mbp.WriteRequest) ([]*mbp.WriteResponse, []error)
 	Activate(ctx context.Context, req *mbp.ActivateRequest) (*mbp.ActivateResponse, error)
 	Read(ctx context.Context, req *mbp.ReadRequest) (*mbp.ReadResponse, error)
 	Forget(ctx context.Context, req *mbp.ForgetRequest) (*mbp.ForgetResponse, error)
@@ -51,4 +53,7 @@ type EngineInterface interface {
 	// RetryEnrich re-queues an engram for enrichment by all active plugins that have
 	// not yet processed it. Returns an error if the engram is not found.
 	RetryEnrich(ctx context.Context, vault string, id string) (*RetryEnrichResult, error)
+
+	// GetVaultPlasticity returns the resolved plasticity config for a vault.
+	GetVaultPlasticity(ctx context.Context, vault string) (*auth.ResolvedPlasticity, error)
 }

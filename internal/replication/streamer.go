@@ -103,6 +103,14 @@ func NewNetworkStreamer(log *ReplicationLog, peer *PeerConn, startSeq uint64) *N
 // Stream blocks, waiting for push notifications from the ReplicationLog, then
 // reads all available entries and sends them to the peer over MBP.
 // Returns when ctx is cancelled or a fatal send/read error occurs.
+//
+// Protocol version safety: no per-entry version check is performed here because:
+//   - The Lobe's protocol version is validated during the join handshake
+//     (see JoinHandler.HandleJoinRequest), which rejects incompatible peers.
+//   - The connection is long-lived — a Lobe cannot receive entries without
+//     first completing the join handshake on this same connection.
+//   - ReplEntry uses a fixed msgpack schema; format changes require a
+//     protocol version bump, which the join check will catch.
 func (s *NetworkStreamer) Stream(ctx context.Context) error {
 	notify, unsub := s.log.Subscribe()
 	defer unsub()

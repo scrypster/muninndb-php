@@ -88,22 +88,18 @@ func (ps *PebbleStore) ClearVault(ctx context.Context, ws [8]byte) (int64, error
 	ps.cache.DeleteByVault(ws)
 
 	// assocCache: keys are [24]byte = ws[8] + engramID[16].
-	ps.assocCache.Range(func(k, _ any) bool {
-		key, ok := k.([24]byte)
-		if ok && [8]byte(key[:8]) == ws {
-			ps.assocCache.Delete(k)
+	// Purge all entries whose first 8 bytes match the cleared vault prefix.
+	for _, k := range ps.assocCache.Keys() {
+		if [8]byte(k[:8]) == ws {
+			ps.assocCache.Remove(k)
 		}
-		return true
-	})
+	}
 
 	// metaCache: keys are [16]byte (engramID only — not vault-scoped).
 	// We cannot filter by vault, so clear all entries. The cache is a
 	// read-through; evicting unrelated vaults only costs one extra Pebble read
 	// per metadata access, which is acceptable.
-	ps.metaCache.Range(func(k, _ any) bool {
-		ps.metaCache.Delete(k)
-		return true
-	})
+	ps.metaCache.Purge()
 
 	// recentActiveCache: keys are [8]byte (wsPrefix).
 	ps.recentActiveCache.Delete(ws)
@@ -124,7 +120,7 @@ func (ps *PebbleStore) DeleteVaultNameOnly(ctx context.Context, name string, ws 
 		return fmt.Errorf("delete vault name: remove name index key: %w", err)
 	}
 	// Evict in-memory name caches.
-	ps.vaultPrefixCache.Delete(name)
+	ps.vaultPrefixCache.Remove(name)
 	ps.vaultNameWritten.Delete(ws)
 	return nil
 }

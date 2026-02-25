@@ -70,7 +70,7 @@ func (s *Server) handleReplicationStatus(w http.ResponseWriter, r *http.Request)
 // GET /v1/replication/lag
 func (s *Server) handleReplicationLag(w http.ResponseWriter, r *http.Request) {
 	if s.coordinator == nil {
-		s.sendError(w, http.StatusServiceUnavailable, ErrStorageError, "cluster disabled")
+		s.sendError(r, w, http.StatusServiceUnavailable, ErrStorageError, "cluster disabled")
 		return
 	}
 
@@ -85,12 +85,12 @@ func (s *Server) handleReplicationLag(w http.ResponseWriter, r *http.Request) {
 // POST /v1/replication/promote
 func (s *Server) handleReplicationPromote(w http.ResponseWriter, r *http.Request) {
 	if s.coordinator == nil {
-		s.sendError(w, http.StatusServiceUnavailable, ErrStorageError, "cluster disabled")
+		s.sendError(r, w, http.StatusServiceUnavailable, ErrStorageError, "cluster disabled")
 		return
 	}
 
 	if err := s.coordinator.Election().StartElection(r.Context()); err != nil {
-		s.sendError(w, http.StatusInternalServerError, ErrStorageError, err.Error())
+		s.sendError(r, w, http.StatusInternalServerError, ErrStorageError, err.Error())
 		return
 	}
 

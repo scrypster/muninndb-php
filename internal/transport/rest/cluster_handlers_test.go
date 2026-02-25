@@ -31,11 +31,13 @@ func TestClusterInfo_ClusterDisabled(t *testing.T) {
 
 // TestClusterInfo_WithCoordinator verifies full response is returned.
 func TestClusterInfo_WithCoordinator(t *testing.T) {
+	const testSecret = "test-cluster-secret"
 	srv := newTestServer(t, nil)
-	coord := newTestCoordinator(t)
+	coord := newTestCoordinatorWithSecret(t, testSecret)
 	srv.SetCoordinator(coord)
 
 	req := httptest.NewRequest("GET", "/v1/cluster/info", nil)
+	req.Header.Set("Authorization", "Bearer "+testSecret)
 	w := httptest.NewRecorder()
 	srv.mux.ServeHTTP(w, req)
 
@@ -82,14 +84,16 @@ func TestClusterHealth_Standalone(t *testing.T) {
 
 // TestClusterHealth_Healthy verifies status=ok for a primary node.
 func TestClusterHealth_Healthy(t *testing.T) {
+	const testSecret = "test-cluster-secret"
 	srv := newTestServer(t, nil)
-	coord := newTestCoordinator(t)
+	coord := newTestCoordinatorWithSecret(t, testSecret)
 	srv.SetCoordinator(coord)
 
 	// Trigger election so the node becomes primary (lag=0).
 	_ = coord.Election().StartElection(nil)
 
 	req := httptest.NewRequest("GET", "/v1/cluster/health", nil)
+	req.Header.Set("Authorization", "Bearer "+testSecret)
 	w := httptest.NewRecorder()
 	srv.mux.ServeHTTP(w, req)
 
@@ -139,11 +143,13 @@ func TestClusterNodes_Empty(t *testing.T) {
 
 // TestClusterNodes_WithMembers verifies member list is returned with coordinator.
 func TestClusterNodes_WithMembers(t *testing.T) {
+	const testSecret = "test-cluster-secret"
 	srv := newTestServer(t, nil)
-	coord := newTestCoordinator(t)
+	coord := newTestCoordinatorWithSecret(t, testSecret)
 	srv.SetCoordinator(coord)
 
 	req := httptest.NewRequest("GET", "/v1/cluster/nodes", nil)
+	req.Header.Set("Authorization", "Bearer "+testSecret)
 	w := httptest.NewRecorder()
 	srv.mux.ServeHTTP(w, req)
 
@@ -188,11 +194,13 @@ func TestCognitiveConsistency_NoCoordinator(t *testing.T) {
 
 // TestCognitiveConsistency_WithCoordinator verifies the response reflects coordinator state.
 func TestCognitiveConsistency_WithCoordinator(t *testing.T) {
+	const testSecret = "test-cluster-secret"
 	srv := newTestServer(t, nil)
-	coord := newTestCoordinator(t)
+	coord := newTestCoordinatorWithSecret(t, testSecret)
 	srv.SetCoordinator(coord)
 
 	req := httptest.NewRequest("GET", "/v1/cluster/cognitive/consistency", nil)
+	req.Header.Set("Authorization", "Bearer "+testSecret)
 	w := httptest.NewRecorder()
 	srv.mux.ServeHTTP(w, req)
 

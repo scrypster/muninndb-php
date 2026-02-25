@@ -4,9 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sync"
 
 	"github.com/cockroachdb/pebble"
 )
+
+var warnedUnconfiguredVaults sync.Map
 
 // GetVaultConfig returns the config for a vault.
 //
@@ -29,9 +32,11 @@ func (s *Store) GetVaultConfig(vault string) (VaultConfig, error) {
 		// Fail-closed: any vault that has never been explicitly configured
 		// requires an API key. Operators should call SetVaultConfig to
 		// establish an explicit policy for each vault.
-		slog.Warn("vault has no explicit config — defaulting to locked access (fail-closed); call SetVaultConfig to set an explicit policy",
-			"vault", vault,
-		)
+		if _, already := warnedUnconfiguredVaults.LoadOrStore(vault, struct{}{}); !already {
+			slog.Warn("vault has no explicit config — defaulting to locked access (fail-closed); call SetVaultConfig to set an explicit policy",
+				"vault", vault,
+			)
+		}
 		return VaultConfig{Name: vault, Public: false}, nil
 	}
 	defer closer.Close()

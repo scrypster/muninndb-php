@@ -6,6 +6,7 @@ import (
 	"log/slog"
 
 	"github.com/scrypster/muninndb/internal/engine/vaultjob"
+	"github.com/scrypster/muninndb/internal/metrics"
 	"github.com/scrypster/muninndb/internal/storage"
 	"golang.org/x/net/context"
 )
@@ -95,6 +96,7 @@ func (e *Engine) runImport(job *vaultjob.Job, wsTarget [8]byte, vaultName string
 
 	defer func() {
 		if rec := recover(); rec != nil {
+			metrics.ImportJobsTotal.WithLabelValues("failed").Inc()
 			e.jobManager.Fail(job, fmt.Errorf("import job panicked: %v", rec))
 			slog.Error("import job panicked", "job_id", job.ID, "vault", vaultName, "panic", rec)
 		}
@@ -103,6 +105,7 @@ func (e *Engine) runImport(job *vaultjob.Job, wsTarget [8]byte, vaultName string
 	// Phase 1: import data from archive.
 	result, err := e.store.ImportVaultData(ctx, wsTarget, vaultName, opts, r)
 	if err != nil {
+		metrics.ImportJobsTotal.WithLabelValues("failed").Inc()
 		e.jobManager.Fail(job, fmt.Errorf("import phase: %w", err))
 		return
 	}
@@ -113,6 +116,7 @@ func (e *Engine) runImport(job *vaultjob.Job, wsTarget [8]byte, vaultName string
 	job.SetPhase(vaultjob.PhaseIndexing)
 	job.IndexTotal = result.EngramCount
 	if err := e.reindexVault(ctx, wsTarget, job); err != nil {
+		metrics.ImportJobsTotal.WithLabelValues("failed").Inc()
 		e.jobManager.Fail(job, fmt.Errorf("index phase: %w", err))
 		return
 	}
@@ -120,5 +124,6 @@ func (e *Engine) runImport(job *vaultjob.Job, wsTarget [8]byte, vaultName string
 	// Update global engram count.
 	e.engramCount.Add(result.EngramCount)
 
+	metrics.ImportJobsTotal.WithLabelValues("completed").Inc()
 	e.jobManager.Complete(job)
 }

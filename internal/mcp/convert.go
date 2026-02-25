@@ -43,7 +43,9 @@ func readResponseToMemory(r *mbp.ReadResponse) Memory {
 	}
 }
 
-// textContent wraps a string in the MCP content envelope.
-func textContent(s string) []map[string]any {
-	return []map[string]any{{"type": "text", "text": s}}
+// textContent wraps a string in the MCP tools/call result envelope.
+func textContent(s string) map[string]any {
+	return map[string]any{
+		"content": []map[string]any{{"type": "text", "text": s}},
+	}
 }

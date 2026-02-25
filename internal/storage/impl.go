@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble"
+	lru "github.com/hashicorp/golang-lru/v2"
+	"github.com/hashicorp/golang-lru/v2/expirable"
 	"github.com/scrypster/muninndb/internal/provenance"
 	"github.com/scrypster/muninndb/internal/storage/erf"
 	"github.com/scrypster/muninndb/internal/storage/keys"
@@ -20,41 +22,59 @@ import (
 // ensure atomic is used (atomic.Int64 is referenced via vaultCounter)
 var _ = atomic.Int64{}
 
+// PebbleStoreConfig holds creation-time options for PebbleStore.
+type PebbleStoreConfig struct {
+	// CacheSize is the maximum number of entries in the in-memory L1 cache. 0 means no caching.
+	CacheSize int
+	// NoSyncEngrams switches WriteEngram from pebble.Sync to pebble.NoSync.
+	// When true, the existing walSyncer provides durability within 10ms.
+	// Default false preserves the previous per-write fsync behavior.
+	NoSyncEngrams bool
+}
+
 // PebbleStore is the concrete Pebble-backed implementation of EngineStore.
 type PebbleStore struct {
 	db            *pebble.DB
 	cache         *L1Cache
 	mol           *wal.MOL
 	gc            *wal.GroupCommitter
-	vaultCounters sync.Map              // [8]byte -> *vaultCounter
-	provenance    *provenance.Store     // Provenance chain for tracking engram creation/updates
-	walSync       *walSyncer            // Periodic WAL fsync — covers all pebble.NoSync writes
-	counterFlush  *counterCoalescer     // Coalesces vault count Pebble writes (100ms timer)
-	provWork      *provenanceWorker     // NumCPU goroutines for provenance appends
+	noSyncEngrams bool
+	vaultCounters sync.Map          // [8]byte -> *vaultCounter
+	provenance    *provenance.Store // Provenance chain for tracking engram creation/updates
+	walSync       *walSyncer        // Periodic WAL fsync — covers all pebble.NoSync writes
+	counterFlush  *counterCoalescer // Coalesces vault count Pebble writes (100ms timer)
+	provWork      *provenanceWorker // NumCPU goroutines for provenance appends
 	// assocCache: [24]byte (wsPrefix[8]+engramID[16]) → *assocCacheEntry
 	// Caches forward association lists to avoid repeated Pebble SSTable scans on hot engrams.
 	// Invalidated on any WriteAssociation or UpdateAssociation for that engram.
-	assocCache sync.Map
+	// Bounded to 500_000 entries with 2s TTL; expirable.LRU handles expiry automatically.
+	assocCache *expirable.LRU[[24]byte, *assocCacheEntry]
 	// metaCache: [16]byte (engramID) → *EngramMeta
 	// Caches metadata for hot read-path engrams so GetMetadata never goes to Pebble twice.
 	// Populated by GetMetadata on first Pebble read. Invalidated by UpdateMetadata/WriteEngram.
-	metaCache sync.Map
+	// Bounded to 100_000 entries.
+	metaCache *lru.Cache[[16]byte, *EngramMeta]
 	// vaultPrefixCache: vault name (string) → [8]byte workspace prefix
 	// Eliminates the Pebble.Get in ResolveVaultPrefix on every write/activation.
-	vaultPrefixCache sync.Map
+	// Bounded to 10_000 entries.
+	vaultPrefixCache *lru.Cache[string, [8]byte]
 	// vaultNameWritten: [8]byte → struct{} — tracks vaults whose name has been persisted.
 	// Eliminates the Pebble.Get existence check in WriteVaultName on every write.
 	vaultNameWritten sync.Map
 	// recentActiveCache: [8]byte (wsPrefix) → *recentActiveCacheEntry
 	// Caches RecentActive results per vault with a 100ms TTL to avoid repeated SSTable scans.
 	recentActiveCache sync.Map
+	// transCache is the tiered PAS transition cache (in-memory hot + Pebble warm).
+	// All transition reads/writes go through this layer; Pebble is only hit on
+	// cold-start loads and periodic flushes.
+	transCache *TransitionCache
+	closeOnce  sync.Once
 }
 
-// assocCacheEntry holds a cached association list with a TTL to tolerate stale weights.
-// Weights change frequently via Hebbian updates; TTL avoids constant cache thrashing.
+// assocCacheEntry holds a cached association list.
+// TTL is enforced by the expirable.LRU cache (2s); no per-entry expiry field needed.
 type assocCacheEntry struct {
-	assocs  []Association
-	expires int64 // unix nanoseconds; 0 = no expiry
+	assocs []Association
 }
 
 // assocCacheTTL is how long association lists are cached.
@@ -139,16 +159,24 @@ func (ps *PebbleStore) GetVaultCount(ctx context.Context, wsPrefix [8]byte) int6
 }
 
 // NewPebbleStore creates a new PebbleStore wrapping a Pebble database and L1 cache.
-func NewPebbleStore(db *pebble.DB, cacheSize int) *PebbleStore {
+func NewPebbleStore(db *pebble.DB, cfg PebbleStoreConfig) *PebbleStore {
 	prov := provenance.NewStore(db)
+	metaCache, _ := lru.New[[16]byte, *EngramMeta](100_000)
+	vaultPrefixCache, _ := lru.New[string, [8]byte](10_000)
+	assocCache := expirable.NewLRU[[24]byte, *assocCacheEntry](500_000, nil, 2*time.Second)
 	ps := &PebbleStore{
-		db:         db,
-		cache:      NewL1Cache(cacheSize),
-		provenance: prov,
+		db:               db,
+		cache:            NewL1Cache(cfg.CacheSize),
+		provenance:       prov,
+		noSyncEngrams:    cfg.NoSyncEngrams,
+		metaCache:        metaCache,
+		vaultPrefixCache: vaultPrefixCache,
+		assocCache:       assocCache,
 	}
 	ps.walSync = newWALSyncer(db)
 	ps.counterFlush = newCounterCoalescer(db)
 	ps.provWork = newProvenanceWorker(prov)
+	ps.transCache = NewTransitionCache(ps)
 	return ps
 }
 
@@ -173,7 +201,11 @@ func (ps *PebbleStore) VaultPrefix(vault string) [8]byte {
 // Also writes association forward/reverse keys and secondary index entries.
 func (ps *PebbleStore) WriteEngram(ctx context.Context, wsPrefix [8]byte, eng *Engram) (ULID, error) {
 	if eng.ID == (ULID{}) {
-		eng.ID = NewULID()
+		if !eng.CreatedAt.IsZero() {
+			eng.ID = NewULIDWithTime(eng.CreatedAt)
+		} else {
+			eng.ID = NewULID()
+		}
 	}
 	if eng.State == 0 {
 		eng.State = StateActive
@@ -195,7 +227,7 @@ func (ps *PebbleStore) WriteEngram(ctx context.Context, wsPrefix [8]byte, eng *E
 	}
 
 	erfEng := toERFEngram(eng)
-	erfBytes, err := erf.Encode(erfEng)
+	erfBytes, err := erf.EncodeV2(erfEng)
 	if err != nil {
 		return ULID{}, fmt.Errorf("encode engram: %w", err)
 	}
@@ -208,6 +240,18 @@ func (ps *PebbleStore) WriteEngram(ctx context.Context, wsPrefix [8]byte, eng *E
 
 	// 0x02: metadata-only slim form (MetaKeySize bytes of the ERF header)
 	batch.Set(keys.MetaKey(wsPrefix, [16]byte(eng.ID)), erf.MetaKeySlice(erfBytes), nil)
+
+	// 0x18: standalone embedding key (ERF v2 — embedding not inline)
+	if len(eng.Embedding) > 0 {
+		params, quantized := erf.Quantize(eng.Embedding)
+		paramsBuf := erf.EncodeQuantizeParams(params)
+		embedBytes := make([]byte, 8+len(quantized))
+		copy(embedBytes[:8], paramsBuf[:])
+		for i, v := range quantized {
+			embedBytes[8+i] = byte(v)
+		}
+		batch.Set(keys.EmbeddingKey(wsPrefix, [16]byte(eng.ID)), embedBytes, nil)
+	}
 
 	// 0x03/0x04/weight-index: association keys
 	for _, assoc := range eng.Associations {
@@ -233,8 +277,16 @@ func (ps *PebbleStore) WriteEngram(ctx context.Context, wsPrefix [8]byte, eng *E
 	// 0x10: relevance bucket key
 	batch.Set(keys.RelevanceBucketKey(wsPrefix, eng.Relevance, [16]byte(eng.ID)), []byte{}, nil)
 
-	// Commit — NoSync: the walSyncer goroutine fsyncs the WAL every 10ms.
-	if err := batch.Commit(pebble.NoSync); err != nil {
+	// Commit — default: one fsync per user-submitted engram (pebble.Sync).
+	// User content is the irreplaceable asset; immediate durability is the
+	// correct tradeoff for a write-light memory store.
+	// When noSyncEngrams=true, walSyncer provides WAL durability within 10ms,
+	// batching fsyncs across all concurrent NoSync writes at lower I/O cost.
+	syncOption := pebble.Sync
+	if ps.noSyncEngrams {
+		syncOption = pebble.NoSync
+	}
+	if err := batch.Commit(syncOption); err != nil {
 		return ULID{}, fmt.Errorf("commit batch: %w", err)
 	}
 
@@ -277,6 +329,158 @@ func (ps *PebbleStore) WriteEngram(ctx context.Context, wsPrefix [8]byte, eng *E
 	return eng.ID, nil
 }
 
+// EngramBatchItem pairs a vault workspace prefix with the engram to write.
+type EngramBatchItem struct {
+	WSPrefix [8]byte
+	Engram   *Engram
+}
+
+// WriteEngramBatch atomically writes multiple engrams in a single Pebble batch
+// commit. This amortises the fsync cost across N engrams instead of paying it
+// per-engram, which is the dominant I/O bottleneck on write-heavy workloads.
+//
+// Each engram gets its own ULID, defaults, ERF encoding, and index keys — the
+// only difference from N × WriteEngram is the single commit at the end.
+// Post-commit work (vault counters, WAL/MOL, provenance) runs per-item after
+// the batch commits.
+//
+// Returns a slice of (ULID, error) per item. If the batch commit itself fails,
+// all items receive the commit error.
+func (ps *PebbleStore) WriteEngramBatch(ctx context.Context, items []EngramBatchItem) ([]ULID, []error) {
+	n := len(items)
+	ids := make([]ULID, n)
+	errs := make([]error, n)
+
+	if n == 0 {
+		return ids, errs
+	}
+
+	batch := ps.db.NewBatch()
+	defer batch.Close()
+
+	for i := range items {
+		eng := items[i].Engram
+		ws := items[i].WSPrefix
+
+		if eng.ID == (ULID{}) {
+			if !eng.CreatedAt.IsZero() {
+				eng.ID = NewULIDWithTime(eng.CreatedAt)
+			} else {
+				eng.ID = NewULID()
+			}
+		}
+		if eng.State == 0 {
+			eng.State = StateActive
+		}
+		if eng.Confidence == 0 {
+			eng.Confidence = 1.0
+		}
+		if eng.Stability == 0 {
+			eng.Stability = 30.0
+		}
+		if eng.CreatedAt.IsZero() {
+			eng.CreatedAt = time.Now()
+		}
+		if eng.UpdatedAt.IsZero() {
+			eng.UpdatedAt = eng.CreatedAt
+		}
+		if eng.LastAccess.IsZero() {
+			eng.LastAccess = eng.CreatedAt
+		}
+
+		erfEng := toERFEngram(eng)
+		erfBytes, encErr := erf.EncodeV2(erfEng)
+		if encErr != nil {
+			errs[i] = fmt.Errorf("encode engram: %w", encErr)
+			continue
+		}
+
+		id16 := [16]byte(eng.ID)
+		batch.Set(keys.EngramKey(ws, id16), erfBytes, nil)
+		batch.Set(keys.MetaKey(ws, id16), erf.MetaKeySlice(erfBytes), nil)
+
+		if len(eng.Embedding) > 0 {
+			params, quantized := erf.Quantize(eng.Embedding)
+			paramsBuf := erf.EncodeQuantizeParams(params)
+			embedBytes := make([]byte, 8+len(quantized))
+			copy(embedBytes[:8], paramsBuf[:])
+			for j, v := range quantized {
+				embedBytes[8+j] = byte(v)
+			}
+			batch.Set(keys.EmbeddingKey(ws, id16), embedBytes, nil)
+		}
+
+		for _, assoc := range eng.Associations {
+			av := encodeAssocValue(assoc.RelType, assoc.Confidence, assoc.CreatedAt, assoc.LastActivated)
+			batch.Set(keys.AssocFwdKey(ws, id16, assoc.Weight, [16]byte(assoc.TargetID)), av[:], nil)
+			batch.Set(keys.AssocRevKey(ws, [16]byte(assoc.TargetID), assoc.Weight, id16), av[:], nil)
+			var wiBuf [4]byte
+			binary.BigEndian.PutUint32(wiBuf[:], math.Float32bits(assoc.Weight))
+			batch.Set(keys.AssocWeightIndexKey(ws, id16, [16]byte(assoc.TargetID)), wiBuf[:], nil)
+		}
+
+		batch.Set(keys.StateIndexKey(ws, uint8(eng.State), id16), []byte{}, nil)
+		for _, tag := range eng.Tags {
+			batch.Set(keys.TagIndexKey(ws, keys.Hash(tag), id16), []byte{}, nil)
+		}
+		batch.Set(keys.CreatorIndexKey(ws, keys.Hash(eng.CreatedBy), id16), []byte{}, nil)
+		batch.Set(keys.RelevanceBucketKey(ws, eng.Relevance, id16), []byte{}, nil)
+
+		ids[i] = eng.ID
+	}
+
+	syncOption := pebble.Sync
+	if ps.noSyncEngrams {
+		syncOption = pebble.NoSync
+	}
+	if commitErr := batch.Commit(syncOption); commitErr != nil {
+		for i := range errs {
+			if errs[i] == nil {
+				errs[i] = fmt.Errorf("commit batch: %w", commitErr)
+			}
+		}
+		return ids, errs
+	}
+
+	// Post-commit: vault counters, WAL/MOL, provenance — per item.
+	for i := range items {
+		if errs[i] != nil {
+			continue
+		}
+		eng := items[i].Engram
+		ws := items[i].WSPrefix
+
+		vc := ps.getOrInitCounter(ctx, ws)
+		newCount := vc.count.Add(1)
+		if ps.counterFlush != nil {
+			if current, ok := ps.vaultCounters.Load(ws); ok && current.(*vaultCounter) == vc {
+				ps.counterFlush.Submit(ws, newCount)
+			}
+		}
+
+		if ps.gc != nil {
+			idBytes := [16]byte(eng.ID)
+			vaultID := binary.BigEndian.Uint32(ws[:4])
+			wal.AppendAsync(ps.gc, &wal.MOLEntry{
+				OpType:  wal.OpEngramWrite,
+				VaultID: vaultID,
+				Payload: idBytes[:],
+			})
+		}
+
+		if ps.provWork != nil {
+			ps.provWork.Submit(ws, eng.ID, provenance.ProvenanceEntry{
+				Timestamp: eng.CreatedAt,
+				Source:    provenance.SourceHuman,
+				AgentID:   eng.CreatedBy,
+				Operation: "create",
+			})
+		}
+	}
+
+	return ids, errs
+}
+
 // WriteCoherence persists vault coherence counters to Pebble.
 // Value is 56 bytes: 7 × BigEndian int64.
 func (ps *PebbleStore) WriteCoherence(vaultPrefix [8]byte, data [7]int64) error {
@@ -314,21 +518,34 @@ func (ps *PebbleStore) GetDB() *pebble.DB {
 	return ps.db
 }
 
-// Close flushes all pending writes and closes the Pebble database.
-func (ps *PebbleStore) Close() error {
-	// Stop background workers in reverse dependency order before closing Pebble.
-	// walSync must be last to ensure all NoSync writes are fsynced before db.Close().
-	if ps.counterFlush != nil {
-		ps.counterFlush.Close()
-	}
-	if ps.provWork != nil {
-		ps.provWork.Close()
-	}
-	if ps.walSync != nil {
-		ps.walSync.Close()
-	}
-	return ps.db.Close()
+// TransitionCache returns the tiered PAS transition cache.
+// Callers should use this for all transition reads/writes instead of
+// calling IncrTransitionBatch/GetTopTransitions on PebbleStore directly.
+func (ps *PebbleStore) TransitionCache() *TransitionCache {
+	return ps.transCache
 }
+
+// Close flushes all pending writes and closes the Pebble database. Idempotent.
+func (ps *PebbleStore) Close() error {
+	var closeErr error
+	ps.closeOnce.Do(func() {
+		if ps.transCache != nil {
+			ps.transCache.Close()
+		}
+		if ps.counterFlush != nil {
+			ps.counterFlush.Close()
+		}
+		if ps.provWork != nil {
+			ps.provWork.Close()
+		}
+		if ps.walSync != nil {
+			ps.walSync.Close()
+		}
+		closeErr = ps.db.Close()
+	})
+	return closeErr
+}
+
 // DiskSize returns the total on-disk size of all Pebble database files.
 func (ps *PebbleStore) DiskSize() int64 {
 	return int64(ps.db.Metrics().DiskSpaceUsage())

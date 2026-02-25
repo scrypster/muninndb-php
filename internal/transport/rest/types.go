@@ -65,6 +65,7 @@ const (
 type EngineAPI interface {
 	Hello(ctx context.Context, req *HelloRequest) (*HelloResponse, error)
 	Write(ctx context.Context, req *WriteRequest) (*WriteResponse, error)
+	WriteBatch(ctx context.Context, reqs []*WriteRequest) ([]*WriteResponse, []error)
 	Read(ctx context.Context, req *ReadRequest) (*ReadResponse, error)
 	Activate(ctx context.Context, req *ActivateRequest) (*ActivateResponse, error)
 	Link(ctx context.Context, req *mbp.LinkRequest) (*LinkResponse, error)
@@ -96,6 +97,12 @@ type EngineAPI interface {
 	ExportVault(ctx context.Context, vaultName, embedderModel string, dimension int, resetMeta bool, w io.Writer) (*storage.ExportResult, error)
 	// StartImport starts an async job to import a .muninn archive into a new vault.
 	StartImport(ctx context.Context, vaultName, embedderModel string, dimension int, resetMeta bool, r io.Reader) (*vaultjob.Job, error)
+	// ReindexFTSVault clears and rebuilds the FTS index for the named vault using
+	// the current (Porter2-stemmed) tokenizer. Sets the FTS version marker to 1
+	// upon completion. Returns the number of engrams re-indexed.
+	ReindexFTSVault(ctx context.Context, vaultName string) (int64, error)
+	// Checkpoint creates a Pebble checkpoint (point-in-time snapshot) at destDir.
+	Checkpoint(destDir string) error
 }
 
 // ── Web UI types ─────────────────────────────────────────────────────────
@@ -182,7 +189,10 @@ type ErrorDetail struct {
 
 // HealthResponse is returned by the health check endpoint.
 type HealthResponse struct {
-	Status string `json:"status"`
+	Status        string `json:"status"`
+	Version       string `json:"version"`
+	UptimeSeconds int64  `json:"uptime_seconds"`
+	DBWritable    bool   `json:"db_writable"`
 }
 
 // ReadyResponse is returned by the ready check endpoint.

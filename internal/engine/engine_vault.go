@@ -12,10 +12,22 @@ import (
 // Use errors.Is to check for this error in callers.
 var ErrVaultNotFound = errors.New("vault not found")
 
+// ErrEngramNotFound is returned when an operation references an engram that does not exist.
+// Use errors.Is to check for this error in callers.
+var ErrEngramNotFound = errors.New("engram not found")
+
+// ErrEngramSoftDeleted is returned when an operation targets an engram that has
+// been soft-deleted. Use errors.Is to check for this error in callers.
+var ErrEngramSoftDeleted = errors.New("engram is soft-deleted")
+
 // ClearVault removes all memories from a vault. The vault name remains registered.
 // It evicts all in-memory state (HNSW, FTS IDF cache, novelty fingerprints, coherence
 // counters, activity tracking) and adjusts the global engramCount.
 func (e *Engine) ClearVault(ctx context.Context, vaultName string) error {
+	mu := e.getVaultMutex(vaultName)
+	mu.Lock()
+	defer mu.Unlock()
+
 	// Verify the vault exists in the registered name list.
 	names, err := e.store.ListVaultNames()
 	if err != nil {

@@ -3,6 +3,7 @@ package erf
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"math"
 	"time"
 
@@ -19,8 +20,9 @@ func Decode(data []byte) (*Engram, error) {
 		return nil, errors.New("erf crc16 check failed")
 	}
 
-	if data[4] != Version {
-		return nil, errors.New("unsupported erf version")
+	ver := data[4]
+	if ver != Version && ver != Version2 {
+		return nil, fmt.Errorf("unsupported erf version 0x%02x", ver)
 	}
 
 	flags := data[5]
@@ -140,10 +142,48 @@ func Decode(data []byte) (*Engram, error) {
 	eng.AccessCount = binary.BigEndian.Uint32(data[OffsetAccessCount : OffsetAccessCount+4])
 	eng.State = data[OffsetState]
 	eng.EmbedDim = data[OffsetEmbedDim]
+	eng.MemoryType = data[OffsetMemoryType]
+	eng.Classification = binary.BigEndian.Uint16(data[OffsetClassification : OffsetClassification+2])
+
+	// Parse tagged extension fields between the end of variable data and CRC32 trailer.
+	varEnd := maxVarEnd(conceptOff, uint32(conceptLen), createdByOff, uint32(createdByLen),
+		contentOff, contentLen, tagsOff, tagsLen, assocOff, assocLen, embedOff, embedLen)
+	if trailer := uint32(len(data)) - 4; varEnd < trailer {
+		parseTaggedFields(data[varEnd:trailer], eng)
+	}
 
 	if !VerifyCRC32(data) {
 		return nil, errors.New("erf crc32 check failed")
 	}
 
 	return eng, nil
+}
+
+// maxVarEnd returns the maximum offset+length across all variable fields.
+func maxVarEnd(pairs ...uint32) uint32 {
+	var max uint32
+	for i := 0; i < len(pairs)-1; i += 2 {
+		end := pairs[i] + pairs[i+1]
+		if end > max {
+			max = end
+		}
+	}
+	return max
+}
+
+// parseTaggedFields reads tag-length-value fields from buf into eng.
+func parseTaggedFields(buf []byte, eng *Engram) {
+	for len(buf) >= 3 {
+		tag := buf[0]
+		length := int(buf[1])<<8 | int(buf[2])
+		buf = buf[3:]
+		if len(buf) < length {
+			return
+		}
+		switch tag {
+		case TagTypeLabel:
+			eng.TypeLabel = string(buf[:length])
+		}
+		buf = buf[length:]
+	}
 }

@@ -3,6 +3,7 @@ package rest
 import (
 	"context"
 	"io"
+	"time"
 
 	"github.com/scrypster/muninndb/internal/cognitive"
 	"github.com/scrypster/muninndb/internal/engine"
@@ -33,11 +34,51 @@ func (w *RESTEngineWrapper) Write(ctx context.Context, req *WriteRequest) (*Writ
 	return w.engine.Write(ctx, req)
 }
 
+func (w *RESTEngineWrapper) WriteBatch(ctx context.Context, reqs []*WriteRequest) ([]*WriteResponse, []error) {
+	return w.engine.WriteBatch(ctx, reqs)
+}
+
 func (w *RESTEngineWrapper) Read(ctx context.Context, req *ReadRequest) (*ReadResponse, error) {
 	return w.engine.Read(ctx, req)
 }
 
+// coerceFilterValues returns a new slice of filters where string values for
+// temporal fields ("created_after", "created_before") are parsed into time.Time.
+// Values that are already time.Time are left unchanged. If parsing fails the
+// value is left as-is so the engine can handle or ignore it gracefully.
+// The original slice is never mutated.
+func coerceFilterValues(filters []mbp.Filter) []mbp.Filter {
+	out := make([]mbp.Filter, len(filters))
+	copy(out, filters)
+	for i, f := range out {
+		if f.Field != "created_after" && f.Field != "created_before" {
+			continue
+		}
+		if _, ok := f.Value.(time.Time); ok {
+			continue
+		}
+		s, ok := f.Value.(string)
+		if !ok {
+			continue
+		}
+		if t, err := time.Parse(time.RFC3339, s); err == nil {
+			out[i].Value = t
+			continue
+		}
+		if t, err := time.Parse("2006-01-02", s); err == nil {
+			out[i].Value = t
+		}
+	}
+	return out
+}
+
 func (w *RESTEngineWrapper) Activate(ctx context.Context, req *ActivateRequest) (*ActivateResponse, error) {
+	if len(req.Filters) > 0 {
+		// Make a shallow copy to avoid mutating the caller's request.
+		reqCopy := *req
+		reqCopy.Filters = coerceFilterValues(req.Filters)
+		req = &reqCopy
+	}
 	return w.engine.Activate(ctx, req)
 }
 
@@ -55,8 +96,12 @@ func (w *RESTEngineWrapper) Stat(ctx context.Context, req *StatRequest) (*StatRe
 		return nil, err
 	}
 	if w.hnswReg != nil {
-		const dim = 768 // nomic-embed-text dimension
-		resp.IndexSize = int64(w.hnswReg.TotalVectors()) * dim * 4
+		if req.Vault != "" {
+			ws := w.engine.Store().ResolveVaultPrefix(req.Vault)
+			resp.IndexSize = w.hnswReg.VaultVectorBytes(ws)
+		} else {
+			resp.IndexSize = w.hnswReg.TotalVectorBytes()
+		}
 	}
 	return resp, nil
 }
@@ -207,4 +252,12 @@ func (w *RESTEngineWrapper) ExportVault(ctx context.Context, vaultName, embedder
 
 func (w *RESTEngineWrapper) StartImport(ctx context.Context, vaultName, embedderModel string, dimension int, resetMeta bool, r io.Reader) (*vaultjob.Job, error) {
 	return w.engine.StartImport(ctx, vaultName, embedderModel, dimension, resetMeta, r)
+}
+
+func (w *RESTEngineWrapper) ReindexFTSVault(ctx context.Context, vaultName string) (int64, error) {
+	return w.engine.ReindexFTSVault(ctx, vaultName)
+}
+
+func (w *RESTEngineWrapper) Checkpoint(destDir string) error {
+	return w.engine.Checkpoint(destDir)
 }

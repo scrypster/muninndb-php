@@ -412,10 +412,9 @@ func TestMcpHealthCheckDifferentStatuses(t *testing.T) {
 
 // TestLoadDefaultVaultInvalidJSON tests loadDefaultVault with invalid JSON.
 func TestLoadDefaultVaultInvalidJSON(t *testing.T) {
-	origHome := os.Getenv("HOME")
 	tmpDir := t.TempDir()
-	os.Setenv("HOME", tmpDir)
-	defer os.Setenv("HOME", origHome)
+	t.Setenv("HOME", tmpDir)
+	t.Setenv("USERPROFILE", tmpDir) // os.UserHomeDir() checks USERPROFILE on Windows
 
 	// Create config dir
 	configDir := filepath.Join(tmpDir, ".muninn")
@@ -854,6 +853,257 @@ func TestCmdForgetError(t *testing.T) {
 	})
 	if !strings.Contains(out, "Error") {
 		t.Errorf("expected error output, got: %s", out)
+	}
+}
+
+// TestParseSearchFlagsBasicQuery tests a plain query with no flags.
+func TestParseSearchFlagsBasicQuery(t *testing.T) {
+	opts, errMsg := parseSearchFlags("golang concurrency patterns")
+	if errMsg != "" {
+		t.Fatalf("unexpected error: %s", errMsg)
+	}
+	if opts.query != "golang concurrency patterns" {
+		t.Errorf("query = %q, want %q", opts.query, "golang concurrency patterns")
+	}
+	if opts.since != "" || opts.before != "" || opts.mode != "" || opts.hops != 0 || opts.profile != "" {
+		t.Errorf("expected all flags empty/zero, got: %+v", opts)
+	}
+}
+
+// TestParseSearchFlagsSince tests --since with a date-only value.
+func TestParseSearchFlagsSince(t *testing.T) {
+	opts, errMsg := parseSearchFlags("authentication --since 2026-01-01")
+	if errMsg != "" {
+		t.Fatalf("unexpected error: %s", errMsg)
+	}
+	if opts.query != "authentication" {
+		t.Errorf("query = %q, want %q", opts.query, "authentication")
+	}
+	// date-only should be converted to RFC3339
+	if opts.since != "2026-01-01T00:00:00Z" {
+		t.Errorf("since = %q, want %q", opts.since, "2026-01-01T00:00:00Z")
+	}
+}
+
+// TestParseSearchFlagsSinceRFC3339 tests --since with an RFC3339 value.
+func TestParseSearchFlagsSinceRFC3339(t *testing.T) {
+	opts, errMsg := parseSearchFlags("decisions --since 2026-01-15T12:00:00Z")
+	if errMsg != "" {
+		t.Fatalf("unexpected error: %s", errMsg)
+	}
+	if opts.since != "2026-01-15T12:00:00Z" {
+		t.Errorf("since = %q, want %q", opts.since, "2026-01-15T12:00:00Z")
+	}
+}
+
+// TestParseSearchFlagsModeActr tests --mode actr.
+func TestParseSearchFlagsModeActr(t *testing.T) {
+	opts, errMsg := parseSearchFlags("memory recall --mode actr")
+	if errMsg != "" {
+		t.Fatalf("unexpected error: %s", errMsg)
+	}
+	if opts.mode != "actr" {
+		t.Errorf("mode = %q, want %q", opts.mode, "actr")
+	}
+}
+
+// TestParseSearchFlagsModeAdditive tests --mode additive maps to empty string.
+func TestParseSearchFlagsModeAdditive(t *testing.T) {
+	opts, errMsg := parseSearchFlags("query --mode additive")
+	if errMsg != "" {
+		t.Fatalf("unexpected error: %s", errMsg)
+	}
+	if opts.mode != "" {
+		t.Errorf("mode = %q, want empty string for additive", opts.mode)
+	}
+}
+
+// TestParseSearchFlagsMultipleFlags tests query with multiple flags.
+func TestParseSearchFlagsMultipleFlags(t *testing.T) {
+	opts, errMsg := parseSearchFlags("architecture decisions --since 2026-01-01 --before 2026-02-01 --mode cgdn --hops 3 --profile causal")
+	if errMsg != "" {
+		t.Fatalf("unexpected error: %s", errMsg)
+	}
+	if opts.query != "architecture decisions" {
+		t.Errorf("query = %q, want %q", opts.query, "architecture decisions")
+	}
+	if opts.since != "2026-01-01T00:00:00Z" {
+		t.Errorf("since = %q, want %q", opts.since, "2026-01-01T00:00:00Z")
+	}
+	if opts.before != "2026-02-01T00:00:00Z" {
+		t.Errorf("before = %q, want %q", opts.before, "2026-02-01T00:00:00Z")
+	}
+	if opts.mode != "cgdn" {
+		t.Errorf("mode = %q, want %q", opts.mode, "cgdn")
+	}
+	if opts.hops != 3 {
+		t.Errorf("hops = %d, want 3", opts.hops)
+	}
+	if opts.profile != "causal" {
+		t.Errorf("profile = %q, want %q", opts.profile, "causal")
+	}
+}
+
+// TestParseSearchFlagsUnknownFlag tests that an unknown flag returns an error.
+func TestParseSearchFlagsUnknownFlag(t *testing.T) {
+	_, errMsg := parseSearchFlags("query --limit 5")
+	if errMsg == "" {
+		t.Fatal("expected error for unknown flag, got none")
+	}
+	if !strings.Contains(errMsg, "unknown flag") {
+		t.Errorf("error should mention 'unknown flag': %s", errMsg)
+	}
+	if !strings.Contains(errMsg, "--limit") {
+		t.Errorf("error should mention the offending flag: %s", errMsg)
+	}
+}
+
+// TestParseSearchFlagsMissingValue tests that a flag without a value returns an error.
+func TestParseSearchFlagsMissingValue(t *testing.T) {
+	_, errMsg := parseSearchFlags("query --since")
+	if errMsg == "" {
+		t.Fatal("expected error for missing flag value, got none")
+	}
+	if !strings.Contains(errMsg, "requires a value") {
+		t.Errorf("error should mention 'requires a value': %s", errMsg)
+	}
+}
+
+// TestParseSearchFlagsInvalidDate tests that an invalid date returns an error.
+func TestParseSearchFlagsInvalidDate(t *testing.T) {
+	_, errMsg := parseSearchFlags("query --since not-a-date")
+	if errMsg == "" {
+		t.Fatal("expected error for invalid date, got none")
+	}
+	if !strings.Contains(errMsg, "invalid ISO8601 date") {
+		t.Errorf("error should mention 'invalid ISO8601 date': %s", errMsg)
+	}
+}
+
+// TestParseSearchFlagsInvalidMode tests that an unknown mode returns an error.
+func TestParseSearchFlagsInvalidMode(t *testing.T) {
+	_, errMsg := parseSearchFlags("query --mode fast")
+	if errMsg == "" {
+		t.Fatal("expected error for invalid mode, got none")
+	}
+	if !strings.Contains(errMsg, "unknown value") {
+		t.Errorf("error should mention 'unknown value': %s", errMsg)
+	}
+}
+
+// TestParseSearchFlagsInvalidHops tests that a non-integer hops returns an error.
+func TestParseSearchFlagsInvalidHops(t *testing.T) {
+	_, errMsg := parseSearchFlags("query --hops abc")
+	if errMsg == "" {
+		t.Fatal("expected error for non-integer hops, got none")
+	}
+	if !strings.Contains(errMsg, "non-negative integer") {
+		t.Errorf("error should mention 'non-negative integer': %s", errMsg)
+	}
+}
+
+// TestParseSearchFlagsNegativeHops tests that a negative hops returns an error.
+func TestParseSearchFlagsNegativeHops(t *testing.T) {
+	_, errMsg := parseSearchFlags("query --hops -1")
+	if errMsg == "" {
+		t.Fatal("expected error for negative hops, got none")
+	}
+	if !strings.Contains(errMsg, "non-negative integer") {
+		t.Errorf("error should mention 'non-negative integer': %s", errMsg)
+	}
+}
+
+// TestParseSearchFlagsInvalidProfile tests that an unknown profile returns an error.
+func TestParseSearchFlagsInvalidProfile(t *testing.T) {
+	_, errMsg := parseSearchFlags("query --profile unknown")
+	if errMsg == "" {
+		t.Fatal("expected error for invalid profile, got none")
+	}
+	if !strings.Contains(errMsg, "unknown value") {
+		t.Errorf("error should mention 'unknown value': %s", errMsg)
+	}
+}
+
+// TestParseSearchFlagsEmptyQuery tests that flags-only input returns empty query without error.
+func TestParseSearchFlagsEmptyQuery(t *testing.T) {
+	opts, errMsg := parseSearchFlags("--since 2026-01-01")
+	if errMsg != "" {
+		t.Fatalf("unexpected error: %s", errMsg)
+	}
+	if opts.query != "" {
+		t.Errorf("query = %q, want empty", opts.query)
+	}
+	if opts.since != "2026-01-01T00:00:00Z" {
+		t.Errorf("since = %q, want %q", opts.since, "2026-01-01T00:00:00Z")
+	}
+}
+
+// TestParseSearchFlagsUnexpectedTokenAfterFlags tests a non-flag token appearing after flags.
+func TestParseSearchFlagsUnexpectedTokenAfterFlags(t *testing.T) {
+	_, errMsg := parseSearchFlags("query --since 2026-01-01 extra")
+	if errMsg == "" {
+		t.Fatal("expected error for unexpected token after flags, got none")
+	}
+	if !strings.Contains(errMsg, "unexpected token after flags") {
+		t.Errorf("error should mention 'unexpected token after flags': %s", errMsg)
+	}
+}
+
+// TestCmdSearchWithFlags verifies cmdSearch passes flags to muninn_recall.
+func TestCmdSearchWithFlags(t *testing.T) {
+	body := mcpResultWithContent(`[{"id":"01JF","content":"memory about auth"}]`)
+	srv, last := newMCPServer(t, body)
+	defer srv.Close()
+
+	r := &replState{mcpURL: srv.URL, vault: "testproject"}
+	captureStdout(func() {
+		r.cmdSearch("authentication --since 2026-01-01 --mode actr --hops 2 --profile causal")
+	})
+
+	args, ok := last.Params["arguments"].(map[string]any)
+	if !ok {
+		t.Fatal("arguments is not a map")
+	}
+	if args["vault"] != "testproject" {
+		t.Errorf("vault = %v, want %q", args["vault"], "testproject")
+	}
+	ctx, ok := args["context"].([]any)
+	if !ok || len(ctx) == 0 || ctx[0] != "authentication" {
+		t.Errorf("context = %v, want [\"authentication\"]", args["context"])
+	}
+	if args["since"] != "2026-01-01T00:00:00Z" {
+		t.Errorf("since = %v, want %q", args["since"], "2026-01-01T00:00:00Z")
+	}
+	if args["mode"] != "actr" {
+		t.Errorf("mode = %v, want %q", args["mode"], "actr")
+	}
+	if args["max_hops"] != float64(2) && args["max_hops"] != 2 {
+		t.Errorf("max_hops = %v, want 2", args["max_hops"])
+	}
+	if args["profile"] != "causal" {
+		t.Errorf("profile = %v, want %q", args["profile"], "causal")
+	}
+}
+
+// TestCmdSearchWithFlagError verifies cmdSearch prints error for invalid flags.
+func TestCmdSearchWithFlagError(t *testing.T) {
+	r := &replState{mcpURL: "http://localhost:19999", vault: "test"}
+	out := captureStdout(func() {
+		r.cmdSearch("query --unknown-flag value")
+	})
+	if !strings.Contains(out, "Error") {
+		t.Errorf("expected error output for unknown flag, got: %s", out)
+	}
+}
+
+// TestCmdSearchWithEmptyQueryAfterFlags verifies cmdSearch shows usage when query is empty.
+func TestCmdSearchWithEmptyQueryAfterFlags(t *testing.T) {
+	r := &replState{mcpURL: "http://localhost:19999", vault: "test"}
+	out := captureStdout(func() {
+		r.cmdSearch("--since 2026-01-01")
+	})
+	if !strings.Contains(out, "Usage") {
+		t.Errorf("expected usage message for empty query, got: %s", out)
 	}
 }
 

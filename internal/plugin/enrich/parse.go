@@ -127,24 +127,24 @@ func ParseRelationshipResponse(raw string) ([]plugin.ExtractedRelation, error) {
 }
 
 // ParseClassificationResponse parses the JSON response from the classification call.
-func ParseClassificationResponse(raw string) (memType, category, subcategory string, tags []string, err error) {
+func ParseClassificationResponse(raw string) (memType, typeLabel, category, subcategory string, tags []string, err error) {
 	raw = strings.TrimSpace(raw)
 	jsonStr := extractJSON(raw)
 
 	var result struct {
-		MemoryType     string   `json:"memory_type"`
-		Category       string   `json:"category"`
-		Subcategory    string   `json:"subcategory"`
-		Tags           []string `json:"tags"`
+		MemoryType  string   `json:"memory_type"`
+		TypeLabel   string   `json:"type_label"`
+		Category    string   `json:"category"`
+		Subcategory string   `json:"subcategory"`
+		Tags        []string `json:"tags"`
 	}
 
 	err = json.Unmarshal([]byte(jsonStr), &result)
 	if err != nil {
-		// Return empty on parse error (graceful degradation)
-		return "", "", "", nil, nil
+		return "", "", "", "", nil, nil
 	}
 
-	return result.MemoryType, result.Category, result.Subcategory, result.Tags, nil
+	return result.MemoryType, result.TypeLabel, result.Category, result.Subcategory, result.Tags, nil
 }
 
 // ParseSummarizeResponse parses the JSON response from the summarization call.

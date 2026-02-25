@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	toml "github.com/pelletier/go-toml/v2"
 )
 
 // tokenPath returns the path to the MCP bearer token file.
@@ -164,7 +166,10 @@ func writeAIToolConfig(path string, mergeFn func(cfg map[string]any)) (string, e
 
 // mcpServerEntry returns the JSON map for muninn's MCP server entry.
 func mcpServerEntry(mcpURL, token string) map[string]any {
-	entry := map[string]any{"url": mcpURL}
+	entry := map[string]any{
+		"type": "http",
+		"url":  mcpURL,
+	}
 	if token != "" {
 		entry["headers"] = map[string]any{
 			"Authorization": "Bearer " + token,
@@ -299,6 +304,98 @@ func configureOpenClaw(mcpURL, token string) error {
 	return nil
 }
 
+// codexConfigPath returns the path to OpenAI Codex CLI's config file.
+// Codex uses ~/.codex/config.toml for global MCP server configuration.
+func codexConfigPath() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".codex", "config.toml")
+}
+
+// writeCodexTOMLConfig performs a read-merge-backup-write of Codex's TOML config.
+// It preserves all existing keys and only adds/updates [mcp_servers.muninn].
+func writeCodexTOMLConfig(path, mcpURL, token string) (string, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return "", fmt.Errorf("create config directory: %w", err)
+	}
+
+	existing, readErr := os.ReadFile(path)
+	cfg := map[string]any{}
+	if readErr == nil && len(existing) > 0 {
+		if err := toml.Unmarshal(existing, &cfg); err != nil {
+			return "", fmt.Errorf("existing config at %s contains invalid TOML: %w", path, err)
+		}
+	}
+
+	// Backup before modification
+	if readErr == nil && len(existing) > 0 {
+		var origMode os.FileMode = 0644
+		if info, err := os.Stat(path); err == nil {
+			origMode = info.Mode().Perm()
+		}
+		if err := os.WriteFile(path+".bak", existing, origMode); err != nil {
+			fmt.Fprintf(os.Stderr, "  warning: could not create backup %s.bak: %v\n", path, err)
+		}
+	}
+
+	hadMCPServers := cfg["mcp_servers"] != nil
+
+	servers, ok := cfg["mcp_servers"].(map[string]any)
+	if !ok {
+		servers = map[string]any{}
+	}
+	entry := map[string]any{
+		"url": mcpURL,
+	}
+	if token != "" {
+		entry["http_headers"] = map[string]any{
+			"Authorization": "Bearer " + token,
+		}
+	}
+	servers["muninn"] = entry
+	cfg["mcp_servers"] = servers
+
+	out, err := toml.Marshal(cfg)
+	if err != nil {
+		return "", fmt.Errorf("marshal merged config: %w", err)
+	}
+
+	tmpFile, err := os.CreateTemp(filepath.Dir(path), ".muninn_cfg_*.tmp")
+	if err != nil {
+		return "", fmt.Errorf("create temp file: %w", err)
+	}
+	defer os.Remove(tmpFile.Name())
+	if _, err := tmpFile.Write(out); err != nil {
+		tmpFile.Close()
+		return "", fmt.Errorf("write temp file: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		return "", fmt.Errorf("close temp file: %w", err)
+	}
+	if err := os.Chmod(tmpFile.Name(), 0600); err != nil {
+		return "", fmt.Errorf("chmod temp file: %w", err)
+	}
+	if err := os.Rename(tmpFile.Name(), path); err != nil {
+		return "", fmt.Errorf("atomic rename: %w", err)
+	}
+
+	if hadMCPServers {
+		return "updated mcp_servers.muninn in existing config (other servers preserved)", nil
+	}
+	return "added mcp_servers.muninn to config", nil
+}
+
+// configureCodex writes the muninn MCP entry into Codex's config.toml.
+func configureCodex(mcpURL, token string) error {
+	path := codexConfigPath()
+	summary, err := writeCodexTOMLConfig(path, mcpURL, token)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("  ✓ Codex: %s\n    %s\n", summary, path)
+	fmt.Println("  → Restart Codex to activate MuninnDB memory")
+	return nil
+}
+
 // printVSCodeInstructions prints manual setup steps for VS Code.
 func printVSCodeInstructions(mcpURL, token string) {
 	fmt.Println("  VS Code — add to your workspace .vscode/mcp.json:")
@@ -333,4 +430,76 @@ func printManualInstructions(mcpURL, token string) {
 		curlAuth = fmt.Sprintf(` -H "Authorization: Bearer %s"`, token)
 	}
 	fmt.Printf("    curl%s %s/mcp/health\n", curlAuth, mcpURL)
+}
+
+const claudeMDMemoryBlock = `# Memory Storage Preference
+
+When asked to remember something — or when the user shares any preference, fact,
+decision, or instruction worth remembering — **always use MuninnDB (muninn) MCP**.
+Never use local auto memory. MuninnDB is the canonical memory system.
+
+- **Store**: ` + "`mcp__muninn__muninn_remember`" + ` (vault, concept, content)
+- **Recall**: ` + "`mcp__muninn__muninn_recall`" + ` (vault, context)
+- **Read**: ` + "`mcp__muninn__muninn_read`" + ` (vault, id)
+- **Link**: ` + "`mcp__muninn__muninn_link`" + ` (vault, source_id, target_id)
+- **Guide**: ` + "`mcp__muninn__muninn_guide`" + ` — call this on first connect to learn best practices
+- **Batch**: ` + "`mcp__muninn__muninn_remember_batch`" + ` (vault, memories[])
+
+Use vault "default" unless the user specifies otherwise. Be proactive — if the user
+shares something personal or important, store it without being asked.
+`
+
+// claudeMDPath returns the path to ~/.claude/CLAUDE.md.
+func claudeMDPath() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".claude", "CLAUDE.md")
+}
+
+// configureClaudeMD writes the MuninnDB memory preference block into ~/.claude/CLAUDE.md.
+// If the file already contains a MuninnDB block, it reports "already configured" and returns nil.
+// If the file exists without one, the block is prepended. If missing, the file is created.
+func configureClaudeMD() error {
+	path := claudeMDPath()
+
+	existing, err := os.ReadFile(path)
+	if err == nil {
+		if strings.Contains(string(existing), "mcp__muninn__muninn_remember") {
+			fmt.Println("  ✓ CLAUDE.md already has MuninnDB memory preference")
+			return nil
+		}
+		// Prepend the block to existing content.
+		combined := claudeMDMemoryBlock + "\n---\n\n" + string(existing)
+		if err := os.WriteFile(path, []byte(combined), 0644); err != nil {
+			return fmt.Errorf("write %s: %w", path, err)
+		}
+		fmt.Printf("  ✓ CLAUDE.md updated: %s\n", path)
+		return nil
+	}
+
+	// File doesn't exist — create directory and file.
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return fmt.Errorf("create directory: %w", err)
+	}
+	if err := os.WriteFile(path, []byte(claudeMDMemoryBlock), 0644); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	fmt.Printf("  ✓ CLAUDE.md created: %s\n", path)
+	return nil
+}
+
+// printClaudeMDInstructions prints manual instructions for configuring CLAUDE.md.
+func printClaudeMDInstructions() {
+	fmt.Println()
+	fmt.Println("  ╭─ Optional: Claude Code memory preference ─────────────────╮")
+	fmt.Println("  │                                                            │")
+	fmt.Println("  │  To make Claude Code always use MuninnDB for memory,       │")
+	fmt.Println("  │  add this to ~/.claude/CLAUDE.md:                          │")
+	fmt.Println("  │                                                            │")
+	fmt.Println("  │    # Memory Storage Preference                             │")
+	fmt.Println("  │    Always use MuninnDB MCP for memory.                     │")
+	fmt.Println("  │    Never use local auto memory.                            │")
+	fmt.Println("  │                                                            │")
+	fmt.Println("  │  Full block: muninn help claude-md                         │")
+	fmt.Println("  │                                                            │")
+	fmt.Println("  ╰────────────────────────────────────────────────────────────╯")
 }

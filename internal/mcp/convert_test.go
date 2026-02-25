@@ -1,10 +1,57 @@
 package mcp
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/scrypster/muninndb/internal/transport/mbp"
 )
+
+func TestTextContentEnvelope(t *testing.T) {
+	payload := `{"id":"abc123","status":"ok"}`
+	result := textContent(payload)
+
+	contentRaw, exists := result["content"]
+	if !exists {
+		t.Fatal("result missing 'content' key")
+	}
+
+	content, ok := contentRaw.([]map[string]any)
+	if !ok {
+		t.Fatalf("content should be []map[string]any, got %T", contentRaw)
+	}
+	if len(content) != 1 {
+		t.Fatalf("content should have exactly 1 element, got %d", len(content))
+	}
+
+	elem := content[0]
+	if elem["type"] != "text" {
+		t.Errorf("content[0].type = %v, want \"text\"", elem["type"])
+	}
+	if elem["text"] != payload {
+		t.Errorf("content[0].text = %v, want %q", elem["text"], payload)
+	}
+
+	b, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("json.Marshal failed: %v", err)
+	}
+	var roundtrip map[string]any
+	if err := json.Unmarshal(b, &roundtrip); err != nil {
+		t.Fatalf("json.Unmarshal roundtrip failed: %v", err)
+	}
+	ct, ok := roundtrip["content"].([]any)
+	if !ok || len(ct) != 1 {
+		t.Fatalf("roundtrip content not []any with 1 element: %T", roundtrip["content"])
+	}
+	item, ok := ct[0].(map[string]any)
+	if !ok {
+		t.Fatalf("roundtrip content[0] not map: %T", ct[0])
+	}
+	if item["type"] != "text" || item["text"] != payload {
+		t.Errorf("roundtrip mismatch: type=%v text=%v", item["type"], item["text"])
+	}
+}
 
 func TestConvertActivationToMemory(t *testing.T) {
 	item := &mbp.ActivationItem{

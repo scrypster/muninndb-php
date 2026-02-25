@@ -29,6 +29,23 @@ type ClusterConfig struct {
 	HeartbeatMS int `yaml:"heartbeat_ms" json:"heartbeat_ms"`
 	// TLS holds mutual-TLS settings for inter-node connections.
 	TLS TLSConfig `yaml:"tls" json:"tls"`
+	// QuorumLossTimeoutSec is how long a Cortex tolerates lost quorum before
+	// self-demoting. Default: 5.
+	QuorumLossTimeoutSec int `yaml:"quorum_loss_timeout_sec" json:"quorum_loss_timeout_sec"`
+	// JoinTokenTTLMin is the lifetime of join tokens in minutes. Default: 15.
+	JoinTokenTTLMin int `yaml:"join_token_ttl_min" json:"join_token_ttl_min"`
+	// FailoverConvergenceTimeoutSec is how long graceful failover waits for
+	// all Lobes to catch up. Default: 30.
+	FailoverConvergenceTimeoutSec int `yaml:"failover_convergence_timeout_sec" json:"failover_convergence_timeout_sec"`
+	// HandoffAckTimeoutSec is how long to wait for a HANDOFF_ACK during
+	// graceful failover. Default: 5.
+	HandoffAckTimeoutSec int `yaml:"handoff_ack_timeout_sec" json:"handoff_ack_timeout_sec"`
+	// PruneIntervalSec is how often the Cortex prunes fully-replicated WAL
+	// segments. Default: 60.
+	PruneIntervalSec int `yaml:"prune_interval_sec" json:"prune_interval_sec"`
+	// ReconDelayMs is how long to wait after a Lobe reconnects before
+	// triggering reconciliation (ms). Default: 2000.
+	ReconDelayMs int `yaml:"recon_delay_ms" json:"recon_delay_ms"`
 }
 
 // muninnYAML is the shape of muninn.yaml — only the cluster section is used here.
@@ -39,10 +56,16 @@ type muninnYAML struct {
 // clusterDefaults returns a ClusterConfig with default values applied.
 func clusterDefaults() ClusterConfig {
 	return ClusterConfig{
-		Enabled:     false,
-		Role:        "auto",
-		LeaseTTL:    10,
-		HeartbeatMS: 1000,
+		Enabled:                       false,
+		Role:                          "auto",
+		LeaseTTL:                      10,
+		HeartbeatMS:                   1000,
+		QuorumLossTimeoutSec:          5,
+		JoinTokenTTLMin:               15,
+		FailoverConvergenceTimeoutSec: 30,
+		HandoffAckTimeoutSec:          5,
+		PruneIntervalSec:              60,
+		ReconDelayMs:                  2000,
 	}
 }
 
@@ -236,6 +259,24 @@ func (c ClusterConfig) Validate() error {
 	}
 	if c.HeartbeatMS <= 0 {
 		return errors.New("cluster: heartbeat_ms must be > 0")
+	}
+	if c.QuorumLossTimeoutSec < 0 {
+		return errors.New("cluster: quorum_loss_timeout_sec must not be negative")
+	}
+	if c.JoinTokenTTLMin < 0 {
+		return errors.New("cluster: join_token_ttl_min must not be negative")
+	}
+	if c.FailoverConvergenceTimeoutSec < 0 {
+		return errors.New("cluster: failover_convergence_timeout_sec must not be negative")
+	}
+	if c.HandoffAckTimeoutSec < 0 {
+		return errors.New("cluster: handoff_ack_timeout_sec must not be negative")
+	}
+	if c.PruneIntervalSec < 0 {
+		return errors.New("cluster: prune_interval_sec must not be negative")
+	}
+	if c.ReconDelayMs < 0 {
+		return errors.New("cluster: recon_delay_ms must not be negative")
 	}
 	if c.ClusterSecret == "" {
 		slog.Warn("cluster: cluster_secret is empty — running in insecure dev mode")

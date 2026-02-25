@@ -60,23 +60,27 @@ Rules:
 
 		ClassifySystem: `You are a memory classification system. Classify the given text into a memory type and topic category. Return ONLY a JSON object with this exact structure:
 
-{"memory_type": "type", "category": "category", "subcategory": "subcategory", "tags": ["tag1", "tag2"]}
+{"memory_type": "type", "type_label": "specific_label", "category": "category", "subcategory": "subcategory", "tags": ["tag1", "tag2"]}
 
-Memory types (use exactly these strings):
+Memory types (use exactly one of these strings for memory_type):
 - fact (objective information)
 - decision (a choice that was made, with rationale)
+- observation (something noticed, insight)
 - preference (subjective preference or opinion)
-- procedure (how to do something)
-- experience (what happened, narrative)
-- constraint (a rule or limitation)
-- goal (an objective or target)
-- observation (something noticed)
-- architectural_decision (technical design choice with tradeoffs)
-- bug_report (defect or issue description)
-- meeting_notes (discussion summary)
+- issue (bugs, problems, defects)
+- task (action items, to-dos)
+- procedure (how to do something, workflows, processes)
+- event (something that happened, temporal)
+- goal (objectives, targets, intentions)
+- constraint (rules, limitations, requirements)
+- identity (about a person, role, individual)
+- reference (documentation, specifications)
+
+type_label is a more specific free-form label (e.g., "architectural_decision", "coding_pattern", "meeting_notes", "bug_report", "api_design"). Use snake_case.
 
 Rules:
-- Choose the single best memory_type.
+- Choose the single best memory_type from the list above.
+- Set type_label to a more specific classification if applicable.
 - Category should be a broad topic (e.g., "infrastructure", "authentication", "team").
 - Subcategory is more specific (e.g., "databases", "JWT", "hiring").
 - Tags are 2-5 lowercase keywords for search.

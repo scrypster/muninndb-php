@@ -2,6 +2,7 @@ package embed
 
 import (
 	"context"
+	"fmt"
 	"testing"
 )
 
@@ -184,6 +185,82 @@ func TestBatchEmbedder_ContextCancellation(t *testing.T) {
 	_, err := embedder.Embed(ctx, texts)
 	if err != nil && err != context.Canceled {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+type emptyProvider struct {
+	MockProvider
+}
+
+func (e *emptyProvider) EmbedBatch(_ context.Context, _ []string) ([]float32, error) {
+	return nil, nil
+}
+
+func TestBatchEmbedder_ProviderReturnsEmpty(t *testing.T) {
+	mock := &emptyProvider{MockProvider: MockProvider{maxBatchSize: 32}}
+	embedder := NewBatchEmbedder(mock, nil)
+
+	_, err := embedder.Embed(context.Background(), []string{"hello"})
+	if err == nil {
+		t.Fatal("expected error when provider returns empty")
+	}
+}
+
+type errorProvider struct {
+	MockProvider
+}
+
+func (e *errorProvider) EmbedBatch(_ context.Context, _ []string) ([]float32, error) {
+	return nil, fmt.Errorf("provider error")
+}
+
+func TestBatchEmbedder_ProviderError(t *testing.T) {
+	mock := &errorProvider{MockProvider: MockProvider{maxBatchSize: 32}}
+	embedder := NewBatchEmbedder(mock, nil)
+
+	_, err := embedder.Embed(context.Background(), []string{"hello"})
+	if err == nil {
+		t.Fatal("expected error from provider")
+	}
+}
+
+func TestBatchEmbedder_WithRateLimiter(t *testing.T) {
+	mock := &MockProvider{maxBatchSize: 2}
+	limiter := NewTokenBucketLimiter(1000.0, 1000.0)
+	embedder := NewBatchEmbedder(mock, limiter)
+
+	texts := []string{"a", "b", "c", "d"}
+	result, err := embedder.Embed(context.Background(), texts)
+	if err != nil {
+		t.Fatalf("Embed failed: %v", err)
+	}
+
+	expectedCalls := 2
+	if mock.callCount != expectedCalls {
+		t.Errorf("expected %d provider calls, got %d", expectedCalls, mock.callCount)
+	}
+
+	expectedLen := len(texts) * 2
+	if len(result) != expectedLen {
+		t.Errorf("expected %d embeddings, got %d", expectedLen, len(result))
+	}
+}
+
+func TestBatchEmbedder_WithRateLimiter_ContextCancelled(t *testing.T) {
+	mock := &MockProvider{maxBatchSize: 2}
+	limiter := NewTokenBucketLimiter(1.0, 1.0) // 1 token, 1/sec rate
+
+	// Consume the only available token.
+	limiter.Wait(context.Background())
+
+	embedder := NewBatchEmbedder(mock, limiter)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := embedder.Embed(ctx, []string{"a", "b"})
+	if err == nil {
+		t.Fatal("expected error for cancelled context with rate limiter")
 	}
 }
 

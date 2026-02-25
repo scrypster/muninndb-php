@@ -29,7 +29,8 @@ Consumers (AI agents, applications, Claude, Cursor)
 │  • Write path (<10ms ACK guarantee)                 │
 │  • 6-phase ACTIVATE pipeline                        │
 │  • Cognitive workers (async, never block)           │
-│    decay · hebbian · contradiction · confidence     │
+│    temporal · hebbian · contradiction · confidence  │
+│    · transition (PAS)                               │
 │  • Semantic trigger system                          │
 └────────────────────────┬────────────────────────────┘
                          ↓
@@ -49,7 +50,7 @@ Consumers (AI agents, applications, Claude, Cursor)
 └─────────────────────────────────────────────────────┘
 ```
 
-The plugin layer is intentionally optional. MuninnDB without any plugins is a fully functional cognitive database: full-text search, decay, Hebbian association, contradiction detection, Bayesian confidence updates, and graph traversal all work without an embedding model or LLM. The embed plugin is configured via env vars (MUNINN_OLLAMA_URL, MUNINN_OPENAI_KEY, MUNINN_VOYAGE_KEY) and adds vector search. The enrich plugin is configured via MUNINN_ENRICH_URL and adds semantic contradiction detection and LLM-powered enrichment. Neither is required.
+The plugin layer is intentionally optional. MuninnDB without any plugins is a fully functional cognitive database: full-text search, ACT-R temporal scoring, Hebbian association, contradiction detection, Bayesian confidence updates, and graph traversal all work without an embedding model or LLM. The embed plugin is configured via env vars (MUNINN_OLLAMA_URL, MUNINN_OPENAI_KEY, MUNINN_VOYAGE_KEY) and adds vector search. The enrich plugin is configured via MUNINN_ENRICH_URL and adds semantic contradiction detection and LLM-powered enrichment. Neither is required.
 
 ---
 
@@ -60,22 +61,24 @@ The write path has one contract with the client: your write is durable in under 
 **Step 1: Validate and encode**
 The incoming engram is validated (field lengths, state transitions, association limits) and encoded to ERF binary. ERF encoding is fast — fixed-size header and metadata sections, zstd compression only for content fields above 512 bytes.
 
-**Step 2: MOL fsync**
-An entry is written to the Muninn Operation Log and fsynced to disk. This is the durability guarantee. If the process is killed after this point, the write is recoverable from the MOL on restart. Operations are idempotent by ULID — replaying the MOL twice produces the same state as replaying it once.
+**Step 2: Pebble batch commit (fsync)**
+The ERF-encoded engram is committed to Pebble via a batch write with `pebble.Sync` (the default). This fsyncs Pebble's internal WAL to disk, providing the durability guarantee. If the process is killed after this point, the write is recoverable from Pebble's WAL on restart — Pebble replays its WAL automatically during `Open()`.
 
-**Step 3: Pebble batch commit**
-The ERF-encoded engram is committed to Pebble via a batch write. Pebble's group committer collects concurrent writes from multiple goroutines and flushes them together — this is the same technique as group commit in traditional databases, and it has the same effect: throughput scales with concurrency without sacrificing latency.
+> **Note:** An optional `NoSyncEngrams` mode is available that defers fsync to a background `walSyncer` (every 10ms), trading per-write durability for throughput. In this mode, maximum data loss on `kill -9` is bounded to 10ms of writes — equivalent to PostgreSQL's `synchronous_commit=off`.
 
-**Step 4: Client ACK**
-The client receives its acknowledgment. At this point the write is durable. A `kill -9` immediately after the ACK loses nothing.
+**Step 3: Client ACK**
+The client receives its acknowledgment. At this point the write is on disk and survives `kill -9`.
+
+**Step 4: MOL append (async)**
+An entry is appended to the Muninn Operation Log asynchronously. The MOL serves as the replication log — it feeds WAL streaming to replicas and provides an audit trail. The MOL entry contains the operation type and engram ULID (not the full payload), so it is lightweight.
 
 **Step 5: Async index updates**
 The inverted index, adjacency graph, and secondary indexes are updated. These happen off the critical path.
 
 **Step 6: Async cognitive worker notifications**
-The decay worker re-evaluates its scheduling heap. The Hebbian worker is queued. The trigger system evaluates subscriptions. All notifications use non-blocking channel sends — if a worker's input channel is full because it is processing a large batch, the notification is dropped. The worker will process the engram on its next sweep.
+The Hebbian worker is queued. The transition worker records PAS events (if PAS is enabled for the vault). The trigger system evaluates subscriptions. All notifications use non-blocking channel sends — if a worker's input channel is full because it is processing a large batch, the notification is dropped. The worker will process the engram on its next sweep.
 
-This is a deliberate design choice. The write path must not be held hostage to background processing speed. The cognitive workers are eventually consistent. They are not behind on correctness — an engram that hasn't been processed by the decay worker yet simply hasn't had its relevance score recomputed. That is acceptable. A write that takes 50ms because the Hebbian worker was busy is not.
+This is a deliberate design choice. The write path must not be held hostage to background processing speed. The cognitive workers are eventually consistent. A write that takes 50ms because the Hebbian worker was busy is not acceptable. Temporal scoring (ACT-R) is computed at query time from stored access counts and timestamps, so it never needs a background worker and is always up to date.
 
 ---
 
@@ -100,9 +103,11 @@ Three goroutines run concurrently via `errgroup`, each querying a different inde
 
 **HNSW goroutine:** Cosine similarity search in the in-memory vector index. Returns approximate nearest neighbors by embedding. No-op if the embed plugin is not active.
 
-**Decay pool goroutine:** Returns recently-accessed engrams above the relevance floor. This is the temporal signal — it captures context that is cognitively active right now, even if it does not textually or semantically match the current query. An engram you accessed five minutes ago is probably relevant even if the words do not overlap.
+**Temporal pool goroutine:** Returns recently-accessed engrams above the relevance floor. This is the temporal signal — it captures context that is cognitively active right now, even if it does not textually or semantically match the current query. An engram you accessed five minutes ago is probably relevant even if the words do not overlap.
 
-All three results are collected when all three goroutines complete.
+**PAS transition candidates:** If Predictive Activation Signal is enabled for the vault, transition candidates are fetched from the transition cache based on the previous activation's result set. These candidates are injected into the RRF fusion alongside the three retrieval streams, with their own rank constant (K=50).
+
+All results are collected when all goroutines complete.
 
 ### Phase 3: Reciprocal Rank Fusion
 
@@ -119,7 +124,7 @@ An engram that ranks highly in multiple lists scores higher than one that domina
 MuninnDB uses custom k values calibrated to each signal's precision:
 - FTS: k=60 (tightly ranked signal, precision matters)
 - HNSW: k=40 (even tighter — cosine similarity is a strong signal when the embed plugin is active)
-- Decay pool: k=120 (looser signal — temporal relevance is a weaker predictor of query relevance, so top positions are less heavily rewarded)
+- Temporal pool: k=120 (looser signal — temporal relevance is a weaker predictor of query relevance, so top positions are less heavily rewarded)
 
 The result is a single ranked list built from three orthogonal signals: textual, semantic, and temporal.
 
@@ -131,6 +136,12 @@ The activation log — a ring buffer of recent ACTIVATE calls — is consulted. 
 - The scores at which they co-appeared (high-confidence co-activations produce stronger Hebbian signal)
 
 This implements Hebb's Rule at query time: ideas that have fired together recently are more likely to fire together again.
+
+### Phase 4.5: PAS Transition Boost
+
+If Predictive Activation Signal is enabled for the vault, the engine consults the transition cache for candidates predicted by sequential patterns. If activation N returned engram A, and PAS has learned that engram B frequently follows A, engram B is injected as a candidate and receives a transition boost proportional to its transition count relative to the maximum across all targets.
+
+PAS candidates enter the scoring pipeline alongside standard retrieval results. The transition boost is additive in the ACT-R formula: `totalActivation = baseLevel + scale × hebbianBoost + scale × transitionBoost`. This surfaces memories that would not otherwise appear in the result set — candidate expansion, not just re-ranking.
 
 ### Phase 5: BFS Association Traversal
 
@@ -149,7 +160,7 @@ The BFS step discovers engrams that were not in the original retrieval set but a
 ```
 score = (semantic × 0.35)
       + (FTS      × 0.25)
-      + (decay    × 0.20)
+      + (temporal × 0.20)
       + (Hebbian  × 0.10)
       + (access   × 0.05)
       + (recency  × 0.05)
@@ -171,13 +182,7 @@ Four async goroutines run continuously in the background, evolving the database'
 
 The infrastructure is a generic `Worker[T]` type with configurable batch size and max-wait timeout. Each worker drains its input channel in batches, processes the batch, and sleeps until the next input arrives. Telemetry tracks processed count, batch count, error count, and drop count per worker.
 
-### Decay Worker
-
-The decay worker maintains a min-heap ordered by `(next_decay_time, engram_id)`. It sleeps until the next engram is due for a relevance recomputation, wakes, processes the due entries, reschedules them, and sleeps again.
-
-Relevance is computed from timestamps on every wake — `R(t) = max(floor, exp(-t/S))` — never from accumulated floating-point state. This means relevance values are always correct regardless of how long the worker has been running or how many times it has processed a given engram.
-
-O(log n) heap operations. The worker never polls. It never wakes unnecessarily. It wakes exactly when an engram is scheduled to cross a meaningful relevance threshold.
+Temporal scoring (ACT-R) is not a background worker — it is computed at query time from stored access counts and timestamps using the base-level activation equation `B(M) = ln(n+1) - d × ln(ageDays / (n+1))`. This is a total-recall design: no background process mutates stored scores, so activation values are always correct and deterministic.
 
 ### Hebbian Worker
 
@@ -206,6 +211,14 @@ On contradiction detection, the contradiction worker:
 Processes confidence update events from contradiction detection and reinforcement signals. Applies the Bayesian posterior formula with Laplace smoothing (detailed in `cognitive-primitives.md`). Updates the stored confidence in the engram's ERF metadata block — touching only the fixed-offset metadata section, not the full record.
 
 Confidence updates immediately affect activation scoring because confidence is a multiplier applied in Phase 6. There is no lag between a confidence update and its effect on results.
+
+### Transition Worker (PAS)
+
+Processes sequential activation events for the Predictive Activation Signal. After each ACTIVATE call, the engine records which engrams appeared in the current result set alongside the previous result set. The transition worker aggregates these (source → destination) pairs and writes them to the tiered transition cache.
+
+The transition cache uses an in-memory hot tier (`sync.Map`) for O(1) increments, with periodic flush to Pebble for durability. Cold sources are loaded from Pebble on first access via read-through caching. Eviction uses a combined heat score (count × recency) to keep the hot tier bounded.
+
+PAS is configurable per vault via `predictive_activation` (bool) and `pas_max_injections` (0–20). When disabled, no transitions are recorded and no candidates are injected.
 
 ---
 
@@ -261,12 +274,13 @@ MessagePack payload. The correlation ID enables pipelining — a client can send
 
 ### gRPC — Port 8477
 
-Protocol buffers over HTTP/2. Streaming and unary RPCs for all core operations: Write, Read, Activate, Link, Forget, Stat, Subscribe. API key authentication via "authorization" Bearer token or "x-api-key" metadata header. Supports keepalive, automatic reconnection, and multiplexing over a single HTTP/2 connection. Medium latency; excellent for polyglot systems with gRPC tooling available.
+Protocol buffers over HTTP/2. Streaming and unary RPCs for all core operations: Write, BatchWrite, Read, Activate, Link, Forget, Stat, Subscribe. API key authentication via "authorization" Bearer token or "x-api-key" metadata header. Supports keepalive, automatic reconnection, and multiplexing over a single HTTP/2 connection. Medium latency; excellent for polyglot systems with gRPC tooling available.
 
 ### REST — Port 8475
 
 JSON over HTTP. Standard resource-oriented API:
 - `POST /api/engrams` — write
+- `POST /api/engrams/batch` — bulk write (up to 50)
 - `GET /api/engrams/:id` — point read
 - `DELETE /api/engrams/:id` — state transition (not hard delete by default)
 - `POST /api/activate` — activation query
@@ -278,17 +292,19 @@ Slowest of the three — JSON serialization overhead and no pipelining. Most com
 
 JSON-RPC over HTTP. Implements the Model Context Protocol for direct integration with AI agents.
 
-17 tools exposed:
+19 tools exposed:
 
 | Tool | Operation |
 |---|---|
 | `remember` | Write an engram |
+| `remember_batch` | Write up to 50 engrams in a single call |
 | `recall` | Activation query |
 | `read` | Point read by ID |
 | `forget` | Archive or delete |
 | `link` | Create association |
 | `contradictions` | List contradiction pairs |
 | `status` | Vault health and statistics |
+| `guide` | Vault-aware usage instructions for AI onboarding |
 | `evolve` | Update engram content or confidence |
 | `consolidate` | Merge similar engrams |
 | `session` | Session context management |
@@ -300,7 +316,7 @@ JSON-RPC over HTTP. Implements the Model Context Protocol for direct integration
 | `list_deleted` | List soft-deleted engrams |
 | `retry_enrich` | Re-run enrichment on failed engrams |
 
-MCP integration allows Claude, Cursor, and any other MCP-compatible client to use MuninnDB as their persistent memory without custom integration work.
+On first connect, AI agents should call `muninn_guide` to receive vault-aware instructions on how and when to use memory, customized to the vault's behavior mode. MCP integration allows Claude, Cursor, and any other MCP-compatible client to use MuninnDB as their persistent memory without custom integration work.
 
 ### Web UI — Port 8476
 
@@ -330,13 +346,14 @@ Browser-based UI for browsing engrams, visualizing the association graph, and mo
 
 ## 8. The Muninn Operation Log (MOL)
 
-The MOL is MuninnDB's write-ahead log, backed by Pebble. Every write operation is logged and fsynced before the client ACK is sent.
+The MOL is MuninnDB's replication and audit log. Every write operation is appended asynchronously after the Pebble commit. The MOL serves two purposes:
 
-On startup, MuninnDB replays the MOL to rebuild any state that was not flushed to the main KV store before the last shutdown. Operations in the MOL are idempotent by ULID — replaying a write that is already present in the KV store is a no-op, not a duplicate. This makes crash recovery correct regardless of where in a write sequence the process was interrupted.
+1. **Replication** — WAL streaming to replicas reads from the MOL. Each entry carries the operation type, vault ID, and engram ULID.
+2. **Audit trail** — The MOL provides a sequential record of all mutations for debugging and compliance.
 
-The MOL is what makes the `<10ms ACK` guarantee meaningful. Without the MOL fsync, the ACK would mean "I have it in memory." With the MOL fsync, the ACK means "I have it on disk, and I can recover it even if you kill -9 me right now."
+**Crash recovery** is handled by Pebble's internal WAL, not the MOL. Pebble uses an LSM-tree architecture with its own write-ahead log that is replayed automatically on startup. The `walSyncer` (see `internal/storage/wal_syncer.go`) fsyncs Pebble's WAL every 10ms, providing group-commit durability semantics. This is the same trade-off as MySQL's `innodb_flush_log_at_trx_commit=2` or PostgreSQL's `synchronous_commit=off` — maximum data loss on crash is bounded to the sync interval (10ms).
 
-Log entries are compacted once they have been confirmed present in the main KV store. The MOL does not grow unboundedly.
+On startup, MuninnDB scans the MOL to recover the sequence counter for replication continuity. Sealed segments are retained for replica catch-up. The `SafePrune` method garbage-collects sealed segments once all replicas have confirmed receiving them, preventing unbounded log growth.
 
 ---
 
@@ -344,7 +361,7 @@ Log entries are compacted once they have been confirmed present in the main KV s
 
 | Operation | Target | Notes |
 |---|---|---|
-| Write (ACK) | <10ms | ERF encode + MOL fsync + Pebble batch commit |
+| Write (ACK) | <10ms | ERF encode + Pebble batch commit (fsync) + async MOL append |
 | Point read | <2ms | L1 cache hit typical; sync.Map before Pebble |
 | Activation query | <20ms | Full 6-phase pipeline, parallel Phase 2 |
 | FTS only | <5ms | Inverted index + BM25, no graph traversal |

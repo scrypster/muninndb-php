@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/scrypster/muninndb/internal/auth"
 	"github.com/scrypster/muninndb/internal/engine"
 	"github.com/scrypster/muninndb/internal/plugin"
 	"github.com/scrypster/muninndb/internal/storage"
@@ -26,6 +27,9 @@ func NewEngineAdapter(eng *engine.Engine, enricher plugin.EnrichPlugin) EngineIn
 
 func (a *mcpEngineAdapter) Write(ctx context.Context, req *mbp.WriteRequest) (*mbp.WriteResponse, error) {
 	return a.eng.Write(ctx, req)
+}
+func (a *mcpEngineAdapter) WriteBatch(ctx context.Context, reqs []*mbp.WriteRequest) ([]*mbp.WriteResponse, []error) {
+	return a.eng.WriteBatch(ctx, reqs)
 }
 func (a *mcpEngineAdapter) Activate(ctx context.Context, req *mbp.ActivateRequest) (*mbp.ActivateResponse, error) {
 	return a.eng.Activate(ctx, req)
@@ -216,4 +220,9 @@ func (a *mcpEngineAdapter) RetryEnrich(ctx context.Context, vault, id string) (*
 		PluginsQueued: []string{a.enricher.Name()},
 		Note:          "enrichment applied and persisted",
 	}, nil
+}
+
+func (a *mcpEngineAdapter) GetVaultPlasticity(_ context.Context, vault string) (*auth.ResolvedPlasticity, error) {
+	r := a.eng.ResolveVaultPlasticity(vault)
+	return &r, nil
 }

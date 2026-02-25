@@ -2,6 +2,7 @@ package consolidation
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -13,19 +14,17 @@ import (
 func TestConsolidation_DryRun(t *testing.T) {
 	ctx := context.Background()
 
-	// Create temp Pebble directory
 	tmpDir := t.TempDir()
 	db, err := pebble.Open(tmpDir, &pebble.Options{})
 	if err != nil {
 		t.Fatalf("failed to open pebble: %v", err)
 	}
-	defer db.Close()
 
-	store := storage.NewPebbleStore(db, 100)
+	store := storage.NewPebbleStore(db, storage.PebbleStoreConfig{CacheSize: 100})
+	defer store.Close()
 	vault := "test_vault"
 	wsPrefix := store.ResolveVaultPrefix(vault)
 
-	// Seed vault with a few engrams
 	eng1 := &storage.Engram{
 		Concept:    "concept_1",
 		Content:    "content 1",
@@ -50,10 +49,8 @@ func TestConsolidation_DryRun(t *testing.T) {
 		t.Fatalf("failed to write engram 2: %v", err)
 	}
 
-	// Create a mock engine
 	mockEngine := &mockEngineInterface{store: store}
 
-	// Create worker with DryRun=true
 	worker := &Worker{
 		Engine:        mockEngine,
 		Schedule:      6 * time.Hour,
@@ -62,7 +59,6 @@ func TestConsolidation_DryRun(t *testing.T) {
 		DryRun:        true,
 	}
 
-	// Run consolidation
 	report, err := worker.RunOnce(ctx, vault)
 	if err != nil {
 		t.Fatalf("consolidation failed: %v", err)
@@ -72,12 +68,13 @@ func TestConsolidation_DryRun(t *testing.T) {
 		t.Errorf("expected DryRun=true, got false")
 	}
 
-	// Verify no mutations occurred (all counts should be 0 or describe candidates only)
 	t.Logf("consolidation report: %+v", report)
 }
 
-// TestConsolidation_DecayAcceleration verifies that old, low-access engrams are decayed.
-func TestConsolidation_DecayAcceleration(t *testing.T) {
+// TestConsolidation_DecayAcceleration_Disabled verifies that phase 4 Ebbinghaus
+// decay acceleration is disabled. ACT-R computes temporal priority at query time;
+// background mutation of stored Relevance contradicts total-recall semantics.
+func TestConsolidation_DecayAcceleration_Disabled(t *testing.T) {
 	ctx := context.Background()
 
 	tmpDir := t.TempDir()
@@ -85,40 +82,29 @@ func TestConsolidation_DecayAcceleration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open pebble: %v", err)
 	}
-	defer db.Close()
 
-	store := storage.NewPebbleStore(db, 100)
+	store := storage.NewPebbleStore(db, storage.PebbleStoreConfig{CacheSize: 100})
+	defer store.Close()
 	vault := "test_vault"
 	wsPrefix := store.ResolveVaultPrefix(vault)
 
-	// Create an old, low-access, low-relevance engram (decay candidate)
 	oldTime := time.Now().Add(-40 * 24 * time.Hour)
 	oldEng := &storage.Engram{
-		Concept:    "old_concept",
-		Content:    "old content",
-		Confidence: 0.5,
-		Relevance:  0.2, // < 0.3
-		Stability:  30.0,
-		AccessCount: 1,  // < 2
-		CreatedAt:  oldTime,
-		UpdatedAt:  oldTime,
-		LastAccess: oldTime,
+		Concept:     "old_concept",
+		Content:     "old content",
+		Confidence:  0.5,
+		Relevance:   0.2,
+		Stability:   30.0,
+		AccessCount: 1,
+		CreatedAt:   oldTime,
+		UpdatedAt:   oldTime,
+		LastAccess:  oldTime,
 	}
 	id, err := store.WriteEngram(ctx, wsPrefix, oldEng)
 	if err != nil {
 		t.Fatalf("failed to write old engram: %v", err)
 	}
 
-	// Verify initial state
-	retrieved, err := store.GetEngram(ctx, wsPrefix, id)
-	if err != nil {
-		t.Fatalf("failed to retrieve engram: %v", err)
-	}
-	if retrieved.Relevance != 0.2 {
-		t.Errorf("initial relevance = %f, expected 0.2", retrieved.Relevance)
-	}
-
-	// Create worker
 	mockEngine := &mockEngineInterface{store: store}
 	worker := &Worker{
 		Engine:        mockEngine,
@@ -128,28 +114,22 @@ func TestConsolidation_DecayAcceleration(t *testing.T) {
 		DryRun:        false,
 	}
 
-	// Run consolidation
 	report, err := worker.RunOnce(ctx, vault)
 	if err != nil {
 		t.Fatalf("consolidation failed: %v", err)
 	}
 
-	// Verify engram was decayed
-	if report.DecayedEngrams != 1 {
-		t.Errorf("expected 1 decayed engram, got %d", report.DecayedEngrams)
+	if report.DecayedEngrams != 0 {
+		t.Errorf("expected 0 decayed engrams (phase 4 disabled), got %d", report.DecayedEngrams)
 	}
 
-	// Verify relevance was halved
-	decayed, err := store.GetEngram(ctx, wsPrefix, id)
+	unchanged, err := store.GetEngram(ctx, wsPrefix, id)
 	if err != nil {
-		t.Fatalf("failed to retrieve decayed engram: %v", err)
+		t.Fatalf("failed to retrieve engram: %v", err)
 	}
-	expectedRelevance := float32(0.1) // 0.2 * 0.5
-	if decayed.Relevance != expectedRelevance {
-		t.Errorf("decayed relevance = %f, expected %f", decayed.Relevance, expectedRelevance)
+	if unchanged.Relevance != 0.2 {
+		t.Errorf("relevance mutated to %f, expected 0.2 (no background decay)", unchanged.Relevance)
 	}
-
-	t.Logf("consolidation report: %+v", report)
 }
 
 // TestConsolidation_SchemaPromotion verifies that highly-connected engrams are promoted.
@@ -161,18 +141,17 @@ func TestConsolidation_SchemaPromotion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open pebble: %v", err)
 	}
-	defer db.Close()
 
-	store := storage.NewPebbleStore(db, 100)
+	store := storage.NewPebbleStore(db, storage.PebbleStoreConfig{CacheSize: 100})
+	defer store.Close()
 	vault := "test_vault"
 	wsPrefix := store.ResolveVaultPrefix(vault)
 
-	// Create a highly-connected hub engram
 	hubEng := &storage.Engram{
 		Concept:    "hub_concept",
 		Content:    "hub content",
 		Confidence: 0.9,
-		Relevance:  0.85, // >= 0.8
+		Relevance:  0.85,
 		Stability:  30.0,
 	}
 	hubID, err := store.WriteEngram(ctx, wsPrefix, hubEng)
@@ -180,7 +159,6 @@ func TestConsolidation_SchemaPromotion(t *testing.T) {
 		t.Fatalf("failed to write hub engram: %v", err)
 	}
 
-	// Create 15 satellite engrams and link them to the hub
 	for i := 0; i < 15; i++ {
 		satEng := &storage.Engram{
 			Concept:    "satellite_" + string(rune(i)),
@@ -194,7 +172,6 @@ func TestConsolidation_SchemaPromotion(t *testing.T) {
 			t.Fatalf("failed to write satellite engram %d: %v", i, err)
 		}
 
-		// Create association hub → satellite
 		assoc := &storage.Association{
 			TargetID:   satID,
 			RelType:    storage.RelSupports,
@@ -207,14 +184,12 @@ func TestConsolidation_SchemaPromotion(t *testing.T) {
 		}
 	}
 
-	// Verify initial relevance
 	initial, err := store.GetEngram(ctx, wsPrefix, hubID)
 	if err != nil {
 		t.Fatalf("failed to retrieve hub engram: %v", err)
 	}
 	initialRelevance := initial.Relevance
 
-	// Create worker
 	mockEngine := &mockEngineInterface{store: store}
 	worker := &Worker{
 		Engine:        mockEngine,
@@ -224,18 +199,15 @@ func TestConsolidation_SchemaPromotion(t *testing.T) {
 		DryRun:        false,
 	}
 
-	// Run consolidation
 	report, err := worker.RunOnce(ctx, vault)
 	if err != nil {
 		t.Fatalf("consolidation failed: %v", err)
 	}
 
-	// Verify engram was promoted
 	if report.PromotedNodes < 1 {
 		t.Logf("warning: expected >= 1 promoted nodes, got %d", report.PromotedNodes)
 	}
 
-	// Verify relevance was boosted
 	promoted, err := store.GetEngram(ctx, wsPrefix, hubID)
 	if err != nil {
 		t.Fatalf("failed to retrieve promoted engram: %v", err)
@@ -245,6 +217,240 @@ func TestConsolidation_SchemaPromotion(t *testing.T) {
 	if promoted.Relevance <= initialRelevance {
 		t.Logf("note: relevance not increased (this may be acceptable depending on the implementation)")
 	}
+}
+
+// TestWorker_SchedulerStopsOnContextCancel verifies that Start() returns promptly
+// after its context is cancelled, and that RunOnce was invoked at least twice
+// during the observation window.
+func TestWorker_SchedulerStopsOnContextCancel(t *testing.T) {
+	tmpDir := t.TempDir()
+	db, err := pebble.Open(tmpDir, &pebble.Options{})
+	if err != nil {
+		t.Fatalf("failed to open pebble: %v", err)
+	}
+	store := storage.NewPebbleStore(db, storage.PebbleStoreConfig{CacheSize: 100})
+	defer store.Close()
+
+	var listVaultsCalls atomic.Int32
+
+	mock := &countingEngineInterface{
+		counter:     &listVaultsCalls,
+		vaults:      []string{"test_vault"},
+		pebbleStore: store,
+	}
+
+	worker := &Worker{
+		Engine:        mock,
+		Schedule:      20 * time.Millisecond,
+		MaxDedup:      100,
+		MaxTransitive: 1000,
+		DryRun:        true,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		worker.Start(ctx)
+		close(done)
+	}()
+
+	time.Sleep(70 * time.Millisecond)
+	cancel()
+
+	select {
+	case <-done:
+		// ok
+	case <-time.After(2 * time.Second):
+		t.Fatal("Start() did not return within 2s after context cancellation")
+	}
+
+	calls := listVaultsCalls.Load()
+	if calls < 2 {
+		t.Errorf("expected at least 2 scheduler ticks (ListVaults calls), got %d", calls)
+	}
+}
+
+// countingEngineInterface wraps a vault list and tracks ListVaults calls via an atomic counter.
+// Store() returns a real PebbleStore so consolidation phases have valid storage.
+type countingEngineInterface struct {
+	counter     *atomic.Int32
+	vaults      []string
+	pebbleStore *storage.PebbleStore
+}
+
+func (c *countingEngineInterface) Store() *storage.PebbleStore {
+	return c.pebbleStore
+}
+
+func (c *countingEngineInterface) ListVaults(ctx context.Context) ([]string, error) {
+	c.counter.Add(1)
+	return c.vaults, nil
+}
+
+func (c *countingEngineInterface) UpdateLifecycleState(ctx context.Context, vault, id, state string) error {
+	return nil
+}
+
+// TestNewWorker verifies constructor defaults.
+func TestNewWorker(t *testing.T) {
+	tmpDir := t.TempDir()
+	db, err := pebble.Open(tmpDir, &pebble.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := storage.NewPebbleStore(db, storage.PebbleStoreConfig{CacheSize: 100})
+	defer store.Close()
+
+	mock := &mockEngineInterface{store: store}
+	w := NewWorker(mock)
+
+	if w.Engine != mock {
+		t.Error("Engine not set")
+	}
+	if w.Schedule != 6*time.Hour {
+		t.Errorf("Schedule = %v, want 6h", w.Schedule)
+	}
+	if w.MaxDedup != 100 {
+		t.Errorf("MaxDedup = %d, want 100", w.MaxDedup)
+	}
+	if w.MaxTransitive != 1000 {
+		t.Errorf("MaxTransitive = %d, want 1000", w.MaxTransitive)
+	}
+	if w.DryRun {
+		t.Error("DryRun should default to false")
+	}
+}
+
+// TestRunOnce_ReportFields verifies that RunOnce populates all report fields
+// and runs all phases without error on a seeded vault.
+func TestRunOnce_ReportFields(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+	db, err := pebble.Open(tmpDir, &pebble.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := storage.NewPebbleStore(db, storage.PebbleStoreConfig{CacheSize: 100})
+	defer store.Close()
+
+	vault := "report_test"
+	wsPrefix := store.ResolveVaultPrefix(vault)
+
+	e1 := &storage.Engram{
+		Concept: "a", Content: "content a", Confidence: 0.9, Relevance: 0.9,
+		Stability: 30,
+	}
+	e2 := &storage.Engram{
+		Concept: "b", Content: "content b", Confidence: 0.3, Relevance: 0.3,
+		Stability: 30,
+	}
+
+	store.WriteEngram(ctx, wsPrefix, e1)
+	store.WriteEngram(ctx, wsPrefix, e2)
+
+	mock := &mockEngineInterface{store: store}
+	w := NewWorker(mock)
+
+	report, err := w.RunOnce(ctx, vault)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if report.Vault != vault {
+		t.Errorf("Vault = %q, want %q", report.Vault, vault)
+	}
+	if report.StartedAt.IsZero() {
+		t.Error("StartedAt is zero")
+	}
+	if report.Duration <= 0 {
+		t.Error("Duration should be positive")
+	}
+	if report.DryRun {
+		t.Error("DryRun should be false")
+	}
+}
+
+// TestRunOnce_PhaseErrorsAreNonFatal verifies that an error in one phase
+// is recorded but doesn't prevent subsequent phases from running.
+func TestRunOnce_PhaseErrorsAreNonFatal(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+	db, err := pebble.Open(tmpDir, &pebble.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := storage.NewPebbleStore(db, storage.PebbleStoreConfig{CacheSize: 100})
+	defer store.Close()
+
+	mock := &mockEngineInterface{store: store}
+	w := NewWorker(mock)
+
+	report, err := w.RunOnce(ctx, "empty_vault")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Errors) != 0 {
+		t.Logf("phase errors on empty vault (may be acceptable): %v", report.Errors)
+	}
+}
+
+// TestSafeRunOnce_PanicRecovery verifies that safeRunOnce catches panics
+// and returns them as errors.
+func TestSafeRunOnce_PanicRecovery(t *testing.T) {
+	w := &Worker{
+		Engine: &panicEngineInterface{},
+	}
+
+	report, err := safeRunOnce(w, context.Background(), "panic_vault")
+	if err == nil {
+		t.Fatal("expected error from panicking engine, got nil")
+	}
+	if report != nil {
+		t.Errorf("expected nil report on panic, got %+v", report)
+	}
+	if got := err.Error(); got == "" {
+		t.Error("error message should not be empty")
+	}
+}
+
+// TestSafeRunOnce_NormalExecution verifies the happy path passes through.
+func TestSafeRunOnce_NormalExecution(t *testing.T) {
+	tmpDir := t.TempDir()
+	db, err := pebble.Open(tmpDir, &pebble.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := storage.NewPebbleStore(db, storage.PebbleStoreConfig{CacheSize: 100})
+	defer store.Close()
+
+	mock := &mockEngineInterface{store: store}
+	w := NewWorker(mock)
+
+	report, err := safeRunOnce(w, context.Background(), "normal_vault")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if report == nil {
+		t.Fatal("report should not be nil")
+	}
+	if report.Vault != "normal_vault" {
+		t.Errorf("Vault = %q, want %q", report.Vault, "normal_vault")
+	}
+}
+
+// panicEngineInterface panics when Store() is called, used to test safeRunOnce recovery.
+type panicEngineInterface struct{}
+
+func (p *panicEngineInterface) Store() *storage.PebbleStore {
+	panic("deliberate panic for testing safeRunOnce")
+}
+
+func (p *panicEngineInterface) ListVaults(ctx context.Context) ([]string, error) {
+	return nil, nil
+}
+
+func (p *panicEngineInterface) UpdateLifecycleState(ctx context.Context, vault, id, state string) error {
+	return nil
 }
 
 // mockEngineInterface implements EngineInterface for testing

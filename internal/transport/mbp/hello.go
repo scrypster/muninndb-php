@@ -96,4 +96,3 @@ func BuildErrorPayloadWithRetry(code ErrorCode, message string, retryAfter int) 
 		RetryAfter: retryAfter,
 	}
 }
-
