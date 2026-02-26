@@ -1,4 +1,4 @@
-name: Publish Python SDK to PyPI
+name: Publish SDKs
 
 # Triggers on version tag push OR manually from the Actions tab.
 # NOTE: We use push→tags instead of release→published because GitHub's
@@ -15,12 +15,11 @@ on:
         default: "false"
 
 jobs:
-  publish:
+  # ── Python SDK → PyPI ────────────────────────────────────────────────────
+  publish-python:
     name: Build & publish muninn-python + muninndb
     runs-on: ubuntu-latest
 
-    # Required for PyPI trusted publisher (OIDC) — no API key needed.
-    # Set up the trusted publisher at: https://pypi.org/manage/account/publishing/
     permissions:
       id-token: write
       contents: read
@@ -77,3 +76,27 @@ jobs:
       - name: Dry run — skip upload
         if: github.event.inputs.dry_run == 'true'
         run: echo "Dry run complete. Packages built but not uploaded."
+
+  # ── PHP SDK → Packagist (via subtree split to muninndb-php repo) ─────────
+  publish-php:
+    name: Sync PHP SDK to muninndb-php
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Split and push sdk/php to muninndb-php
+        env:
+          SDK_DEPLOY_KEY: ${{ secrets.PHP_SDK_DEPLOY_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "${SDK_DEPLOY_KEY}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no"
+
+          SPLIT_SHA=$(git subtree split --prefix=sdk/php)
+          git remote add php-sdk git@github.com:scrypster/muninndb-php.git || true
+          git push php-sdk "${SPLIT_SHA}:refs/heads/main" --force
+          git push php-sdk "${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}" --force
