@@ -148,3 +148,199 @@ class Push:
     push_number: int
     engram_id: str | None = None
     at: int | None = None
+
+
+@dataclass
+class EvolveResponse:
+    """Response from evolving an engram."""
+
+    id: str
+
+
+@dataclass
+class ConsolidateResponse:
+    """Response from consolidating engrams."""
+
+    id: str
+    archived: list[str]
+    warnings: list[str] | None = None
+
+
+@dataclass
+class DecideResponse:
+    """Response from recording a decision."""
+
+    id: str
+
+
+@dataclass
+class RestoreResponse:
+    """Response from restoring a deleted engram."""
+
+    id: str
+    concept: str
+    restored: bool
+    state: str
+
+
+@dataclass
+class TraversalNode:
+    """A node in a graph traversal result."""
+
+    id: str
+    concept: str
+    hop_dist: int
+    summary: str | None = None
+
+
+@dataclass
+class TraversalEdge:
+    """An edge in a graph traversal result."""
+
+    from_id: str
+    to_id: str
+    rel_type: str
+    weight: float
+
+
+@dataclass
+class TraverseResponse:
+    """Response from graph traversal."""
+
+    nodes: list[TraversalNode]
+    edges: list[TraversalEdge]
+    total_reachable: int
+    query_ms: float
+
+
+@dataclass
+class ExplainComponents:
+    """Scoring components for an explain result."""
+
+    full_text_relevance: float
+    semantic_similarity: float
+    decay_factor: float
+    hebbian_boost: float
+    access_frequency: float
+    confidence: float
+
+
+@dataclass
+class ExplainResponse:
+    """Response from explaining an engram's score."""
+
+    engram_id: str
+    concept: str
+    final_score: float
+    components: ExplainComponents
+    fts_matches: list[str]
+    assoc_path: list[str]
+    would_return: bool
+    threshold: float
+
+
+@dataclass
+class SetStateResponse:
+    """Response from setting engram state."""
+
+    id: str
+    state: str
+    updated: bool
+
+
+@dataclass
+class DeletedEngram:
+    """A deleted engram in the trash."""
+
+    id: str
+    concept: str
+    deleted_at: int
+    recoverable_until: int
+    tags: list[str] | None = None
+
+
+@dataclass
+class ListDeletedResponse:
+    """Response from listing deleted engrams."""
+
+    deleted: list[DeletedEngram]
+    count: int
+
+
+@dataclass
+class RetryEnrichResponse:
+    """Response from retrying enrichment."""
+
+    engram_id: str
+    plugins_queued: list[str]
+    already_complete: list[str]
+    note: str | None = None
+
+
+@dataclass
+class ContradictionItem:
+    """A detected contradiction between two engrams."""
+
+    id_a: str
+    concept_a: str
+    id_b: str
+    concept_b: str
+    detected_at: int
+
+
+@dataclass
+class ContradictionsResponse:
+    """Response from listing contradictions."""
+
+    contradictions: list[ContradictionItem]
+
+
+@dataclass
+class EngramItem:
+    """An engram summary in a list response."""
+
+    id: str
+    concept: str
+    content: str
+    confidence: float
+    tags: list[str] | None = None
+    vault: str = ""
+    created_at: int = 0
+
+
+@dataclass
+class ListEngramsResponse:
+    """Response from listing engrams."""
+
+    engrams: list[EngramItem]
+    total: int
+    limit: int
+    offset: int
+
+
+@dataclass
+class AssociationItem:
+    """An association/link from an engram."""
+
+    target_id: str
+    rel_type: int
+    weight: float
+
+
+@dataclass
+class SessionEntry:
+    """An entry in session activity."""
+
+    id: str
+    concept: str
+    created_at: int
+
+
+@dataclass
+class SessionResponse:
+    """Response from session activity query."""
+
+    entries: list[SessionEntry]
+    total: int
+    offset: int
+    limit: int

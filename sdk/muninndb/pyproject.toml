@@ -26,12 +26,12 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
-    "muninn-python==0.1.0",
+    "muninn-python>=0.2.0",
 ]
 
 [project.optional-dependencies]
 langchain = [
-    "muninn-python[langchain]==0.1.0",
+    "muninn-python[langchain]>=0.2.0",
 ]
 
 [project.urls]

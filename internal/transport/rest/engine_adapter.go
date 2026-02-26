@@ -2,6 +2,7 @@ package rest
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/scrypster/muninndb/internal/engine/trigger"
 	"github.com/scrypster/muninndb/internal/engine/vaultjob"
 	hnswpkg "github.com/scrypster/muninndb/internal/index/hnsw"
+	"github.com/scrypster/muninndb/internal/plugin"
 	"github.com/scrypster/muninndb/internal/storage"
 	mbp "github.com/scrypster/muninndb/internal/transport/mbp"
 )
@@ -17,13 +19,19 @@ import (
 // RESTEngineWrapper wraps the Engine to adapt it for the REST interface.
 // All methods accept a context and pass it through to the engine.
 type RESTEngineWrapper struct {
-	engine  *engine.Engine
-	hnswReg *hnswpkg.Registry
+	engine   *engine.Engine
+	hnswReg  *hnswpkg.Registry
+	enricher plugin.EnrichPlugin
 }
 
 // NewEngineWrapper returns an EngineAPI backed by eng with optional HNSW stat injection.
 func NewEngineWrapper(eng *engine.Engine, hnswReg *hnswpkg.Registry) EngineAPI {
 	return &RESTEngineWrapper{engine: eng, hnswReg: hnswReg}
+}
+
+// SetEnricher configures the enrichment plugin used by RetryEnrich.
+func (w *RESTEngineWrapper) SetEnricher(ep plugin.EnrichPlugin) {
+	w.enricher = ep
 }
 
 func (w *RESTEngineWrapper) Hello(ctx context.Context, req *HelloRequest) (*HelloResponse, error) {
@@ -260,4 +268,220 @@ func (w *RESTEngineWrapper) ReindexFTSVault(ctx context.Context, vaultName strin
 
 func (w *RESTEngineWrapper) Checkpoint(destDir string) error {
 	return w.engine.Checkpoint(destDir)
+}
+
+// lifecycleStateLabel returns a human-readable label for a storage.LifecycleState.
+func lifecycleStateLabel(s storage.LifecycleState) string {
+	switch s {
+	case storage.StatePlanning:
+		return "planning"
+	case storage.StateActive:
+		return "active"
+	case storage.StatePaused:
+		return "paused"
+	case storage.StateBlocked:
+		return "blocked"
+	case storage.StateCompleted:
+		return "completed"
+	case storage.StateCancelled:
+		return "cancelled"
+	case storage.StateArchived:
+		return "archived"
+	case storage.StateSoftDeleted:
+		return "soft_deleted"
+	default:
+		return fmt.Sprintf("unknown(%d)", s)
+	}
+}
+
+func (w *RESTEngineWrapper) Evolve(ctx context.Context, vault, engramID, newContent, reason string) (*EvolveResponse, error) {
+	newID, err := w.engine.Evolve(ctx, vault, engramID, newContent, reason)
+	if err != nil {
+		return nil, err
+	}
+	return &EvolveResponse{ID: newID.String()}, nil
+}
+
+func (w *RESTEngineWrapper) Consolidate(ctx context.Context, vault string, ids []string, mergedContent string) (*ConsolidateResponse, error) {
+	newID, archived, warnings, err := w.engine.Consolidate(ctx, vault, ids, mergedContent)
+	if err != nil {
+		return nil, err
+	}
+	return &ConsolidateResponse{
+		ID:       newID.String(),
+		Archived: archived,
+		Warnings: warnings,
+	}, nil
+}
+
+func (w *RESTEngineWrapper) Decide(ctx context.Context, vault, decision, rationale string, alternatives, evidenceIDs []string) (*DecideResponse, error) {
+	newID, err := w.engine.Decide(ctx, vault, decision, rationale, alternatives, evidenceIDs)
+	if err != nil {
+		return nil, err
+	}
+	return &DecideResponse{ID: newID.String()}, nil
+}
+
+func (w *RESTEngineWrapper) Restore(ctx context.Context, vault, engramID string) (*RestoreResponse, error) {
+	eng, err := w.engine.Restore(ctx, vault, engramID)
+	if err != nil {
+		return nil, err
+	}
+	return &RestoreResponse{
+		ID:       eng.ID.String(),
+		Concept:  eng.Concept,
+		Restored: true,
+		State:    lifecycleStateLabel(eng.State),
+	}, nil
+}
+
+func (w *RESTEngineWrapper) Traverse(ctx context.Context, vault string, req *TraverseRequest) (*TraverseResponse, error) {
+	start := time.Now()
+	nodes, edges, err := w.engine.Traverse(ctx, vault, req.StartID, req.MaxHops, req.MaxNodes)
+	if err != nil {
+		return nil, err
+	}
+	elapsed := time.Since(start)
+
+	restNodes := make([]TraversalNode, len(nodes))
+	for i, n := range nodes {
+		restNodes[i] = TraversalNode{
+			ID:      n.ID.String(),
+			Concept: n.Concept,
+			HopDist: n.HopDist,
+			Summary: n.Summary,
+		}
+	}
+	restEdges := make([]TraversalEdge, len(edges))
+	for i, e := range edges {
+		restEdges[i] = TraversalEdge{
+			FromID: e.From.String(),
+			ToID:   e.To.String(),
+			Weight: e.Weight,
+		}
+	}
+	return &TraverseResponse{
+		Nodes:          restNodes,
+		Edges:          restEdges,
+		TotalReachable: len(nodes),
+		QueryMs:        float64(elapsed.Microseconds()) / 1000.0,
+	}, nil
+}
+
+func (w *RESTEngineWrapper) Explain(ctx context.Context, vault string, req *ExplainRequest) (*ExplainResponse, error) {
+	data, err := w.engine.Explain(ctx, vault, req.EngramID, req.Query)
+	if err != nil {
+		return nil, err
+	}
+	return &ExplainResponse{
+		EngramID:    data.EngramID,
+		Concept:     data.Concept,
+		FinalScore:  data.FinalScore,
+		WouldReturn: data.WouldReturn,
+		Threshold:   data.Threshold,
+	}, nil
+}
+
+func (w *RESTEngineWrapper) UpdateState(ctx context.Context, vault, engramID, state, _ string) error {
+	return w.engine.UpdateLifecycleState(ctx, vault, engramID, state)
+}
+
+func (w *RESTEngineWrapper) ListDeleted(ctx context.Context, vault string, limit int) (*ListDeletedResponse, error) {
+	engrams, err := w.engine.ListDeleted(ctx, vault, limit)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]DeletedEngramItem, len(engrams))
+	for i, eng := range engrams {
+		deletedAt := eng.UpdatedAt
+		items[i] = DeletedEngramItem{
+			ID:               eng.ID.String(),
+			Concept:          eng.Concept,
+			DeletedAt:        deletedAt.Unix(),
+			RecoverableUntil: deletedAt.Add(7 * 24 * time.Hour).Unix(),
+			Tags:             eng.Tags,
+		}
+	}
+	return &ListDeletedResponse{
+		Deleted: items,
+		Count:   len(items),
+	}, nil
+}
+
+func (w *RESTEngineWrapper) RetryEnrich(ctx context.Context, vault, engramID string) (*RetryEnrichResponse, error) {
+	if w.enricher == nil {
+		return nil, fmt.Errorf("no enrichment plugin configured")
+	}
+	ulid, err := storage.ParseULID(engramID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid engram id: %w", err)
+	}
+	ws := w.engine.Store().ResolveVaultPrefix(vault)
+	eng, err := w.engine.Store().GetEngram(ctx, ws, ulid)
+	if err != nil {
+		return nil, fmt.Errorf("get engram: %w", err)
+	}
+	_, enrichErr := w.enricher.Enrich(ctx, eng)
+	if enrichErr != nil {
+		return nil, fmt.Errorf("enrich: %w", enrichErr)
+	}
+	if _, err := w.engine.Store().WriteEngram(ctx, ws, eng); err != nil {
+		return nil, fmt.Errorf("persist enriched engram: %w", err)
+	}
+	return &RetryEnrichResponse{
+		EngramID:      engramID,
+		PluginsQueued: []string{w.enricher.Name()},
+	}, nil
+}
+
+func (w *RESTEngineWrapper) GetContradictions(ctx context.Context, vault string) (*ContradictionsResponse, error) {
+	pairs, err := w.engine.GetContradictions(ctx, vault)
+	if err != nil {
+		return nil, err
+	}
+	ws := w.engine.Store().ResolveVaultPrefix(vault)
+	items := make([]ContradictionItem, 0, len(pairs))
+	for _, pair := range pairs {
+		engA, errA := w.engine.Store().GetEngram(ctx, ws, pair[0])
+		engB, errB := w.engine.Store().GetEngram(ctx, ws, pair[1])
+		item := ContradictionItem{
+			IDa: pair[0].String(),
+			IDb: pair[1].String(),
+		}
+		if errA == nil && engA != nil {
+			item.ConceptA = engA.Concept
+		}
+		if errB == nil && engB != nil {
+			item.ConceptB = engB.Concept
+		}
+		items = append(items, item)
+	}
+	return &ContradictionsResponse{Contradictions: items}, nil
+}
+
+func (w *RESTEngineWrapper) GetGuide(ctx context.Context, vault string) (string, error) {
+	statResp, err := w.engine.Stat(ctx, &mbp.StatRequest{Vault: vault})
+	if err != nil {
+		return "", err
+	}
+	guide := fmt.Sprintf(`MuninnDB Guide for vault %q
+
+This vault has %d memories stored.
+
+Available operations:
+- write: Store new memories (engrams) with concept and content
+- activate/recall: Semantic search across stored memories
+- evolve: Update an existing memory with new content
+- consolidate: Merge multiple related memories into one
+- decide: Record a decision with rationale and evidence
+- link: Create associations between memories
+- traverse: Walk the memory graph from a starting node
+- explain: Get scoring details for a specific memory vs query
+- forget: Soft-delete a memory (recoverable for 7 days)
+- restore: Recover a soft-deleted memory
+- set-state: Change lifecycle state (planning, active, paused, blocked, completed, cancelled, archived)
+- list-deleted: View soft-deleted memories pending permanent removal
+- contradictions: View detected contradictions between memories
+`, vault, statResp.EngramCount)
+	return guide, nil
 }

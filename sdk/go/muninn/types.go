@@ -162,3 +162,164 @@ type ErrorResponse struct {
 	Code    int    `json:"code,omitempty"`
 	Message string `json:"message,omitempty"`
 }
+
+// EvolveResponse represents a response from evolving an engram.
+type EvolveResponse struct {
+	ID string `json:"id"`
+}
+
+// ConsolidateResponse represents a response from consolidating engrams.
+type ConsolidateResponse struct {
+	ID       string   `json:"id"`
+	Archived []string `json:"archived"`
+	Warnings []string `json:"warnings,omitempty"`
+}
+
+// DecideResponse represents a response from recording a decision.
+type DecideResponse struct {
+	ID string `json:"id"`
+}
+
+// RestoreResponse represents a response from restoring a deleted engram.
+type RestoreResponse struct {
+	ID       string `json:"id"`
+	Concept  string `json:"concept"`
+	Restored bool   `json:"restored"`
+	State    string `json:"state"`
+}
+
+// TraversalNode is a node in a graph traversal result.
+type TraversalNode struct {
+	ID      string `json:"id"`
+	Concept string `json:"concept"`
+	HopDist int    `json:"hop_dist"`
+	Summary string `json:"summary,omitempty"`
+}
+
+// TraversalEdge is an edge in a graph traversal result.
+type TraversalEdge struct {
+	FromID  string  `json:"from_id"`
+	ToID    string  `json:"to_id"`
+	RelType string  `json:"rel_type"`
+	Weight  float32 `json:"weight"`
+}
+
+// TraverseResponse represents a response from graph traversal.
+type TraverseResponse struct {
+	Nodes          []TraversalNode `json:"nodes"`
+	Edges          []TraversalEdge `json:"edges"`
+	TotalReachable int             `json:"total_reachable"`
+	QueryMs        float64         `json:"query_ms"`
+}
+
+// ExplainComponents holds the scoring breakdown for an explain result.
+type ExplainComponents struct {
+	FullTextRelevance  float64 `json:"full_text_relevance"`
+	SemanticSimilarity float64 `json:"semantic_similarity"`
+	DecayFactor        float64 `json:"decay_factor"`
+	HebbianBoost       float64 `json:"hebbian_boost"`
+	AccessFrequency    float64 `json:"access_frequency"`
+	Confidence         float64 `json:"confidence"`
+}
+
+// ExplainResponse represents a response from explaining an engram's score.
+type ExplainResponse struct {
+	EngramID   string            `json:"engram_id"`
+	Concept    string            `json:"concept"`
+	FinalScore float64           `json:"final_score"`
+	Components ExplainComponents `json:"components"`
+	FTSMatches []string          `json:"fts_matches"`
+	AssocPath  []string          `json:"assoc_path"`
+	WouldReturn bool             `json:"would_return"`
+	Threshold  float64           `json:"threshold"`
+}
+
+// SetStateResponse represents a response from setting engram state.
+type SetStateResponse struct {
+	ID      string `json:"id"`
+	State   string `json:"state"`
+	Updated bool   `json:"updated"`
+}
+
+// DeletedEngram represents a soft-deleted engram.
+type DeletedEngram struct {
+	ID               string   `json:"id"`
+	Concept          string   `json:"concept"`
+	DeletedAt        int64    `json:"deleted_at"`
+	RecoverableUntil int64    `json:"recoverable_until"`
+	Tags             []string `json:"tags,omitempty"`
+}
+
+// ListDeletedResponse represents a response from listing deleted engrams.
+type ListDeletedResponse struct {
+	Deleted []DeletedEngram `json:"deleted"`
+	Count   int             `json:"count"`
+}
+
+// RetryEnrichResponse represents a response from retrying enrichment.
+type RetryEnrichResponse struct {
+	EngramID        string   `json:"engram_id"`
+	PluginsQueued   []string `json:"plugins_queued"`
+	AlreadyComplete []string `json:"already_complete"`
+	Note            string   `json:"note,omitempty"`
+}
+
+// ContradictionItem represents a detected contradiction between two engrams.
+type ContradictionItem struct {
+	IDa        string `json:"id_a"`
+	ConceptA   string `json:"concept_a"`
+	IDb        string `json:"id_b"`
+	ConceptB   string `json:"concept_b"`
+	DetectedAt int64  `json:"detected_at"`
+}
+
+// ContradictionsResponse represents a response from listing contradictions.
+type ContradictionsResponse struct {
+	Contradictions []ContradictionItem `json:"contradictions"`
+}
+
+// GuideResponse represents a response from the guide endpoint.
+type GuideResponse struct {
+	Guide string `json:"guide"`
+}
+
+// EngramItem represents an engram summary in a list response.
+type EngramItem struct {
+	ID         string   `json:"id"`
+	Concept    string   `json:"concept"`
+	Content    string   `json:"content"`
+	Confidence float32  `json:"confidence"`
+	Tags       []string `json:"tags,omitempty"`
+	Vault      string   `json:"vault"`
+	CreatedAt  int64    `json:"createdAt"`
+}
+
+// ListEngramsResponse represents a response from listing engrams.
+type ListEngramsResponse struct {
+	Engrams []EngramItem `json:"engrams"`
+	Total   int          `json:"total"`
+	Limit   int          `json:"limit"`
+	Offset  int          `json:"offset"`
+}
+
+// AssociationItem represents an association/link from an engram.
+type AssociationItem struct {
+	TargetID string  `json:"targetId"`
+	RelType  uint16  `json:"relType"`
+	Weight   float32 `json:"weight"`
+}
+
+// SessionEntry represents an entry in session activity.
+type SessionEntry struct {
+	ID        string `json:"id"`
+	Concept   string `json:"concept"`
+	CreatedAt int64  `json:"createdAt"`
+}
+
+// SessionResponse represents a response from session activity query.
+type SessionResponse struct {
+	Entries []SessionEntry `json:"entries"`
+	Total   int            `json:"total"`
+	Offset  int            `json:"offset"`
+	Limit   int            `json:"limit"`
+}

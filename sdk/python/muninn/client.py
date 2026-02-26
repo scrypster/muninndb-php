@@ -19,12 +19,32 @@ from .sse import SSEStream
 from .types import (
     ActivateResponse,
     ActivationItem,
+    AssociationItem,
     BatchWriteResponse,
     BatchWriteResult,
     BriefSentence,
     CoherenceResult,
+    ConsolidateResponse,
+    ContradictionItem,
+    ContradictionsResponse,
+    DecideResponse,
+    DeletedEngram,
+    EngramItem,
+    EvolveResponse,
+    ExplainComponents,
+    ExplainResponse,
+    ListDeletedResponse,
+    ListEngramsResponse,
     ReadResponse,
+    RestoreResponse,
+    RetryEnrichResponse,
+    SessionEntry,
+    SessionResponse,
+    SetStateResponse,
     StatResponse,
+    TraversalEdge,
+    TraversalNode,
+    TraverseResponse,
     WriteResponse,
 )
 
@@ -447,6 +467,422 @@ class MuninnClient:
             params["threshold"] = str(threshold)
 
         return SSEStream(self, "/api/subscribe", params)
+
+    async def evolve(
+        self,
+        id: str,
+        new_content: str,
+        reason: str,
+        vault: str = "default",
+    ) -> EvolveResponse:
+        """Evolve an engram's content, creating a new version.
+
+        Args:
+            id: Engram ULID to evolve
+            new_content: Updated content
+            reason: Reason for the evolution
+            vault: Vault name (default: "default")
+
+        Returns:
+            EvolveResponse with the new engram ID
+        """
+        body = {"new_content": new_content, "reason": reason, "vault": vault}
+        response = await self._request("POST", f"/api/engrams/{id}/evolve", json=body)
+        return EvolveResponse(id=response.get("id", ""))
+
+    async def consolidate(
+        self,
+        ids: list[str],
+        merged_content: str,
+        vault: str = "default",
+    ) -> ConsolidateResponse:
+        """Consolidate multiple engrams into one.
+
+        Args:
+            ids: List of engram ULIDs to consolidate
+            merged_content: Combined content for the merged engram
+            vault: Vault name (default: "default")
+
+        Returns:
+            ConsolidateResponse with new ID, archived IDs, and any warnings
+        """
+        body = {"vault": vault, "ids": ids, "merged_content": merged_content}
+        response = await self._request("POST", "/api/consolidate", json=body)
+        return ConsolidateResponse(
+            id=response.get("id", ""),
+            archived=response.get("archived", []),
+            warnings=response.get("warnings"),
+        )
+
+    async def decide(
+        self,
+        decision: str,
+        rationale: str,
+        alternatives: list[str] | None = None,
+        evidence_ids: list[str] | None = None,
+        vault: str = "default",
+    ) -> DecideResponse:
+        """Record a decision as an engram.
+
+        Args:
+            decision: The decision made
+            rationale: Reasoning behind the decision
+            alternatives: Alternative options considered
+            evidence_ids: Engram IDs that informed the decision
+            vault: Vault name (default: "default")
+
+        Returns:
+            DecideResponse with the decision engram ID
+        """
+        body: dict = {"vault": vault, "decision": decision, "rationale": rationale}
+        if alternatives:
+            body["alternatives"] = alternatives
+        if evidence_ids:
+            body["evidence_ids"] = evidence_ids
+        response = await self._request("POST", "/api/decide", json=body)
+        return DecideResponse(id=response.get("id", ""))
+
+    async def restore(self, id: str, vault: str = "default") -> RestoreResponse:
+        """Restore a soft-deleted engram.
+
+        Args:
+            id: Engram ULID to restore
+            vault: Vault name (default: "default")
+
+        Returns:
+            RestoreResponse with restored engram details
+        """
+        response = await self._request(
+            "POST", f"/api/engrams/{id}/restore", params={"vault": vault}
+        )
+        return RestoreResponse(
+            id=response.get("id", ""),
+            concept=response.get("concept", ""),
+            restored=response.get("restored", False),
+            state=response.get("state", ""),
+        )
+
+    async def traverse(
+        self,
+        start_id: str,
+        max_hops: int = 2,
+        max_nodes: int = 20,
+        rel_types: list[str] | None = None,
+        vault: str = "default",
+    ) -> TraverseResponse:
+        """Traverse the association graph from a starting engram.
+
+        Args:
+            start_id: Starting engram ULID
+            max_hops: Maximum hops to traverse (default: 2)
+            max_nodes: Maximum nodes to return (default: 20)
+            rel_types: Filter by relationship types
+            vault: Vault name (default: "default")
+
+        Returns:
+            TraverseResponse with nodes, edges, and stats
+        """
+        body: dict = {
+            "vault": vault,
+            "start_id": start_id,
+            "max_hops": max_hops,
+            "max_nodes": max_nodes,
+        }
+        if rel_types:
+            body["rel_types"] = rel_types
+        response = await self._request("POST", "/api/traverse", json=body)
+        nodes = [
+            TraversalNode(
+                id=n.get("id", ""),
+                concept=n.get("concept", ""),
+                hop_dist=n.get("hop_dist", 0),
+                summary=n.get("summary"),
+            )
+            for n in response.get("nodes", [])
+        ]
+        edges = [
+            TraversalEdge(
+                from_id=e.get("from_id", ""),
+                to_id=e.get("to_id", ""),
+                rel_type=e.get("rel_type", ""),
+                weight=e.get("weight", 0.0),
+            )
+            for e in response.get("edges", [])
+        ]
+        return TraverseResponse(
+            nodes=nodes,
+            edges=edges,
+            total_reachable=response.get("total_reachable", 0),
+            query_ms=response.get("query_ms", 0.0),
+        )
+
+    async def explain(
+        self,
+        engram_id: str,
+        query: list[str],
+        vault: str = "default",
+    ) -> ExplainResponse:
+        """Explain why an engram would or wouldn't be returned for a query.
+
+        Args:
+            engram_id: Engram ULID to explain
+            query: Query context terms
+            vault: Vault name (default: "default")
+
+        Returns:
+            ExplainResponse with scoring breakdown
+        """
+        body = {"vault": vault, "engram_id": engram_id, "query": query}
+        response = await self._request("POST", "/api/explain", json=body)
+        comp = response.get("components", {})
+        return ExplainResponse(
+            engram_id=response.get("engram_id", ""),
+            concept=response.get("concept", ""),
+            final_score=response.get("final_score", 0.0),
+            components=ExplainComponents(
+                full_text_relevance=comp.get("full_text_relevance", 0.0),
+                semantic_similarity=comp.get("semantic_similarity", 0.0),
+                decay_factor=comp.get("decay_factor", 0.0),
+                hebbian_boost=comp.get("hebbian_boost", 0.0),
+                access_frequency=comp.get("access_frequency", 0.0),
+                confidence=comp.get("confidence", 0.0),
+            ),
+            fts_matches=response.get("fts_matches", []),
+            assoc_path=response.get("assoc_path", []),
+            would_return=response.get("would_return", False),
+            threshold=response.get("threshold", 0.0),
+        )
+
+    async def set_state(
+        self,
+        id: str,
+        state: str,
+        reason: str = "",
+        vault: str = "default",
+    ) -> SetStateResponse:
+        """Set the state of an engram.
+
+        Args:
+            id: Engram ULID
+            state: New state value
+            reason: Reason for the state change
+            vault: Vault name (default: "default")
+
+        Returns:
+            SetStateResponse with updated state
+        """
+        body: dict = {"state": state, "vault": vault}
+        if reason:
+            body["reason"] = reason
+        response = await self._request("PUT", f"/api/engrams/{id}/state", json=body)
+        return SetStateResponse(
+            id=response.get("id", ""),
+            state=response.get("state", ""),
+            updated=response.get("updated", False),
+        )
+
+    async def list_deleted(
+        self,
+        vault: str = "default",
+        limit: int = 20,
+    ) -> ListDeletedResponse:
+        """List soft-deleted engrams that can be restored.
+
+        Args:
+            vault: Vault name (default: "default")
+            limit: Maximum number of results (default: 20)
+
+        Returns:
+            ListDeletedResponse with deleted engrams and count
+        """
+        response = await self._request(
+            "GET", "/api/deleted", params={"vault": vault, "limit": str(limit)}
+        )
+        deleted = [
+            DeletedEngram(
+                id=d.get("id", ""),
+                concept=d.get("concept", ""),
+                deleted_at=d.get("deleted_at", 0),
+                recoverable_until=d.get("recoverable_until", 0),
+                tags=d.get("tags"),
+            )
+            for d in response.get("deleted", [])
+        ]
+        return ListDeletedResponse(
+            deleted=deleted,
+            count=response.get("count", 0),
+        )
+
+    async def retry_enrich(self, id: str, vault: str = "default") -> RetryEnrichResponse:
+        """Retry enrichment plugins for an engram.
+
+        Args:
+            id: Engram ULID
+            vault: Vault name (default: "default")
+
+        Returns:
+            RetryEnrichResponse with queued and completed plugins
+        """
+        response = await self._request(
+            "POST", f"/api/engrams/{id}/retry-enrich", params={"vault": vault}
+        )
+        return RetryEnrichResponse(
+            engram_id=response.get("engram_id", ""),
+            plugins_queued=response.get("plugins_queued", []),
+            already_complete=response.get("already_complete", []),
+            note=response.get("note"),
+        )
+
+    async def contradictions(self, vault: str = "default") -> ContradictionsResponse:
+        """List detected contradictions in a vault.
+
+        Args:
+            vault: Vault name (default: "default")
+
+        Returns:
+            ContradictionsResponse with contradiction pairs
+        """
+        response = await self._request(
+            "GET", "/api/contradictions", params={"vault": vault}
+        )
+        items = [
+            ContradictionItem(
+                id_a=c.get("id_a", ""),
+                concept_a=c.get("concept_a", ""),
+                id_b=c.get("id_b", ""),
+                concept_b=c.get("concept_b", ""),
+                detected_at=c.get("detected_at", 0),
+            )
+            for c in response.get("contradictions", [])
+        ]
+        return ContradictionsResponse(contradictions=items)
+
+    async def guide(self, vault: str = "default") -> str:
+        """Get a natural-language guide/summary of a vault's contents.
+
+        Args:
+            vault: Vault name (default: "default")
+
+        Returns:
+            Guide text as a string
+        """
+        response = await self._request(
+            "GET", "/api/guide", params={"vault": vault}
+        )
+        return response.get("guide", "")
+
+    async def list_engrams(
+        self,
+        vault: str = "default",
+        limit: int = 20,
+        offset: int = 0,
+    ) -> ListEngramsResponse:
+        """List engrams with pagination.
+
+        Args:
+            vault: Vault name (default: "default")
+            limit: Maximum number of results (default: 20)
+            offset: Pagination offset (default: 0)
+
+        Returns:
+            ListEngramsResponse with engrams and pagination info
+        """
+        response = await self._request(
+            "GET",
+            "/api/engrams",
+            params={"vault": vault, "limit": str(limit), "offset": str(offset)},
+        )
+        engrams = [
+            EngramItem(
+                id=e.get("id", ""),
+                concept=e.get("concept", ""),
+                content=e.get("content", ""),
+                confidence=e.get("confidence", 0.0),
+                tags=e.get("tags"),
+                vault=e.get("vault", ""),
+                created_at=e.get("created_at", 0),
+            )
+            for e in response.get("engrams", [])
+        ]
+        return ListEngramsResponse(
+            engrams=engrams,
+            total=response.get("total", 0),
+            limit=response.get("limit", limit),
+            offset=response.get("offset", offset),
+        )
+
+    async def get_links(self, id: str, vault: str = "default") -> list[AssociationItem]:
+        """Get associations/links for an engram.
+
+        Args:
+            id: Engram ULID
+            vault: Vault name (default: "default")
+
+        Returns:
+            List of AssociationItem
+        """
+        response = await self._request(
+            "GET", f"/api/engrams/{id}/links", params={"vault": vault}
+        )
+        links = response if isinstance(response, list) else response.get("links", [])
+        return [
+            AssociationItem(
+                target_id=link.get("targetId", link.get("target_id", "")),
+                rel_type=link.get("relType", link.get("rel_type", 0)),
+                weight=link.get("weight", 0.0),
+            )
+            for link in links
+        ]
+
+    async def list_vaults(self) -> list[str]:
+        """List all available vaults.
+
+        Returns:
+            List of vault names
+        """
+        response = await self._request("GET", "/api/vaults")
+        return response.get("vaults", [])
+
+    async def session(
+        self,
+        vault: str = "default",
+        since: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> SessionResponse:
+        """Get session activity for a vault.
+
+        Args:
+            vault: Vault name (default: "default")
+            since: ISO 8601 timestamp to filter from
+            limit: Maximum entries (default: 50)
+            offset: Pagination offset (default: 0)
+
+        Returns:
+            SessionResponse with activity entries
+        """
+        params: dict = {
+            "vault": vault,
+            "limit": str(limit),
+            "offset": str(offset),
+        }
+        if since:
+            params["since"] = since
+        response = await self._request("GET", "/api/session", params=params)
+        entries = [
+            SessionEntry(
+                id=e.get("id", ""),
+                concept=e.get("concept", ""),
+                created_at=e.get("created_at", e.get("createdAt", 0)),
+            )
+            for e in response.get("entries", [])
+        ]
+        return SessionResponse(
+            entries=entries,
+            total=response.get("total", 0),
+            offset=response.get("offset", offset),
+            limit=response.get("limit", limit),
+        )
 
     async def health(self) -> bool:
         """Check if MuninnDB server is healthy.

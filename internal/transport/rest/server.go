@@ -163,6 +163,19 @@ func NewServer(addr string, engine EngineAPI, authStore *auth.Store, sessionSecr
 	// SSE subscribe — long-lived; bypasses write timeout via ResponseController.
 	mux.HandleFunc("GET /api/subscribe", s.withMiddleware(s.handleSubscribe))
 
+	// Extended vault routes — operations that were previously MCP-only.
+	mux.HandleFunc("POST /api/engrams/{id}/evolve", s.withMiddleware(s.handleEvolve))
+	mux.HandleFunc("POST /api/consolidate", s.withMiddleware(s.handleConsolidateEngrams))
+	mux.HandleFunc("POST /api/decide", s.withMiddleware(s.handleDecide))
+	mux.HandleFunc("POST /api/engrams/{id}/restore", s.withMiddleware(s.handleRestore))
+	mux.HandleFunc("POST /api/traverse", s.withMiddleware(s.handleTraverse))
+	mux.HandleFunc("POST /api/explain", s.withMiddleware(s.handleExplain))
+	mux.HandleFunc("PUT /api/engrams/{id}/state", s.withMiddleware(s.handleSetState))
+	mux.HandleFunc("GET /api/deleted", s.withMiddleware(s.handleListDeleted))
+	mux.HandleFunc("POST /api/engrams/{id}/retry-enrich", s.withMiddleware(s.handleRetryEnrich))
+	mux.HandleFunc("GET /api/contradictions", s.withMiddleware(s.handleContradictions))
+	mux.HandleFunc("GET /api/guide", s.withMiddleware(s.handleGuide))
+
 	// Admin routes — require valid admin session cookie, return JSON 401 on failure.
 	mux.HandleFunc("POST /api/admin/keys", s.withAdminMiddleware(s.handleCreateAPIKey(authStore)))
 	mux.HandleFunc("GET /api/admin/keys", s.withAdminMiddleware(s.handleListAPIKeys(authStore)))
@@ -974,6 +987,238 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.sendJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleEvolve(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "missing engram id")
+		return
+	}
+	var body struct {
+		NewContent string `json:"new_content"`
+		Reason     string `json:"reason"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "invalid request body")
+		return
+	}
+	if body.NewContent == "" || body.Reason == "" {
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "'new_content' and 'reason' are required")
+		return
+	}
+	resp, err := s.engine.Evolve(r.Context(), ctxVault(r), id, body.NewContent, body.Reason)
+	if err != nil {
+		s.sendError(r, w, http.StatusInternalServerError, ErrStorageError, err.Error())
+		return
+	}
+	s.sendJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleConsolidateEngrams(w http.ResponseWriter, r *http.Request) {
+	var body ConsolidateRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "invalid request body")
+		return
+	}
+	if len(body.IDs) < 2 {
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "'ids' must contain at least 2 engram IDs")
+		return
+	}
+	if len(body.IDs) > 50 {
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "'ids' exceeds maximum of 50")
+		return
+	}
+	if body.MergedContent == "" {
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "'merged_content' is required")
+		return
+	}
+	vault := body.Vault
+	if vault == "" {
+		vault = ctxVault(r)
+	}
+	resp, err := s.engine.Consolidate(r.Context(), vault, body.IDs, body.MergedContent)
+	if err != nil {
+		s.sendError(r, w, http.StatusInternalServerError, ErrStorageError, err.Error())
+		return
+	}
+	s.sendJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleDecide(w http.ResponseWriter, r *http.Request) {
+	var body DecideRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "invalid request body")
+		return
+	}
+	if body.Decision == "" || body.Rationale == "" {
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "'decision' and 'rationale' are required")
+		return
+	}
+	vault := body.Vault
+	if vault == "" {
+		vault = ctxVault(r)
+	}
+	resp, err := s.engine.Decide(r.Context(), vault, body.Decision, body.Rationale, body.Alternatives, body.EvidenceIDs)
+	if err != nil {
+		s.sendError(r, w, http.StatusInternalServerError, ErrStorageError, err.Error())
+		return
+	}
+	s.sendJSON(w, http.StatusCreated, resp)
+}
+
+func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "missing engram id")
+		return
+	}
+	resp, err := s.engine.Restore(r.Context(), ctxVault(r), id)
+	if err != nil {
+		s.sendError(r, w, http.StatusInternalServerError, ErrStorageError, err.Error())
+		return
+	}
+	s.sendJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleTraverse(w http.ResponseWriter, r *http.Request) {
+	var body TraverseRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "invalid request body")
+		return
+	}
+	if body.StartID == "" {
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "'start_id' is required")
+		return
+	}
+	if body.MaxHops <= 0 {
+		body.MaxHops = 3
+	}
+	if body.MaxHops > 5 {
+		body.MaxHops = 5
+	}
+	if body.MaxNodes <= 0 {
+		body.MaxNodes = 50
+	}
+	if body.MaxNodes > 100 {
+		body.MaxNodes = 100
+	}
+	vault := body.Vault
+	if vault == "" {
+		vault = ctxVault(r)
+	}
+	resp, err := s.engine.Traverse(r.Context(), vault, &body)
+	if err != nil {
+		s.sendError(r, w, http.StatusInternalServerError, ErrStorageError, err.Error())
+		return
+	}
+	s.sendJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleExplain(w http.ResponseWriter, r *http.Request) {
+	var body ExplainRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "invalid request body")
+		return
+	}
+	if body.EngramID == "" {
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "'engram_id' is required")
+		return
+	}
+	vault := body.Vault
+	if vault == "" {
+		vault = ctxVault(r)
+	}
+	resp, err := s.engine.Explain(r.Context(), vault, &body)
+	if err != nil {
+		s.sendError(r, w, http.StatusInternalServerError, ErrStorageError, err.Error())
+		return
+	}
+	s.sendJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleSetState(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "missing engram id")
+		return
+	}
+	var body SetStateRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "invalid request body")
+		return
+	}
+	validStates := map[string]bool{
+		"planning": true, "active": true, "paused": true, "blocked": true,
+		"completed": true, "cancelled": true, "archived": true,
+	}
+	if !validStates[body.State] {
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram,
+			"'state' must be one of: planning, active, paused, blocked, completed, cancelled, archived")
+		return
+	}
+	vault := body.Vault
+	if vault == "" {
+		vault = ctxVault(r)
+	}
+	if err := s.engine.UpdateState(r.Context(), vault, id, body.State, body.Reason); err != nil {
+		s.sendError(r, w, http.StatusInternalServerError, ErrStorageError, err.Error())
+		return
+	}
+	s.sendJSON(w, http.StatusOK, SetStateResponse{
+		ID:      id,
+		State:   body.State,
+		Updated: true,
+	})
+}
+
+func (s *Server) handleListDeleted(w http.ResponseWriter, r *http.Request) {
+	vault := ctxVault(r)
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	resp, err := s.engine.ListDeleted(r.Context(), vault, limit)
+	if err != nil {
+		s.sendError(r, w, http.StatusInternalServerError, ErrStorageError, err.Error())
+		return
+	}
+	s.sendJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleRetryEnrich(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "missing engram id")
+		return
+	}
+	resp, err := s.engine.RetryEnrich(r.Context(), ctxVault(r), id)
+	if err != nil {
+		s.sendError(r, w, http.StatusInternalServerError, ErrEnrichmentError, err.Error())
+		return
+	}
+	s.sendJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleContradictions(w http.ResponseWriter, r *http.Request) {
+	resp, err := s.engine.GetContradictions(r.Context(), ctxVault(r))
+	if err != nil {
+		s.sendError(r, w, http.StatusInternalServerError, ErrStorageError, err.Error())
+		return
+	}
+	s.sendJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleGuide(w http.ResponseWriter, r *http.Request) {
+	guide, err := s.engine.GetGuide(r.Context(), ctxVault(r))
+	if err != nil {
+		s.sendError(r, w, http.StatusInternalServerError, ErrStorageError, err.Error())
+		return
+	}
+	s.sendJSON(w, http.StatusOK, GuideResponse{Guide: guide})
 }
 
 // handleSubscribe opens a long-lived SSE connection. The client receives

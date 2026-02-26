@@ -163,7 +163,7 @@ func (c *Client) Activate(ctx context.Context, vault string, context []string, m
 	return resp, nil
 }
 
-// Link links two engrams. May not be supported in all MuninnDB versions.
+// Link links two engrams.
 func (c *Client) Link(ctx context.Context, vault, sourceID, targetID string, relType int, weight float64) error {
 	req := LinkRequest{
 		Vault:    vault,
@@ -178,23 +178,7 @@ func (c *Client) Link(ctx context.Context, vault, sourceID, targetID string, rel
 		return fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	// Try various possible endpoints
-	endpoints := []string{
-		"/api/links",
-		"/api/engrams/link",
-		fmt.Sprintf("/api/engrams/%s/links", sourceID),
-	}
-
-	var lastErr error
-	for _, endpoint := range endpoints {
-		err := c.request(ctx, "POST", endpoint, body, nil)
-		if err == nil {
-			return nil
-		}
-		lastErr = err
-	}
-
-	return fmt.Errorf("link endpoint not found: %w", lastErr)
+	return c.request(ctx, "POST", "/api/link", body, nil)
 }
 
 // Forget forgets an engram.
@@ -274,11 +258,285 @@ func (c *Client) Subscribe(ctx context.Context, vault string) (<-chan Push, erro
 
 // Health checks if the server is healthy.
 func (c *Client) Health(ctx context.Context) (bool, error) {
-	resp := &StatsResponse{}
-	if err := c.request(ctx, "GET", "/api/stats", nil, resp); err != nil {
-		return false, err
+	err := c.request(ctx, "GET", "/api/health", nil, nil)
+	return err == nil, err
+}
+
+// ActivateWithOptions activates memory with full control over all fields.
+func (c *Client) ActivateWithOptions(ctx context.Context, req ActivateRequest) (*ActivateResponse, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
-	return resp.EngramCount >= 0, nil
+
+	resp := &ActivateResponse{}
+	if err := c.request(ctx, "POST", "/api/activate", body, resp); err != nil {
+		return nil, err
+	}
+
+	return resp, nil
+}
+
+// Evolve evolves an engram's content, creating a new version.
+func (c *Client) Evolve(ctx context.Context, vault, engramID, newContent, reason string) (*EvolveResponse, error) {
+	payload := struct {
+		NewContent string `json:"new_content"`
+		Reason     string `json:"reason"`
+		Vault      string `json:"vault"`
+	}{NewContent: newContent, Reason: reason, Vault: vault}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	resp := &EvolveResponse{}
+	if err := c.request(ctx, "POST", fmt.Sprintf("/api/engrams/%s/evolve", engramID), body, resp); err != nil {
+		return nil, err
+	}
+
+	return resp, nil
+}
+
+// Consolidate merges multiple engrams into one.
+func (c *Client) Consolidate(ctx context.Context, vault string, ids []string, mergedContent string) (*ConsolidateResponse, error) {
+	payload := struct {
+		Vault         string   `json:"vault"`
+		IDs           []string `json:"ids"`
+		MergedContent string   `json:"merged_content"`
+	}{Vault: vault, IDs: ids, MergedContent: mergedContent}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	resp := &ConsolidateResponse{}
+	if err := c.request(ctx, "POST", "/api/consolidate", body, resp); err != nil {
+		return nil, err
+	}
+
+	return resp, nil
+}
+
+// Decide records a decision as an engram.
+func (c *Client) Decide(ctx context.Context, vault, decision, rationale string, alternatives, evidenceIDs []string) (*DecideResponse, error) {
+	payload := struct {
+		Vault       string   `json:"vault"`
+		Decision    string   `json:"decision"`
+		Rationale   string   `json:"rationale"`
+		Alternatives []string `json:"alternatives,omitempty"`
+		EvidenceIDs []string `json:"evidence_ids,omitempty"`
+	}{Vault: vault, Decision: decision, Rationale: rationale, Alternatives: alternatives, EvidenceIDs: evidenceIDs}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	resp := &DecideResponse{}
+	if err := c.request(ctx, "POST", "/api/decide", body, resp); err != nil {
+		return nil, err
+	}
+
+	return resp, nil
+}
+
+// Restore restores a soft-deleted engram.
+func (c *Client) Restore(ctx context.Context, id, vault string) (*RestoreResponse, error) {
+	q := url.Values{}
+	q.Set("vault", vault)
+	path := fmt.Sprintf("/api/engrams/%s/restore?%s", id, q.Encode())
+
+	resp := &RestoreResponse{}
+	if err := c.request(ctx, "POST", path, nil, resp); err != nil {
+		return nil, err
+	}
+
+	return resp, nil
+}
+
+// Traverse traverses the association graph from a starting engram.
+func (c *Client) Traverse(ctx context.Context, vault, startID string, maxHops, maxNodes int, relTypes []string) (*TraverseResponse, error) {
+	payload := struct {
+		Vault    string   `json:"vault"`
+		StartID  string   `json:"start_id"`
+		MaxHops  int      `json:"max_hops"`
+		MaxNodes int      `json:"max_nodes"`
+		RelTypes []string `json:"rel_types,omitempty"`
+	}{Vault: vault, StartID: startID, MaxHops: maxHops, MaxNodes: maxNodes, RelTypes: relTypes}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	resp := &TraverseResponse{}
+	if err := c.request(ctx, "POST", "/api/traverse", body, resp); err != nil {
+		return nil, err
+	}
+
+	return resp, nil
+}
+
+// Explain explains why an engram would or wouldn't be returned for a query.
+func (c *Client) Explain(ctx context.Context, vault, engramID string, query []string) (*ExplainResponse, error) {
+	payload := struct {
+		Vault    string   `json:"vault"`
+		EngramID string   `json:"engram_id"`
+		Query    []string `json:"query"`
+	}{Vault: vault, EngramID: engramID, Query: query}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	resp := &ExplainResponse{}
+	if err := c.request(ctx, "POST", "/api/explain", body, resp); err != nil {
+		return nil, err
+	}
+
+	return resp, nil
+}
+
+// SetState sets the state of an engram.
+func (c *Client) SetState(ctx context.Context, vault, engramID, state, reason string) (*SetStateResponse, error) {
+	payload := struct {
+		State  string `json:"state"`
+		Reason string `json:"reason,omitempty"`
+		Vault  string `json:"vault"`
+	}{State: state, Reason: reason, Vault: vault}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	resp := &SetStateResponse{}
+	if err := c.request(ctx, "PUT", fmt.Sprintf("/api/engrams/%s/state", engramID), body, resp); err != nil {
+		return nil, err
+	}
+
+	return resp, nil
+}
+
+// ListDeleted lists soft-deleted engrams that can be restored.
+func (c *Client) ListDeleted(ctx context.Context, vault string, limit int) (*ListDeletedResponse, error) {
+	q := url.Values{}
+	q.Set("vault", vault)
+	q.Set("limit", fmt.Sprintf("%d", limit))
+	path := fmt.Sprintf("/api/deleted?%s", q.Encode())
+
+	resp := &ListDeletedResponse{}
+	if err := c.request(ctx, "GET", path, nil, resp); err != nil {
+		return nil, err
+	}
+
+	return resp, nil
+}
+
+// RetryEnrich retries enrichment plugins for an engram.
+func (c *Client) RetryEnrich(ctx context.Context, id, vault string) (*RetryEnrichResponse, error) {
+	q := url.Values{}
+	q.Set("vault", vault)
+	path := fmt.Sprintf("/api/engrams/%s/retry-enrich?%s", id, q.Encode())
+
+	resp := &RetryEnrichResponse{}
+	if err := c.request(ctx, "POST", path, nil, resp); err != nil {
+		return nil, err
+	}
+
+	return resp, nil
+}
+
+// Contradictions lists detected contradictions in a vault.
+func (c *Client) Contradictions(ctx context.Context, vault string) (*ContradictionsResponse, error) {
+	q := url.Values{}
+	q.Set("vault", vault)
+	path := fmt.Sprintf("/api/contradictions?%s", q.Encode())
+
+	resp := &ContradictionsResponse{}
+	if err := c.request(ctx, "GET", path, nil, resp); err != nil {
+		return nil, err
+	}
+
+	return resp, nil
+}
+
+// Guide returns a natural-language guide/summary of a vault's contents.
+func (c *Client) Guide(ctx context.Context, vault string) (string, error) {
+	q := url.Values{}
+	q.Set("vault", vault)
+	path := fmt.Sprintf("/api/guide?%s", q.Encode())
+
+	resp := &GuideResponse{}
+	if err := c.request(ctx, "GET", path, nil, resp); err != nil {
+		return "", err
+	}
+
+	return resp.Guide, nil
+}
+
+// ListEngrams lists engrams with pagination.
+func (c *Client) ListEngrams(ctx context.Context, vault string, limit, offset int) (*ListEngramsResponse, error) {
+	q := url.Values{}
+	q.Set("vault", vault)
+	q.Set("limit", fmt.Sprintf("%d", limit))
+	q.Set("offset", fmt.Sprintf("%d", offset))
+	path := fmt.Sprintf("/api/engrams?%s", q.Encode())
+
+	resp := &ListEngramsResponse{}
+	if err := c.request(ctx, "GET", path, nil, resp); err != nil {
+		return nil, err
+	}
+
+	return resp, nil
+}
+
+// GetLinks gets associations/links for an engram.
+func (c *Client) GetLinks(ctx context.Context, id, vault string) ([]AssociationItem, error) {
+	q := url.Values{}
+	q.Set("vault", vault)
+	path := fmt.Sprintf("/api/engrams/%s/links?%s", id, q.Encode())
+
+	var resp []AssociationItem
+	if err := c.request(ctx, "GET", path, nil, &resp); err != nil {
+		return nil, err
+	}
+
+	return resp, nil
+}
+
+// ListVaults lists all available vaults.
+func (c *Client) ListVaults(ctx context.Context) ([]string, error) {
+	resp := struct {
+		Vaults []string `json:"vaults"`
+	}{}
+	if err := c.request(ctx, "GET", "/api/vaults", nil, &resp); err != nil {
+		return nil, err
+	}
+
+	return resp.Vaults, nil
+}
+
+// Session gets session activity for a vault.
+func (c *Client) Session(ctx context.Context, vault, since string, limit, offset int) (*SessionResponse, error) {
+	q := url.Values{}
+	q.Set("vault", vault)
+	q.Set("limit", fmt.Sprintf("%d", limit))
+	q.Set("offset", fmt.Sprintf("%d", offset))
+	if since != "" {
+		q.Set("since", since)
+	}
+	path := fmt.Sprintf("/api/session?%s", q.Encode())
+
+	resp := &SessionResponse{}
+	if err := c.request(ctx, "GET", path, nil, resp); err != nil {
+		return nil, err
+	}
+
+	return resp, nil
 }
 
 // request makes an HTTP request with automatic retry logic.

@@ -1,0 +1,33 @@
+{
+  "name": "@muninndb/client",
+  "version": "0.0.0-dev",
+  "description": "Official TypeScript/Node.js SDK for MuninnDB — the cognitive memory database",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "muninndb",
+    "memory",
+    "cognitive",
+    "database",
+    "ai",
+    "sdk"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/scrypster/muninndb"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}

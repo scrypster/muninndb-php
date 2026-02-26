@@ -103,6 +103,19 @@ type EngineAPI interface {
 	ReindexFTSVault(ctx context.Context, vaultName string) (int64, error)
 	// Checkpoint creates a Pebble checkpoint (point-in-time snapshot) at destDir.
 	Checkpoint(destDir string) error
+
+	// Extended operations — previously MCP-only.
+	Evolve(ctx context.Context, vault, engramID, newContent, reason string) (*EvolveResponse, error)
+	Consolidate(ctx context.Context, vault string, ids []string, mergedContent string) (*ConsolidateResponse, error)
+	Decide(ctx context.Context, vault, decision, rationale string, alternatives, evidenceIDs []string) (*DecideResponse, error)
+	Restore(ctx context.Context, vault, engramID string) (*RestoreResponse, error)
+	Traverse(ctx context.Context, vault string, req *TraverseRequest) (*TraverseResponse, error)
+	Explain(ctx context.Context, vault string, req *ExplainRequest) (*ExplainResponse, error)
+	UpdateState(ctx context.Context, vault, engramID, state, reason string) error
+	ListDeleted(ctx context.Context, vault string, limit int) (*ListDeletedResponse, error)
+	RetryEnrich(ctx context.Context, vault, engramID string) (*RetryEnrichResponse, error)
+	GetContradictions(ctx context.Context, vault string) (*ContradictionsResponse, error)
+	GetGuide(ctx context.Context, vault string) (string, error)
 }
 
 // ── Web UI types ─────────────────────────────────────────────────────────
@@ -173,6 +186,165 @@ type GetSessionResponse struct {
 	Total   int           `json:"total"`
 	Offset  int           `json:"offset"`
 	Limit   int           `json:"limit"`
+}
+
+// EvolveResponse is returned by the evolve endpoint.
+type EvolveResponse struct {
+	ID string `json:"id"`
+}
+
+// ConsolidateRequest is the body for POST /api/consolidate.
+type ConsolidateRequest struct {
+	Vault         string   `json:"vault"`
+	IDs           []string `json:"ids"`
+	MergedContent string   `json:"merged_content"`
+}
+
+// ConsolidateResponse is returned by the consolidate endpoint.
+type ConsolidateResponse struct {
+	ID       string   `json:"id"`
+	Archived []string `json:"archived"`
+	Warnings []string `json:"warnings,omitempty"`
+}
+
+// DecideRequest is the body for POST /api/decide.
+type DecideRequest struct {
+	Vault        string   `json:"vault"`
+	Decision     string   `json:"decision"`
+	Rationale    string   `json:"rationale"`
+	Alternatives []string `json:"alternatives,omitempty"`
+	EvidenceIDs  []string `json:"evidence_ids,omitempty"`
+}
+
+// DecideResponse is returned by the decide endpoint.
+type DecideResponse struct {
+	ID string `json:"id"`
+}
+
+// RestoreResponse is returned by the restore endpoint.
+type RestoreResponse struct {
+	ID       string `json:"id"`
+	Concept  string `json:"concept"`
+	Restored bool   `json:"restored"`
+	State    string `json:"state"`
+}
+
+// TraverseRequest is the body for POST /api/traverse.
+type TraverseRequest struct {
+	Vault    string   `json:"vault"`
+	StartID  string   `json:"start_id"`
+	MaxHops  int      `json:"max_hops,omitempty"`
+	MaxNodes int      `json:"max_nodes,omitempty"`
+	RelTypes []string `json:"rel_types,omitempty"`
+}
+
+// TraversalNode is a single node in a graph traversal result.
+type TraversalNode struct {
+	ID      string `json:"id"`
+	Concept string `json:"concept"`
+	HopDist int    `json:"hop_dist"`
+	Summary string `json:"summary,omitempty"`
+}
+
+// TraversalEdge is an association edge in a graph traversal result.
+type TraversalEdge struct {
+	FromID  string  `json:"from_id"`
+	ToID    string  `json:"to_id"`
+	RelType string  `json:"rel_type"`
+	Weight  float32 `json:"weight"`
+}
+
+// TraverseResponse is returned by the traverse endpoint.
+type TraverseResponse struct {
+	Nodes          []TraversalNode `json:"nodes"`
+	Edges          []TraversalEdge `json:"edges"`
+	TotalReachable int             `json:"total_reachable"`
+	QueryMs        float64         `json:"query_ms"`
+}
+
+// ExplainRequest is the body for POST /api/explain.
+type ExplainRequest struct {
+	Vault    string   `json:"vault"`
+	EngramID string   `json:"engram_id"`
+	Query    []string `json:"query"`
+}
+
+// ExplainComponents holds per-component score breakdown.
+type ExplainComponents struct {
+	FullTextRelevance  float64 `json:"full_text_relevance"`
+	SemanticSimilarity float64 `json:"semantic_similarity"`
+	DecayFactor        float64 `json:"decay_factor"`
+	HebbianBoost       float64 `json:"hebbian_boost"`
+	AccessFrequency    float64 `json:"access_frequency"`
+	Confidence         float64 `json:"confidence"`
+}
+
+// ExplainResponse is returned by the explain endpoint.
+type ExplainResponse struct {
+	EngramID    string            `json:"engram_id"`
+	Concept     string            `json:"concept"`
+	FinalScore  float64           `json:"final_score"`
+	Components  ExplainComponents `json:"components"`
+	FTSMatches  []string          `json:"fts_matches"`
+	AssocPath   []string          `json:"assoc_path"`
+	WouldReturn bool              `json:"would_return"`
+	Threshold   float64           `json:"threshold"`
+}
+
+// SetStateRequest is the body for PUT /api/engrams/{id}/state.
+type SetStateRequest struct {
+	Vault  string `json:"vault"`
+	State  string `json:"state"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// SetStateResponse is returned by the state endpoint.
+type SetStateResponse struct {
+	ID      string `json:"id"`
+	State   string `json:"state"`
+	Updated bool   `json:"updated"`
+}
+
+// DeletedEngramItem is a soft-deleted engram in list results.
+type DeletedEngramItem struct {
+	ID               string   `json:"id"`
+	Concept          string   `json:"concept"`
+	DeletedAt        int64    `json:"deleted_at"`
+	RecoverableUntil int64    `json:"recoverable_until"`
+	Tags             []string `json:"tags,omitempty"`
+}
+
+// ListDeletedResponse is returned by the list-deleted endpoint.
+type ListDeletedResponse struct {
+	Deleted []DeletedEngramItem `json:"deleted"`
+	Count   int                 `json:"count"`
+}
+
+// RetryEnrichResponse is returned by the retry-enrich endpoint.
+type RetryEnrichResponse struct {
+	EngramID        string   `json:"engram_id"`
+	PluginsQueued   []string `json:"plugins_queued"`
+	AlreadyComplete []string `json:"already_complete"`
+	Note            string   `json:"note,omitempty"`
+}
+
+// ContradictionItem is a pair of contradicting engrams.
+type ContradictionItem struct {
+	IDa        string `json:"id_a"`
+	ConceptA   string `json:"concept_a"`
+	IDb        string `json:"id_b"`
+	ConceptB   string `json:"concept_b"`
+	DetectedAt int64  `json:"detected_at"`
+}
+
+// ContradictionsResponse is returned by the contradictions endpoint.
+type ContradictionsResponse struct {
+	Contradictions []ContradictionItem `json:"contradictions"`
+}
+
+// GuideResponse is returned by the guide endpoint.
+type GuideResponse struct {
+	Guide string `json:"guide"`
 }
 
 // ErrorResponse is the standard error format returned by REST endpoints.

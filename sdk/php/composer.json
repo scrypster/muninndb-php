@@ -1,0 +1,18 @@
+{
+    "name": "muninndb/client",
+    "description": "Official PHP SDK for MuninnDB — the cognitive memory database",
+    "type": "library",
+    "license": "MIT",
+    "keywords": ["muninndb", "memory", "cognitive", "database", "ai", "sdk"],
+    "require": {
+        "php": ">=8.1",
+        "ext-curl": "*",
+        "ext-json": "*"
+    },
+    "autoload": {
+        "psr-4": {
+            "MuninnDB\\": "src/"
+        }
+    },
+    "minimum-stability": "stable"
+}

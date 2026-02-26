@@ -171,6 +171,83 @@ func (m *MockEngine) Checkpoint(destDir string) error {
 	return nil
 }
 
+func (m *MockEngine) Evolve(ctx context.Context, vault, engramID, newContent, reason string) (*EvolveResponse, error) {
+	return &EvolveResponse{ID: "evolved-id"}, nil
+}
+
+func (m *MockEngine) Consolidate(ctx context.Context, vault string, ids []string, mergedContent string) (*ConsolidateResponse, error) {
+	return &ConsolidateResponse{
+		ID:       "consolidated-id",
+		Archived: ids,
+	}, nil
+}
+
+func (m *MockEngine) Decide(ctx context.Context, vault, decision, rationale string, alternatives, evidenceIDs []string) (*DecideResponse, error) {
+	return &DecideResponse{ID: "decision-id"}, nil
+}
+
+func (m *MockEngine) Restore(ctx context.Context, vault, engramID string) (*RestoreResponse, error) {
+	return &RestoreResponse{
+		ID:       engramID,
+		Concept:  "restored concept",
+		Restored: true,
+		State:    "active",
+	}, nil
+}
+
+func (m *MockEngine) Traverse(ctx context.Context, vault string, req *TraverseRequest) (*TraverseResponse, error) {
+	return &TraverseResponse{
+		Nodes:          []TraversalNode{{ID: req.StartID, Concept: "start", HopDist: 0}},
+		Edges:          []TraversalEdge{},
+		TotalReachable: 1,
+		QueryMs:        1.5,
+	}, nil
+}
+
+func (m *MockEngine) Explain(ctx context.Context, vault string, req *ExplainRequest) (*ExplainResponse, error) {
+	return &ExplainResponse{
+		EngramID:    req.EngramID,
+		Concept:     "test concept",
+		FinalScore:  0.85,
+		Components:  ExplainComponents{FullTextRelevance: 0.5, SemanticSimilarity: 0.3},
+		WouldReturn: true,
+		Threshold:   0.1,
+	}, nil
+}
+
+func (m *MockEngine) UpdateState(ctx context.Context, vault, engramID, state, reason string) error {
+	return nil
+}
+
+func (m *MockEngine) ListDeleted(ctx context.Context, vault string, limit int) (*ListDeletedResponse, error) {
+	return &ListDeletedResponse{
+		Deleted: []DeletedEngramItem{
+			{ID: "del-1", Concept: "deleted thing", DeletedAt: 1700000000, RecoverableUntil: 1700604800},
+		},
+		Count: 1,
+	}, nil
+}
+
+func (m *MockEngine) RetryEnrich(ctx context.Context, vault, engramID string) (*RetryEnrichResponse, error) {
+	return &RetryEnrichResponse{
+		EngramID:      engramID,
+		PluginsQueued: []string{"embed"},
+		Note:          "enrichment applied",
+	}, nil
+}
+
+func (m *MockEngine) GetContradictions(ctx context.Context, vault string) (*ContradictionsResponse, error) {
+	return &ContradictionsResponse{
+		Contradictions: []ContradictionItem{
+			{IDa: "a1", ConceptA: "concept A", IDb: "b1", ConceptB: "concept B", DetectedAt: 1700000000},
+		},
+	}, nil
+}
+
+func (m *MockEngine) GetGuide(ctx context.Context, vault string) (string, error) {
+	return "MuninnDB Guide for vault \"default\"\n\nThis vault has 100 memories.", nil
+}
+
 // backupMockEngine embeds MockEngine but creates a real Pebble checkpoint so
 // the verification step has something to open.
 type backupMockEngine struct {
@@ -1005,5 +1082,359 @@ func TestBatchCreateEngramsEmptyArray(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 for empty array, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestEvolveEndpoint(t *testing.T) {
+	engine := &MockEngine{}
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+
+	body := `{"new_content":"updated content","reason":"correction"}`
+	req := httptest.NewRequest("POST", "/api/engrams/test-id/evolve", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	server.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
+	}
+
+	var resp EvolveResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp.ID == "" {
+		t.Error("expected non-empty ID in response")
+	}
+}
+
+func TestEvolveEndpoint_MissingFields(t *testing.T) {
+	engine := &MockEngine{}
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+
+	body := `{}`
+	req := httptest.NewRequest("POST", "/api/engrams/test-id/evolve", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	server.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected status %d, got %d: %s", http.StatusBadRequest, w.Code, w.Body.String())
+	}
+}
+
+func TestConsolidateEndpoint(t *testing.T) {
+	engine := &MockEngine{}
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+
+	body := `{"vault":"default","ids":["id-1","id-2","id-3"],"merged_content":"combined content"}`
+	req := httptest.NewRequest("POST", "/api/consolidate", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	server.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
+	}
+
+	var resp ConsolidateResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp.ID == "" {
+		t.Error("expected non-empty ID in response")
+	}
+	if len(resp.Archived) != 3 {
+		t.Errorf("expected 3 archived IDs, got %d", len(resp.Archived))
+	}
+}
+
+func TestConsolidateEndpoint_TooFewIDs(t *testing.T) {
+	engine := &MockEngine{}
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+
+	body := `{"vault":"default","ids":["only-one"],"merged_content":"content"}`
+	req := httptest.NewRequest("POST", "/api/consolidate", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	server.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected status %d, got %d: %s", http.StatusBadRequest, w.Code, w.Body.String())
+	}
+}
+
+func TestDecideEndpoint(t *testing.T) {
+	engine := &MockEngine{}
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+
+	body := `{"vault":"default","decision":"use postgres","rationale":"better for relational data"}`
+	req := httptest.NewRequest("POST", "/api/decide", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	server.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Errorf("expected status %d, got %d: %s", http.StatusCreated, w.Code, w.Body.String())
+	}
+
+	var resp DecideResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp.ID == "" {
+		t.Error("expected non-empty ID in response")
+	}
+}
+
+func TestDecideEndpoint_MissingFields(t *testing.T) {
+	engine := &MockEngine{}
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+
+	body := `{"vault":"default"}`
+	req := httptest.NewRequest("POST", "/api/decide", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	server.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected status %d, got %d: %s", http.StatusBadRequest, w.Code, w.Body.String())
+	}
+}
+
+func TestRestoreEndpoint(t *testing.T) {
+	engine := &MockEngine{}
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+
+	req := httptest.NewRequest("POST", "/api/engrams/test-id/restore", nil)
+	w := httptest.NewRecorder()
+	server.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
+	}
+
+	var resp RestoreResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp.ID != "test-id" {
+		t.Errorf("expected ID 'test-id', got %q", resp.ID)
+	}
+	if !resp.Restored {
+		t.Error("expected restored to be true")
+	}
+}
+
+func TestTraverseEndpoint(t *testing.T) {
+	engine := &MockEngine{}
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+
+	body := `{"vault":"default","start_id":"node-1"}`
+	req := httptest.NewRequest("POST", "/api/traverse", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	server.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
+	}
+
+	var resp TraverseResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if len(resp.Nodes) == 0 {
+		t.Error("expected at least one node in response")
+	}
+	if resp.Edges == nil {
+		t.Error("expected edges array (may be empty)")
+	}
+}
+
+func TestTraverseEndpoint_MissingStartID(t *testing.T) {
+	engine := &MockEngine{}
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+
+	body := `{"vault":"default"}`
+	req := httptest.NewRequest("POST", "/api/traverse", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	server.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected status %d, got %d: %s", http.StatusBadRequest, w.Code, w.Body.String())
+	}
+}
+
+func TestExplainEndpoint(t *testing.T) {
+	engine := &MockEngine{}
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+
+	body := `{"vault":"default","engram_id":"eng-1","query":["test query"]}`
+	req := httptest.NewRequest("POST", "/api/explain", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	server.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
+	}
+
+	var resp ExplainResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp.EngramID != "eng-1" {
+		t.Errorf("expected engram_id 'eng-1', got %q", resp.EngramID)
+	}
+	if resp.FinalScore == 0 {
+		t.Error("expected non-zero final_score")
+	}
+}
+
+func TestExplainEndpoint_MissingFields(t *testing.T) {
+	engine := &MockEngine{}
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+
+	body := `{"vault":"default","query":["test"]}`
+	req := httptest.NewRequest("POST", "/api/explain", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	server.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected status %d, got %d: %s", http.StatusBadRequest, w.Code, w.Body.String())
+	}
+}
+
+func TestSetStateEndpoint(t *testing.T) {
+	engine := &MockEngine{}
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+
+	body := `{"state":"active","reason":"resuming work"}`
+	req := httptest.NewRequest("PUT", "/api/engrams/test-id/state", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	server.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
+	}
+
+	var resp SetStateResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if !resp.Updated {
+		t.Error("expected updated to be true")
+	}
+	if resp.State != "active" {
+		t.Errorf("expected state 'active', got %q", resp.State)
+	}
+}
+
+func TestSetStateEndpoint_InvalidState(t *testing.T) {
+	engine := &MockEngine{}
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+
+	body := `{"state":"invalid"}`
+	req := httptest.NewRequest("PUT", "/api/engrams/test-id/state", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	server.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected status %d, got %d: %s", http.StatusBadRequest, w.Code, w.Body.String())
+	}
+}
+
+func TestListDeletedEndpoint(t *testing.T) {
+	engine := &MockEngine{}
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+
+	req := httptest.NewRequest("GET", "/api/deleted?vault=default", nil)
+	w := httptest.NewRecorder()
+	server.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
+	}
+
+	var resp ListDeletedResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp.Count != 1 {
+		t.Errorf("expected count 1, got %d", resp.Count)
+	}
+	if len(resp.Deleted) != 1 {
+		t.Errorf("expected 1 deleted item, got %d", len(resp.Deleted))
+	}
+}
+
+func TestRetryEnrichEndpoint(t *testing.T) {
+	engine := &MockEngine{}
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+
+	req := httptest.NewRequest("POST", "/api/engrams/test-id/retry-enrich", nil)
+	w := httptest.NewRecorder()
+	server.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
+	}
+
+	var resp RetryEnrichResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp.EngramID != "test-id" {
+		t.Errorf("expected engram_id 'test-id', got %q", resp.EngramID)
+	}
+	if len(resp.PluginsQueued) == 0 {
+		t.Error("expected at least one plugin queued")
+	}
+}
+
+func TestContradictionsEndpoint(t *testing.T) {
+	engine := &MockEngine{}
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+
+	req := httptest.NewRequest("GET", "/api/contradictions?vault=default", nil)
+	w := httptest.NewRecorder()
+	server.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
+	}
+
+	var resp ContradictionsResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if len(resp.Contradictions) == 0 {
+		t.Error("expected at least one contradiction")
+	}
+}
+
+func TestGuideEndpoint(t *testing.T) {
+	engine := &MockEngine{}
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+
+	req := httptest.NewRequest("GET", "/api/guide?vault=default", nil)
+	w := httptest.NewRecorder()
+	server.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
+	}
+
+	var resp GuideResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp.Guide == "" {
+		t.Error("expected non-empty guide text")
 	}
 }

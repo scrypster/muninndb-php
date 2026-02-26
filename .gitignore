@@ -62,3 +62,6 @@ scripts/eval-*
 /eval-expert
 /eval-paraphrase
 /eval
+sdk/node/node_modules/
+sdk/node/dist/
+sdk/php/vendor/

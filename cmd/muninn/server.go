@@ -730,6 +730,9 @@ func runServer() {
 		if err := pluginRegistry.Register(enrichPlugin); err != nil {
 			slog.Warn("failed to register enrich plugin in registry", "err", err)
 		}
+		if rew, ok := restWrapper.(*rest.RESTEngineWrapper); ok {
+			rew.SetEnricher(enrichPlugin)
+		}
 	}
 
 	// Build transport servers
