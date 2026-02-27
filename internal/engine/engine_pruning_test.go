@@ -290,3 +290,83 @@ func TestPruneVault_VaultIsolation(t *testing.T) {
 		t.Errorf("vault-B: expected %d engrams (untouched), got %d", countBBefore, countB)
 	}
 }
+
+// TestAssocDecay_PrunesWeakEdges verifies that DecayAssocWeights (called from
+// the prune worker) removes weak association edges while keeping strong ones.
+func TestAssocDecay_PrunesWeakEdges(t *testing.T) {
+	_, _, store, cleanup := testEnvWithAuth(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const vaultName = "assoc-decay-test"
+	ws := store.VaultPrefix(vaultName)
+	if err := store.WriteVaultName(ws, vaultName); err != nil {
+		t.Fatalf("WriteVaultName: %v", err)
+	}
+
+	// Create two engrams to serve as association endpoints.
+	engA := &storage.Engram{Concept: "node A", Content: "content A"}
+	engB := &storage.Engram{Concept: "node B", Content: "content B"}
+	engC := &storage.Engram{Concept: "node C", Content: "content C"}
+
+	idA, err := store.WriteEngram(ctx, ws, engA)
+	if err != nil {
+		t.Fatalf("WriteEngram A: %v", err)
+	}
+	idB, err := store.WriteEngram(ctx, ws, engB)
+	if err != nil {
+		t.Fatalf("WriteEngram B: %v", err)
+	}
+	idC, err := store.WriteEngram(ctx, ws, engC)
+	if err != nil {
+		t.Fatalf("WriteEngram C: %v", err)
+	}
+
+	// Write a strong association (A→B, weight 0.8) and a weak one (A→C, weight 0.03).
+	if err := store.WriteAssociation(ctx, ws, idA, idB, &storage.Association{
+		TargetID: idB, Weight: 0.8, Confidence: 1.0, CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("WriteAssociation A→B: %v", err)
+	}
+	if err := store.WriteAssociation(ctx, ws, idA, idC, &storage.Association{
+		TargetID: idC, Weight: 0.03, Confidence: 1.0, CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("WriteAssociation A→C: %v", err)
+	}
+
+	// Verify both edges exist before decay.
+	wAB, _ := store.GetAssocWeight(ctx, ws, idA, idB)
+	wAC, _ := store.GetAssocWeight(ctx, ws, idA, idC)
+	if wAB == 0 {
+		t.Fatal("expected A→B association to exist before decay")
+	}
+	if wAC == 0 {
+		t.Fatal("expected A→C association to exist before decay")
+	}
+
+	// Run decay with factor=0.95, minWeight=0.05.
+	// A→B: 0.8 * 0.95 = 0.76 (survives)
+	// A→C: 0.03 * 0.95 = 0.0285 < 0.05 (deleted)
+	removed, err := store.DecayAssocWeights(ctx, ws, 0.95, 0.05)
+	if err != nil {
+		t.Fatalf("DecayAssocWeights: %v", err)
+	}
+	if removed != 1 {
+		t.Errorf("expected 1 edge removed, got %d", removed)
+	}
+
+	// Strong edge should survive with decayed weight.
+	wAB, _ = store.GetAssocWeight(ctx, ws, idA, idB)
+	if wAB == 0 {
+		t.Error("strong edge A→B should survive decay")
+	}
+	if wAB > 0.8 || wAB < 0.7 {
+		t.Errorf("expected A→B weight ~0.76, got %f", wAB)
+	}
+
+	// Weak edge should be gone.
+	wAC, _ = store.GetAssocWeight(ctx, ws, idA, idC)
+	if wAC != 0 {
+		t.Errorf("weak edge A→C should be deleted after decay, got weight %f", wAC)
+	}
+}

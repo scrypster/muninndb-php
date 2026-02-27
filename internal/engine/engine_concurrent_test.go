@@ -49,6 +49,65 @@ func TestWriteRaceCondition_ConcurrentVaultAccess(t *testing.T) {
 	}
 }
 
+// TestActivateSnapshotIsolation verifies that concurrent writes during an
+// in-flight Activate do not cause panics or data races. The snapshot ensures
+// all read phases see a consistent point-in-time view.
+func TestActivateSnapshotIsolation(t *testing.T) {
+	eng, cleanup := testEnv(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Seed a few engrams so Activate has data to work with.
+	for i := 0; i < 20; i++ {
+		_, _ = eng.Write(ctx, &mbp.WriteRequest{
+			Vault:   "snapshot-test",
+			Concept: "seed concept",
+			Content: "some content for snapshot isolation test",
+		})
+	}
+
+	var wg sync.WaitGroup
+	const writers = 5
+	const activators = 5
+
+	// Launch concurrent writers.
+	wg.Add(writers)
+	for w := 0; w < writers; w++ {
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 50; i++ {
+				_, _ = eng.Write(ctx, &mbp.WriteRequest{
+					Vault:   "snapshot-test",
+					Concept: "concurrent write",
+					Content: "written during activate",
+				})
+			}
+		}()
+	}
+
+	// Launch concurrent activators.
+	wg.Add(activators)
+	for a := 0; a < activators; a++ {
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 20; i++ {
+				resp, err := eng.Activate(ctx, &mbp.ActivateRequest{
+					Vault:      "snapshot-test",
+					Context:    []string{"seed concept"},
+					MaxResults: 5,
+				})
+				if err != nil {
+					continue
+				}
+				_ = resp
+			}
+		}()
+	}
+
+	wg.Wait()
+}
+
 // TestWriteContextCancellation_StopsJobSubmission verifies that concurrent
 // calls to Stop() and Write() do not cause panics. Writes may succeed or
 // return errors — the only invariant is no panic.

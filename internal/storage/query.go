@@ -44,7 +44,7 @@ func (ps *PebbleStore) RecentActive(ctx context.Context, wsPrefix [8]byte, topK 
 		upperBound[i] = 0xFF
 	}
 
-	iter, err := ps.db.NewIter(&pebble.IterOptions{
+	iter, err := ps.pebbleReader(ctx).NewIter(&pebble.IterOptions{
 		LowerBound: lowerBound,
 		UpperBound: upperBound,
 	})
@@ -355,7 +355,7 @@ func (ps *PebbleStore) EngramIDsByCreatedRange(ctx context.Context, wsPrefix [8]
 	}
 	upperKey := keys.EngramKey(wsPrefix, maxIDBytes)
 
-	iter, err := ps.db.NewIter(&pebble.IterOptions{
+	iter, err := ps.pebbleReader(ctx).NewIter(&pebble.IterOptions{
 		LowerBound: lowerKey,
 		UpperBound: upperKey,
 	})

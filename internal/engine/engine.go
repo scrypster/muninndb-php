@@ -976,6 +976,11 @@ func (e *Engine) ActivateWithStructuredFilter(ctx context.Context, req *mbp.Acti
 // activateCore is the shared implementation for Activate and ActivateWithStructuredFilter.
 // structuredFilter may be nil (plain Activate) or a non-nil filter value (structured query).
 func (e *Engine) activateCore(ctx context.Context, req *mbp.ActivateRequest, structuredFilter interface{}) (*mbp.ActivateResponse, error) {
+	// Pin a Pebble snapshot so all read phases see a consistent point-in-time view.
+	snap := e.store.NewSnapshot()
+	defer snap.Close()
+	ctx = storage.ContextWithSnapshot(ctx, snap)
+
 	// Resolve per-vault Plasticity config. nil authStore means use defaults (tests, bench).
 	var resolved auth.ResolvedPlasticity
 	if e.authStore != nil {
@@ -2027,7 +2032,7 @@ func (e *Engine) PruneVault(ctx context.Context, vaultName string) (int64, error
 }
 
 // runPruneWorker is a periodic background sweep that prunes vaults according to their
-// MaxEngrams and RetentionDays policies. Runs every 60s with ±5s jitter to spread load.
+// MaxEngrams, RetentionDays, and AssocDecayFactor policies. Runs every 60s with ±5s jitter.
 func (e *Engine) runPruneWorker() {
 	defer close(e.pruneDone)
 	jitter := time.Duration(rand.Intn(10)) * time.Second
@@ -2042,6 +2047,19 @@ func (e *Engine) runPruneWorker() {
 				if resolved.MaxEngrams > 0 || resolved.RetentionDays > 0 {
 					if _, err := e.PruneVault(e.stopCtx, vaultName); err != nil {
 						slog.Debug("vault prune failed", "vault", vaultName, "err", err)
+					}
+				}
+			}
+			for _, vaultName := range vaults {
+				resolved := e.resolveVaultPlasticity(vaultName)
+				if resolved.HebbianEnabled && resolved.AssocDecayFactor > 0 {
+					ws := e.store.ResolveVaultPrefix(vaultName)
+					removed, err := e.store.DecayAssocWeights(e.stopCtx, ws,
+						float64(resolved.AssocDecayFactor), resolved.AssocMinWeight)
+					if err != nil {
+						slog.Debug("assoc decay failed", "vault", vaultName, "err", err)
+					} else if removed > 0 {
+						slog.Info("assoc decay pruned edges", "vault", vaultName, "removed", removed)
 					}
 				}
 			}

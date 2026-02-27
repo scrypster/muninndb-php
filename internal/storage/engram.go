@@ -113,7 +113,7 @@ func (ps *PebbleStore) GetEngrams(ctx context.Context, wsPrefix [8]byte, ids []U
 		copy(upper, lastKey)
 	}
 
-	iter, err := ps.db.NewIter(&pebble.IterOptions{
+	iter, err := ps.pebbleReader(ctx).NewIter(&pebble.IterOptions{
 		LowerBound: lower,
 		UpperBound: upper,
 	})
@@ -179,9 +179,9 @@ func (ps *PebbleStore) GetMetadata(ctx context.Context, wsPrefix [8]byte, ids []
 			continue
 		}
 
-		// Slow path: read compact metadata key from Pebble.
+		// Slow path: read compact metadata key from Pebble (snapshot-aware).
 		key := keys.MetaKey(wsPrefix, [16]byte(id))
-		val, err := Get(ps.db, key)
+		val, err := getFromReader(ps.pebbleReader(ctx), key)
 		if err != nil {
 			return nil, fmt.Errorf("get metadata: %w", err)
 		}

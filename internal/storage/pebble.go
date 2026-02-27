@@ -86,7 +86,12 @@ func PrefixIterator(db *pebble.DB, prefix []byte) (*pebble.Iterator, error) {
 
 // Get retrieves a single key from the database.
 func Get(db *pebble.DB, key []byte) ([]byte, error) {
-	val, closer, err := db.Get(key)
+	return getFromReader(db, key)
+}
+
+// getFromReader retrieves a single key from any pebble.Reader (DB or Snapshot).
+func getFromReader(r pebble.Reader, key []byte) ([]byte, error) {
+	val, closer, err := r.Get(key)
 	if err != nil {
 		if err == pebble.ErrNotFound {
 			return nil, nil
@@ -95,7 +100,6 @@ func Get(db *pebble.DB, key []byte) ([]byte, error) {
 	}
 	defer closer.Close()
 
-	// Make a copy since the underlying slice may be reused
 	result := make([]byte, len(val))
 	copy(result, val)
 	return result, nil

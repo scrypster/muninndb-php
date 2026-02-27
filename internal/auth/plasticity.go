@@ -32,6 +32,10 @@ type PlasticityConfig struct {
 	MaxEngrams    *int     `json:"max_engrams,omitempty"`    // max engrams per vault; 0 = no limit
 	RetentionDays *float32 `json:"retention_days,omitempty"` // max age in days; 0 = no limit
 
+	// Association edge decay (applied each prune pass, ~60s)
+	AssocDecayFactor *float32 `json:"assoc_decay_factor,omitempty"` // multiplier per pass (e.g. 0.95 = 5% decay); 0 = disabled
+	AssocMinWeight   *float32 `json:"assoc_min_weight,omitempty"`   // edges below this are deleted (e.g. 0.05)
+
 	// Behavior mode controls how AI agents use memory
 	BehaviorMode         *string `json:"behavior_mode,omitempty"`          // "autonomous"|"prompted"|"selective"|"custom"
 	BehaviorInstructions *string `json:"behavior_instructions,omitempty"` // freeform text for "custom" mode
@@ -73,6 +77,9 @@ type ResolvedPlasticity struct {
 	// Pruning policy
 	MaxEngrams    int     `json:"max_engrams"`    // 0 = no limit
 	RetentionDays float32 `json:"retention_days"` // 0 = no limit
+	// Association edge decay
+	AssocDecayFactor float32 `json:"assoc_decay_factor"` // multiplier per prune pass; 0 = disabled
+	AssocMinWeight   float32 `json:"assoc_min_weight"`   // edges below this are deleted
 	// Behavior mode
 	BehaviorMode         string `json:"behavior_mode"`
 	BehaviorInstructions string `json:"behavior_instructions"`
@@ -100,8 +107,10 @@ type plasticityPreset struct {
 	PredictiveActivation bool
 	PASMaxInjections     int
 	MaxEngrams           int
-	RetentionDays     float32
-	BehaviorMode      string
+	RetentionDays        float32
+	AssocDecayFactor     float32
+	AssocMinWeight       float32
+	BehaviorMode         string
 	InlineEnrichment  string
 	EnrichmentEnabled bool
 }
@@ -125,6 +134,8 @@ var plasticityPresets = map[string]plasticityPreset{
 		PASMaxInjections:     5,
 		MaxEngrams:           0,
 		RetentionDays:        0,
+		AssocDecayFactor:     0.95,
+		AssocMinWeight:       0.05,
 		BehaviorMode:         "autonomous",
 		InlineEnrichment:     "caller_preferred",
 		EnrichmentEnabled:    true,
@@ -147,6 +158,8 @@ var plasticityPresets = map[string]plasticityPreset{
 		PASMaxInjections:     5,
 		MaxEngrams:           0,
 		RetentionDays:        0,
+		AssocDecayFactor:     0.95,
+		AssocMinWeight:       0.05,
 		BehaviorMode:         "autonomous",
 		InlineEnrichment:     "caller_preferred",
 		EnrichmentEnabled:    true,
@@ -169,6 +182,8 @@ var plasticityPresets = map[string]plasticityPreset{
 		PASMaxInjections:     0,
 		MaxEngrams:           0,
 		RetentionDays:        0,
+		AssocDecayFactor:     0,
+		AssocMinWeight:       0,
 		BehaviorMode:         "selective",
 		InlineEnrichment:     "caller_preferred",
 		EnrichmentEnabled:    true,
@@ -191,6 +206,8 @@ var plasticityPresets = map[string]plasticityPreset{
 		PASMaxInjections:     5,
 		MaxEngrams:           0,
 		RetentionDays:        0,
+		AssocDecayFactor:     0.98,
+		AssocMinWeight:       0.03,
 		BehaviorMode:         "autonomous",
 		InlineEnrichment:     "caller_preferred",
 		EnrichmentEnabled:    true,
@@ -228,6 +245,8 @@ func ResolvePlasticity(cfg *PlasticityConfig) ResolvedPlasticity {
 		PASMaxInjections:     p.PASMaxInjections,
 		MaxEngrams:           p.MaxEngrams,
 		RetentionDays:        p.RetentionDays,
+		AssocDecayFactor:     p.AssocDecayFactor,
+		AssocMinWeight:       p.AssocMinWeight,
 		BehaviorMode:         p.BehaviorMode,
 		InlineEnrichment:     p.InlineEnrichment,
 		EnrichmentEnabled:    p.EnrichmentEnabled,
@@ -333,6 +352,26 @@ func ResolvePlasticity(cfg *PlasticityConfig) ResolvedPlasticity {
 	}
 	if cfg.RetentionDays != nil && *cfg.RetentionDays >= 0 {
 		r.RetentionDays = *cfg.RetentionDays
+	}
+	if cfg.AssocDecayFactor != nil {
+		f := *cfg.AssocDecayFactor
+		if f < 0 {
+			f = 0
+		}
+		if f > 1 {
+			f = 1
+		}
+		r.AssocDecayFactor = f
+	}
+	if cfg.AssocMinWeight != nil {
+		w := *cfg.AssocMinWeight
+		if w < 0 {
+			w = 0
+		}
+		if w > 1 {
+			w = 1
+		}
+		r.AssocMinWeight = w
 	}
 	if cfg.BehaviorMode != nil {
 		if validBehaviorMode(*cfg.BehaviorMode) {

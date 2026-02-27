@@ -126,10 +126,10 @@ func (ps *PebbleStore) GetAssociations(ctx context.Context, wsPrefix [8]byte, id
 		return bytes.Compare(uncached[i][:], uncached[j][:]) < 0
 	})
 
-	// Phase 3: open ONE iterator covering the entire 0x03|wsPrefix range.
+	// Phase 3: open ONE iterator covering the entire 0x03|wsPrefix range (snapshot-aware).
 	lower := keys.AssocFwdRangeStart(wsPrefix)
 	upper := keys.AssocFwdRangeEnd(wsPrefix) // nil means unbounded (all-0xFF workspace)
-	iter, err := ps.db.NewIter(&pebble.IterOptions{
+	iter, err := ps.pebbleReader(ctx).NewIter(&pebble.IterOptions{
 		LowerBound: lower,
 		UpperBound: upper,
 	})
