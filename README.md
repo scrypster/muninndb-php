@@ -1,9 +1,11 @@
 # MuninnDB
 
-**Memory that strengthens with use, fades when unused, and pushes to you when it matters — accessible over MCP, REST, gRPC, or SDK.**
+**Memory that strengthens with use, fades when unused, and pushes to you when it matters** — accessible over MCP, REST, gRPC, or SDK.
+
+*Provisional patent filed Feb 26, 2026 on the core cognitive primitives (engine-native Ebbinghaus decay, Hebbian learning, Bayesian confidence, semantic triggers). This helps protect the project so we can keep it open and innovative for everyone.*
 
 [![CI](https://github.com/scrypster/muninndb/actions/workflows/ci.yml/badge.svg)](https://github.com/scrypster/muninndb/actions/workflows/ci.yml)
-[![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
+[![License](https://img.shields.io/badge/license-BSL%201.1-blue)](LICENSE)
 [![Go](https://img.shields.io/badge/go-1.22%2B-00ADD8)](https://go.dev)
 [![Status](https://img.shields.io/badge/status-alpha-orange)](https://github.com/scrypster/muninndb/releases)
 
@@ -300,6 +302,21 @@ composer require muninndb/client
 
 ---
 
+## License
+
+MuninnDB uses the **Business Source License 1.1** (BSL 1.1).
+
+- Free for individuals, hobbyists, researchers, and open-source projects.
+- Free for small organizations (<50 employees **and** <$5M revenue).
+- Free for all internal use.
+- **Commercial hosted/SaaS/DBaaS/managed services require a license from the author.**
+- Automatically becomes Apache 2.0 on February 26, 2030.
+- Provisional patent filed Feb 26, 2026 on the core cognitive engine.
+
+Full terms: [LICENSE](LICENSE). See also [CLA](CLA.md) for contributors.
+
+---
+
 ## Configuration
 
 MuninnDB works out of the box with no configuration. The bundled local embedder is included — offline, no API key, no setup.
@@ -390,4 +407,4 @@ The bundled local embedder uses ONNX Runtime, which requires the Visual C++ Redi
 
 *Named after Muninn — one of Odin's two ravens, whose name means "memory" in Old Norse. Muninn flies across the nine worlds and returns what has been forgotten.*
 
-Built by [MJ Bonanno](https://scrypster.com) · [muninndb.com](https://muninndb.com) · Apache 2.0
+Built by [MJ Bonanno](https://scrypster.com) · [muninndb.com](https://muninndb.com) · BSL 1.1
