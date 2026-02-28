@@ -31,6 +31,7 @@ import (
 	"github.com/scrypster/muninndb/internal/logging"
 	"github.com/scrypster/muninndb/internal/mcp"
 	"github.com/scrypster/muninndb/internal/metrics"
+	"github.com/scrypster/muninndb/internal/metrics/latency"
 	"github.com/scrypster/muninndb/internal/storage/migrate"
 	"github.com/scrypster/muninndb/internal/plugin"
 	embedpkg "github.com/scrypster/muninndb/internal/plugin/embed"
@@ -673,6 +674,9 @@ func runServer() {
 
 	eng.SetTransitionWorker(transitionWorkerImpl)
 
+	latTracker := latency.New()
+	eng.SetLatencyTracker(latTracker)
+
 	// Wire cluster role change callbacks now that the engine exists.
 	if coordinator != nil {
 		hebbianStore := cognitive.NewHebbianStoreAdapter(store)
@@ -859,6 +863,13 @@ func runServer() {
 		eng.SetOnWrite(retroProcessor.Notify)
 		slog.Info("retroactive embed processor started")
 	}
+
+	// Wire processors into engine for observability stats.
+	var obsProcs []*plugin.RetroactiveProcessor
+	if retroProcessor != nil {
+		obsProcs = append(obsProcs, retroProcessor)
+	}
+	eng.SetRetroactiveProcessors(obsProcs...)
 
 	// Start servers
 	errCh := make(chan error, 3)
