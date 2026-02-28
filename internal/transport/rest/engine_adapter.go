@@ -274,6 +274,14 @@ func (w *RESTEngineWrapper) Checkpoint(destDir string) error {
 	return w.engine.Checkpoint(destDir)
 }
 
+func (w *RESTEngineWrapper) Observability(ctx context.Context, version string, uptimeSeconds int64) (*engine.ObservabilitySnapshot, error) {
+	return w.engine.Observability(ctx, version, uptimeSeconds)
+}
+
+func (w *RESTEngineWrapper) GetProcessorStats() []plugin.RetroactiveStats {
+	return w.engine.GetProcessorStats()
+}
+
 // lifecycleStateLabel returns a human-readable label for a storage.LifecycleState.
 func lifecycleStateLabel(s storage.LifecycleState) string {
 	switch s {

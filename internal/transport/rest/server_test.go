@@ -17,8 +17,10 @@ import (
 	"github.com/cockroachdb/pebble"
 	"github.com/scrypster/muninndb/internal/cognitive"
 	"github.com/scrypster/muninndb/internal/config"
+	"github.com/scrypster/muninndb/internal/engine"
 	"github.com/scrypster/muninndb/internal/engine/trigger"
 	"github.com/scrypster/muninndb/internal/engine/vaultjob"
+	"github.com/scrypster/muninndb/internal/plugin"
 	"github.com/scrypster/muninndb/internal/replication"
 	"github.com/scrypster/muninndb/internal/storage"
 	mbp "github.com/scrypster/muninndb/internal/transport/mbp"
@@ -254,6 +256,14 @@ func (m *MockEngine) StartReembedVault(ctx context.Context, vaultName, modelName
 
 func (m *MockEngine) CountEmbedded(ctx context.Context) int64 {
 	return 42
+}
+
+func (m *MockEngine) Observability(ctx context.Context, version string, uptimeSeconds int64) (*engine.ObservabilitySnapshot, error) {
+	return &engine.ObservabilitySnapshot{}, nil
+}
+
+func (m *MockEngine) GetProcessorStats() []plugin.RetroactiveStats {
+	return nil
 }
 
 // backupMockEngine embeds MockEngine but creates a real Pebble checkpoint so

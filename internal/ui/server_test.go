@@ -13,9 +13,11 @@ import (
 	"time"
 
 	"github.com/scrypster/muninndb/internal/cognitive"
+	"github.com/scrypster/muninndb/internal/engine"
 	"github.com/scrypster/muninndb/internal/engine/trigger"
 	"github.com/scrypster/muninndb/internal/engine/vaultjob"
 	"github.com/scrypster/muninndb/internal/logging"
+	"github.com/scrypster/muninndb/internal/plugin"
 	"github.com/scrypster/muninndb/internal/storage"
 	mbp "github.com/scrypster/muninndb/internal/transport/mbp"
 	"github.com/scrypster/muninndb/internal/transport/rest"
@@ -154,6 +156,14 @@ func (m *mockEngine) StartReembedVault(ctx context.Context, vaultName, modelName
 
 func (m *mockEngine) CountEmbedded(ctx context.Context) int64 {
 	return 0
+}
+
+func (m *mockEngine) Observability(ctx context.Context, version string, uptimeSeconds int64) (*engine.ObservabilitySnapshot, error) {
+	return &engine.ObservabilitySnapshot{}, nil
+}
+
+func (m *mockEngine) GetProcessorStats() []plugin.RetroactiveStats {
+	return nil
 }
 
 func makeMockFS() fs.FS {

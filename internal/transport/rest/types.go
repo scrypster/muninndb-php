@@ -6,8 +6,10 @@ import (
 	"time"
 
 	"github.com/scrypster/muninndb/internal/cognitive"
+	"github.com/scrypster/muninndb/internal/engine"
 	"github.com/scrypster/muninndb/internal/engine/trigger"
 	"github.com/scrypster/muninndb/internal/engine/vaultjob"
+	"github.com/scrypster/muninndb/internal/plugin"
 	"github.com/scrypster/muninndb/internal/storage"
 	mbp "github.com/scrypster/muninndb/internal/transport/mbp"
 )
@@ -107,6 +109,10 @@ type EngineAPI interface {
 	StartReembedVault(ctx context.Context, vaultName, modelName string) (*vaultjob.Job, error)
 	// CountEmbedded returns the number of engrams with the DigestEmbed flag set.
 	CountEmbedded(ctx context.Context) int64
+	// Observability returns the full system observability snapshot.
+	Observability(ctx context.Context, version string, uptimeSeconds int64) (*engine.ObservabilitySnapshot, error)
+	// GetProcessorStats returns stats for all retroactive processors.
+	GetProcessorStats() []plugin.RetroactiveStats
 	// Checkpoint creates a Pebble checkpoint (point-in-time snapshot) at destDir.
 	Checkpoint(destDir string) error
 
