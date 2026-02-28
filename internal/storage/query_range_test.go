@@ -81,6 +81,94 @@ func TestListByStateInRange(t *testing.T) {
 	}
 }
 
+// TestCountEngrams writes 3 engrams and verifies CountEngrams returns at least 3.
+func TestCountEngrams(t *testing.T) {
+	db := openTestPebble(t)
+	store := NewPebbleStore(db, PebbleStoreConfig{CacheSize: 100})
+	ws := store.VaultPrefix("count-engrams-test")
+	ctx := context.Background()
+
+	for i := 0; i < 3; i++ {
+		if _, err := store.WriteEngram(ctx, ws, &Engram{
+			Concept: "concept",
+			Content: "content",
+		}); err != nil {
+			t.Fatalf("WriteEngram[%d]: %v", i, err)
+		}
+	}
+
+	count, err := store.CountEngrams(ctx)
+	if err != nil {
+		t.Fatalf("CountEngrams: %v", err)
+	}
+	if count < 3 {
+		t.Errorf("CountEngrams: got %d, want >= 3", count)
+	}
+}
+
+// TestEngramIDsByCreatedRange writes engrams at distinct timestamps and verifies
+// that EngramIDsByCreatedRange returns only those within the specified window.
+func TestEngramIDsByCreatedRange(t *testing.T) {
+	db := openTestPebble(t)
+	store := NewPebbleStore(db, PebbleStoreConfig{CacheSize: 100})
+	ws := store.VaultPrefix("ids-by-range-test")
+	ctx := context.Background()
+
+	now := time.Now()
+	tOld := now.Add(-3 * time.Hour)
+	tIn1 := now.Add(-2 * time.Hour)
+	tIn2 := now.Add(-1 * time.Hour)
+
+	// Write one engram outside the window.
+	if _, err := store.WriteEngram(ctx, ws, &Engram{
+		Concept:   "old",
+		Content:   "outside window",
+		CreatedAt: tOld,
+	}); err != nil {
+		t.Fatalf("WriteEngram (old): %v", err)
+	}
+
+	// Write two engrams inside the window.
+	id1, err := store.WriteEngram(ctx, ws, &Engram{
+		Concept:   "in-window-1",
+		Content:   "first in window",
+		CreatedAt: tIn1,
+	})
+	if err != nil {
+		t.Fatalf("WriteEngram (in1): %v", err)
+	}
+	id2, err := store.WriteEngram(ctx, ws, &Engram{
+		Concept:   "in-window-2",
+		Content:   "second in window",
+		CreatedAt: tIn2,
+	})
+	if err != nil {
+		t.Fatalf("WriteEngram (in2): %v", err)
+	}
+
+	since := tIn1.Add(-time.Millisecond)
+	until := tIn2.Add(time.Millisecond)
+
+	ids, err := store.EngramIDsByCreatedRange(ctx, ws, since, until, 100)
+	if err != nil {
+		t.Fatalf("EngramIDsByCreatedRange: %v", err)
+	}
+	if len(ids) != 2 {
+		t.Errorf("EngramIDsByCreatedRange returned %d IDs, want 2", len(ids))
+	}
+
+	found := make(map[ULID]bool)
+	for _, id := range ids {
+		found[id] = true
+	}
+	if !found[id1] {
+		t.Errorf("id1 (%v) not returned by EngramIDsByCreatedRange", id1)
+	}
+	if !found[id2] {
+		t.Errorf("id2 (%v) not returned by EngramIDsByCreatedRange", id2)
+	}
+}
+
 // TestLowestRelevanceIDs writes 5 engrams with distinct relevance scores, calls
 // LowestRelevanceIDs(ctx, ws, 3), and verifies that 3 IDs are returned and they
 // correspond to the 3 lowest-relevance engrams.

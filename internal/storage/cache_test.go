@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"testing"
 )
 
@@ -99,4 +100,62 @@ func TestCacheConcurrentAccess(t *testing.T) {
 		<-done
 	}
 	// No race conditions = test passes
+}
+
+// TestLastAccessNs verifies that LastAccessNs returns 0 for a non-cached entry
+// and a positive timestamp after the entry is accessed via Get.
+func TestLastAccessNs(t *testing.T) {
+	c := NewL1Cache(100)
+	id := NewULID()
+	var pfx [8]byte
+
+	// Not cached — must return 0.
+	if ns := c.LastAccessNs(pfx, id); ns != 0 {
+		t.Errorf("LastAccessNs on uncached entry: got %d, want 0", ns)
+	}
+
+	eng := &Engram{ID: id, Concept: "access-test", Content: "body", Confidence: 1.0, Stability: 30}
+	c.Set(pfx, id, eng)
+
+	// After Set, LastAccessNs is set by Set itself.
+	if ns := c.LastAccessNs(pfx, id); ns <= 0 {
+		t.Errorf("LastAccessNs after Set: got %d, want > 0", ns)
+	}
+
+	// After Get, LastAccessNs should be updated (still > 0).
+	c.Get(pfx, id)
+	if ns := c.LastAccessNs(pfx, id); ns <= 0 {
+		t.Errorf("LastAccessNs after Get: got %d, want > 0", ns)
+	}
+}
+
+// TestEngramLastAccessNs verifies EngramLastAccessNs returns 0 when an engram
+// is not in the L1 cache and a positive value after GetEngram populates the cache.
+func TestEngramLastAccessNs(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	ws := store.VaultPrefix("last-access-vault")
+
+	id, err := store.WriteEngram(ctx, ws, &Engram{
+		Concept: "last-access-concept",
+		Content: "last-access-content",
+	})
+	if err != nil {
+		t.Fatalf("WriteEngram: %v", err)
+	}
+
+	// Not yet in cache — expect 0.
+	if ns := store.EngramLastAccessNs(ws, id); ns != 0 {
+		t.Errorf("EngramLastAccessNs before GetEngram: got %d, want 0", ns)
+	}
+
+	// GetEngram populates the L1 cache.
+	if _, err := store.GetEngram(ctx, ws, id); err != nil {
+		t.Fatalf("GetEngram: %v", err)
+	}
+
+	// Now the cache entry exists — expect > 0.
+	if ns := store.EngramLastAccessNs(ws, id); ns <= 0 {
+		t.Errorf("EngramLastAccessNs after GetEngram: got %d, want > 0", ns)
+	}
 }

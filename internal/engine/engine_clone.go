@@ -38,7 +38,7 @@ func (e *Engine) StartClone(ctx context.Context, sourceVault, newName string) (*
 		return nil, fmt.Errorf("start clone: source vault %q: %w", sourceVault, ErrVaultNotFound)
 	}
 	if targetExists {
-		return nil, fmt.Errorf("start clone: target vault %q already exists", newName)
+		return nil, fmt.Errorf("start clone: target vault %q: %w", newName, ErrVaultNameCollision)
 	}
 
 	// Reserve the target vault name before releasing the mutex.

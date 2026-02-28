@@ -58,7 +58,7 @@ func (e *Engine) StartImport(ctx context.Context, vaultName, embedderModel strin
 	for _, n := range names {
 		if n == vaultName {
 			e.vaultOpsMu.Unlock()
-			return nil, fmt.Errorf("start import: vault %q already exists", vaultName)
+			return nil, fmt.Errorf("start import: vault %q: %w", vaultName, ErrVaultNameCollision)
 		}
 	}
 

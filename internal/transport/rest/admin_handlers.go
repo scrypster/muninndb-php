@@ -600,6 +600,10 @@ func (s *Server) handleCloneVault(w http.ResponseWriter, r *http.Request) {
 			s.sendError(r, w, http.StatusNotFound, ErrVaultNotFound, err.Error())
 			return
 		}
+		if errors.Is(err, engine.ErrVaultNameCollision) {
+			s.sendError(r, w, http.StatusConflict, ErrVaultForbidden, err.Error())
+			return
+		}
 		s.sendError(r, w, http.StatusInternalServerError, ErrStorageError, err.Error())
 		return
 	}
@@ -715,6 +719,10 @@ func (s *Server) handleImportVault(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, engine.ErrVaultNotFound) {
 			s.sendError(r, w, http.StatusNotFound, ErrVaultNotFound, err.Error())
+			return
+		}
+		if errors.Is(err, engine.ErrVaultNameCollision) {
+			s.sendError(r, w, http.StatusConflict, ErrVaultForbidden, err.Error())
 			return
 		}
 		s.sendError(r, w, http.StatusInternalServerError, ErrStorageError, err.Error())
