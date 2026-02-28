@@ -9,26 +9,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+---
+
+## [0.2.6] - 2026-02-28
+
 ### Added
-- Vault rename — metadata-only rename with full test coverage
-- Native TLS support via `--tls-cert` and `--tls-key` flags on all client-facing servers
+- Native TLS support via `--tls-cert` and `--tls-key` flags on all 5 client-facing servers
 - OpenAPI 3.0 spec served at `GET /api/openapi.yaml` (60+ routes documented)
 - API key TTL — optional `expires` field on key creation (`"90d"`, `"1y"`, RFC3339)
-- Query timeout enforcement — 30s activation deadline with BFS short-circuit (configurable via `MUNINN_ACTIVATE_TIMEOUT`)
+- Query timeout enforcement — 30s activation deadline with BFS short-circuit (`MUNINN_ACTIVATE_TIMEOUT`)
+- Automated backup scheduler (`--backup-interval`, `--backup-dir`, `--backup-retain`)
+- Vault rename — metadata-only rename across storage, engine, REST, CLI, and Web UI
+- Contradiction resolution — Keep A, Keep B, Merge, Dismiss actions in Web UI
+- CLI: `muninn vault create`, `muninn api-key create|list|revoke`, `muninn admin change-password`
+- Web UI: engram edit/evolve, new vault creation, manual link/association creation
+- Web UI: vault export/import, FTS reindex, lifecycle state transitions
+- Web UI: explain scores ("Why?" button), consolidate, record decision modals
+- Web UI: memory filtering and sorting (created/accessed, tags, state, confidence, date range)
+- Web UI: keyboard shortcuts (`/` search, `n` new, `?` help), tooltips, prev/next navigation
+- Web UI: per-engram embedding status indicator, API key expiry column, backup trigger
+- Graph: orphan node filtering, zoom controls (+/−/Fit)
 - Observability tab in Web UI with live polling
-- `GET /api/admin/observability` REST endpoint
-- `Engine.Observability()` full system snapshot assembler
-- Per-vault per-operation ring-buffer latency tracker with percentile reporting
+- `GET /api/admin/observability` REST endpoint with full system snapshot
+- Per-vault latency tracker with percentile reporting (p50/p95/p99)
 - Vault-labeled Prometheus histograms for write/activate/read latency
-- Write/Activate/Read operations instrumented with latency tracking and Prometheus
-- `vault reembed` command (CLI, REST, Web UI) to re-embed all memories in a vault using the current embedder
-- CHANGELOG.md following Keep a Changelog format
-- Encryption at rest documentation (LUKS, FileVault, BitLocker, Docker)
-- CI OpenAPI spec validation with Redocly lint
-- PR template with release checklist
-- Hookify rules for API spec and SDK drift detection
+- `vault reembed` command (CLI, REST, Web UI)
+- CHANGELOG.md, encryption at rest documentation, CI OpenAPI spec validation
+- PR template with release checklist, hookify drift detection rules
+- Branch protection on main (PR + approval + CI) and develop (CI)
+- Node SDK publish workflow (OIDC trusted publishing)
+- Patent notice (U.S. Provisional Patent Application No. 63/991,402)
 
 ### Fixed
+- ListEngrams now uses passive Pebble scan — no Hebbian side effects on browse
+- Explain runs in observe mode — no cognitive mutations on "Why?" clicks
+- Session click fetches full engram data + updates URL hash
+- Atomic auth config rename (Pebble batch instead of separate Set+Delete)
+- Sentinel error `ErrVaultNameCollision` replaces fragile string matching across clone/import/rename
+- `parseKeyExpiry` rejects past dates at creation time
+- Backup test data race (atomic counter for stubCheckpointer)
 - Windowed average calculation in latency tracker
 - Unconditional Prometheus metric recording and reembed vault response handling
 - MCP vault default fix
@@ -142,7 +161,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Comparison Links
 
-[Unreleased]: https://github.com/scrypster/muninndb/compare/v0.2.5...HEAD
+[Unreleased]: https://github.com/scrypster/muninndb/compare/v0.2.6...HEAD
+[0.2.6]: https://github.com/scrypster/muninndb/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/scrypster/muninndb/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/scrypster/muninndb/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/scrypster/muninndb/compare/v0.2.2...v0.2.3
