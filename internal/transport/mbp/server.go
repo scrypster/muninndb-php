@@ -3,6 +3,7 @@ package mbp
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"fmt"
 	"log/slog"
 	"net"
@@ -35,15 +36,18 @@ type Server struct {
 	shutdown  chan struct{}
 	wg        sync.WaitGroup
 	shutdownM sync.Mutex
+	tlsConfig *tls.Config // nil = plain TCP
 }
 
 // NewServer creates a new MBP server.
-func NewServer(addr string, engine EngineAPI, authStore *auth.Store) *Server {
+// tlsConfig, if non-nil, wraps the TCP listener with TLS.
+func NewServer(addr string, engine EngineAPI, authStore *auth.Store, tlsConfig *tls.Config) *Server {
 	return &Server{
 		addr:      addr,
 		engine:    engine,
 		authStore: authStore,
 		shutdown:  make(chan struct{}),
+		tlsConfig: tlsConfig,
 	}
 }
 
@@ -52,6 +56,10 @@ func (s *Server) Serve(ctx context.Context) error {
 	ln, err := net.Listen("tcp", s.addr)
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", s.addr, err)
+	}
+	if s.tlsConfig != nil {
+		ln = tls.NewListener(ln, s.tlsConfig)
+		slog.Info("mbp: TLS enabled", "addr", ln.Addr().String())
 	}
 	slog.Info("mbp: listening", "addr", ln.Addr().String())
 	s.listener = ln
@@ -107,9 +115,14 @@ func (s *Server) acceptLoop(ctx context.Context) {
 		default:
 		}
 
-		// Set accept deadline to allow checking shutdown
+		// Set accept deadline to allow checking shutdown.
+		// Use a defensive type assertion: a TLS listener wraps the TCP listener
+		// and does not implement *net.TCPListener directly, so we skip the
+		// deadline if the underlying type is not accessible.
 		if deadline, ok := ctx.Deadline(); ok {
-			s.listener.(*net.TCPListener).SetDeadline(deadline)
+			if tc, ok := s.listener.(*net.TCPListener); ok {
+				tc.SetDeadline(deadline)
+			}
 		}
 
 		conn, err := s.listener.Accept()

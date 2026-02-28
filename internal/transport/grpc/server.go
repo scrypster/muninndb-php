@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"log/slog"
 	"net"
@@ -13,6 +14,7 @@ import (
 	pb "github.com/scrypster/muninndb/proto/gen/go/muninn/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -40,11 +42,13 @@ type Server struct {
 	engine    EngineAPI
 	authStore *auth.Store
 	gs        *grpc.Server
+	tlsConfig *tls.Config // nil = plain TCP
 }
 
 // NewServer creates a new gRPC server.
 // authStore is required and used to validate API keys on every inbound RPC.
-func NewServer(addr string, engine EngineAPI, authStore *auth.Store) *Server {
+// tlsConfig, if non-nil, enables TLS using gRPC transport credentials.
+func NewServer(addr string, engine EngineAPI, authStore *auth.Store, tlsConfig *tls.Config) *Server {
 	kasp := keepalive.ServerParameters{
 		Time:              10 * time.Second, // seconds, ping interval
 		Timeout:           5 * time.Second,  // seconds, ping timeout
@@ -56,6 +60,7 @@ func NewServer(addr string, engine EngineAPI, authStore *auth.Store) *Server {
 		addr:      addr,
 		engine:    engine,
 		authStore: authStore,
+		tlsConfig: tlsConfig,
 	}
 
 	opts := []grpc.ServerOption{
@@ -63,6 +68,10 @@ func NewServer(addr string, engine EngineAPI, authStore *auth.Store) *Server {
 		grpc.KeepaliveParams(kasp),
 		grpc.UnaryInterceptor(server.authUnaryInterceptor),
 		grpc.StreamInterceptor(server.authStreamInterceptor),
+	}
+	if tlsConfig != nil {
+		opts = append(opts, grpc.Creds(credentials.NewTLS(tlsConfig)))
+		slog.Info("grpc: TLS enabled", "addr", addr)
 	}
 
 	gs := grpc.NewServer(opts...)

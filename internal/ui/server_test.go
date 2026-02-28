@@ -180,7 +180,7 @@ func makeMockFS() fs.FS {
 func TestNewServer(t *testing.T) {
 	webFS := makeMockFS()
 	eng := &mockEngine{}
-	srv, err := ui.NewServer(webFS, eng, http.NotFoundHandler(), nil, nil, logging.NewRingBuffer(10, nil))
+	srv, err := ui.NewServer(webFS, eng, http.NotFoundHandler(), nil, nil, logging.NewRingBuffer(10, nil), nil)
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
@@ -192,7 +192,7 @@ func TestNewServer(t *testing.T) {
 func TestSPAHandler(t *testing.T) {
 	webFS := makeMockFS()
 	eng := &mockEngine{}
-	srv, err := ui.NewServer(webFS, eng, http.NotFoundHandler(), nil, nil, logging.NewRingBuffer(10, nil))
+	srv, err := ui.NewServer(webFS, eng, http.NotFoundHandler(), nil, nil, logging.NewRingBuffer(10, nil), nil)
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
@@ -214,7 +214,7 @@ func TestSPAHandler(t *testing.T) {
 func TestStaticHandler(t *testing.T) {
 	webFS := makeMockFS()
 	eng := &mockEngine{}
-	srv, err := ui.NewServer(webFS, eng, http.NotFoundHandler(), nil, nil, logging.NewRingBuffer(10, nil))
+	srv, err := ui.NewServer(webFS, eng, http.NotFoundHandler(), nil, nil, logging.NewRingBuffer(10, nil), nil)
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
@@ -232,7 +232,7 @@ func TestSPAHandlerNonRoot(t *testing.T) {
 	// All non-static paths should serve index.html (SPA catch-all)
 	webFS := makeMockFS()
 	eng := &mockEngine{}
-	srv, err := ui.NewServer(webFS, eng, http.NotFoundHandler(), nil, nil, logging.NewRingBuffer(10, nil))
+	srv, err := ui.NewServer(webFS, eng, http.NotFoundHandler(), nil, nil, logging.NewRingBuffer(10, nil), nil)
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
@@ -256,7 +256,7 @@ func TestSSEResponseHeaders(t *testing.T) {
 	// Test SSE headers using a real httptest server (needs actual streaming)
 	webFS := makeMockFS()
 	eng := &mockEngine{}
-	srv, err := ui.NewServer(webFS, eng, http.NotFoundHandler(), nil, nil, logging.NewRingBuffer(10, nil))
+	srv, err := ui.NewServer(webFS, eng, http.NotFoundHandler(), nil, nil, logging.NewRingBuffer(10, nil), nil)
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
@@ -297,7 +297,7 @@ func TestSSEResponseHeaders(t *testing.T) {
 func TestServerStartStop(t *testing.T) {
 	webFS := makeMockFS()
 	eng := &mockEngine{}
-	srv, err := ui.NewServer(webFS, eng, http.NotFoundHandler(), nil, nil, logging.NewRingBuffer(10, nil))
+	srv, err := ui.NewServer(webFS, eng, http.NotFoundHandler(), nil, nil, logging.NewRingBuffer(10, nil), nil)
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
@@ -323,7 +323,7 @@ func TestSPAHandlerMissingIndex(t *testing.T) {
 		"templates/.keep":     &fstest.MapFile{Data: []byte("")},
 	}
 	eng := &mockEngine{}
-	srv, err := ui.NewServer(badFS, eng, http.NotFoundHandler(), nil, nil, logging.NewRingBuffer(10, nil))
+	srv, err := ui.NewServer(badFS, eng, http.NotFoundHandler(), nil, nil, logging.NewRingBuffer(10, nil), nil)
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
@@ -354,7 +354,7 @@ func TestHandleLogs_ReturnsSnapshot(t *testing.T) {
 
 	webFS := makeMockFS()
 	eng := &mockEngine{}
-	srv, err := ui.NewServer(webFS, eng, http.NotFoundHandler(), nil, nil, rb)
+	srv, err := ui.NewServer(webFS, eng, http.NotFoundHandler(), nil, nil, rb, nil)
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}

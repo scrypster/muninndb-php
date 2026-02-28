@@ -1,0 +1,3308 @@
+openapi: "3.0.3"
+info:
+  title: MuninnDB API
+  version: "0.2.5"
+  description: "Cognitive memory engine with associative recall, Hebbian reinforcement, and semantic search."
+  license:
+    name: BSL 1.1
+
+servers:
+  - url: http://localhost:8475
+
+security:
+  - BearerAuth: []
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: "API key issued via POST /api/admin/keys. Pass as Authorization: Bearer <token>."
+    AdminSession:
+      type: apiKey
+      in: cookie
+      name: muninn_session
+      description: "Cookie-based admin session for /api/admin/* endpoints."
+    ClusterToken:
+      type: http
+      scheme: bearer
+      description: "Bearer token for /v1/cluster/* and /v1/replication/* endpoints."
+
+  schemas:
+
+    # ── Core write/read ─────────────────────────────────────────────────────
+
+    WriteRequest:
+      type: object
+      required: [concept, content]
+      properties:
+        concept:
+          type: string
+          description: "Short label / title for the engram."
+        content:
+          type: string
+          description: "Full textual content to store."
+        tags:
+          type: array
+          items:
+            type: string
+        confidence:
+          type: number
+          format: float
+          default: 0
+        stability:
+          type: number
+          format: float
+          default: 0
+        created_at:
+          type: string
+          format: date-time
+          nullable: true
+        vault:
+          type: string
+          default: "default"
+        idempotent_id:
+          type: string
+          description: "Caller-assigned deduplication key."
+        memory_type:
+          type: integer
+          format: uint8
+        type_label:
+          type: string
+        summary:
+          type: string
+          description: "Pre-computed summary (bypasses background enrichment)."
+        entities:
+          type: array
+          items:
+            $ref: "#/components/schemas/InlineEntity"
+        relationships:
+          type: array
+          items:
+            $ref: "#/components/schemas/InlineRelationship"
+
+    InlineEntity:
+      type: object
+      properties:
+        name:
+          type: string
+        type:
+          type: string
+
+    InlineRelationship:
+      type: object
+      properties:
+        target_id:
+          type: string
+        relation:
+          type: string
+        weight:
+          type: number
+          format: float
+
+    WriteResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          description: "ULID assigned to the new engram."
+        created_at:
+          type: integer
+          format: int64
+          description: "Unix timestamp (nanoseconds)."
+
+    BatchWriteRequest:
+      type: array
+      items:
+        $ref: "#/components/schemas/WriteRequest"
+
+    BatchWriteResponse:
+      type: object
+      properties:
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/WriteResponse"
+        errors:
+          type: array
+          items:
+            type: string
+            nullable: true
+
+    ReadResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        concept:
+          type: string
+        content:
+          type: string
+        confidence:
+          type: number
+          format: float
+        relevance:
+          type: number
+          format: float
+        stability:
+          type: number
+          format: float
+        access_count:
+          type: integer
+          format: int64
+        tags:
+          type: array
+          items:
+            type: string
+        state:
+          type: integer
+          format: uint8
+        created_at:
+          type: integer
+          format: int64
+        updated_at:
+          type: integer
+          format: int64
+        last_access:
+          type: integer
+          format: int64
+        summary:
+          type: string
+        key_points:
+          type: array
+          items:
+            type: string
+        memory_type:
+          type: integer
+          format: uint8
+        type_label:
+          type: string
+        classification:
+          type: integer
+          format: int32
+
+    # ── Activate ─────────────────────────────────────────────────────────────
+
+    Weights:
+      type: object
+      properties:
+        semantic_similarity:
+          type: number
+          format: float
+        full_text_relevance:
+          type: number
+          format: float
+        decay_factor:
+          type: number
+          format: float
+        hebbian_boost:
+          type: number
+          format: float
+        access_frequency:
+          type: number
+          format: float
+        recency:
+          type: number
+          format: float
+        use_cgdn:
+          type: boolean
+        cgdn_alpha:
+          type: number
+          format: float
+        cgdn_beta:
+          type: number
+          format: float
+        cgdn_power:
+          type: number
+          format: float
+        use_actr:
+          type: boolean
+        actr_decay:
+          type: number
+          format: float
+        actr_heb_scale:
+          type: number
+          format: float
+        disable_actr:
+          type: boolean
+
+    Filter:
+      type: object
+      properties:
+        field:
+          type: string
+        op:
+          type: string
+        value: {}
+
+    ActivateRequest:
+      type: object
+      required: [context]
+      properties:
+        context:
+          type: array
+          items:
+            type: string
+          description: "Query terms / phrases for semantic recall."
+        threshold:
+          type: number
+          format: float
+          default: 0.5
+        max_results:
+          type: integer
+          default: 10
+        max_hops:
+          type: integer
+          default: 0
+        include_why:
+          type: boolean
+        weights:
+          $ref: "#/components/schemas/Weights"
+        filters:
+          type: array
+          items:
+            $ref: "#/components/schemas/Filter"
+        vault:
+          type: string
+          default: "default"
+        brief_mode:
+          type: string
+          enum: ["", "extractive", "llm", "auto"]
+          default: "auto"
+        disable_hops:
+          type: boolean
+        profile:
+          type: string
+          enum: ["", "default", "causal", "confirmatory", "adversarial", "structural"]
+        mode:
+          type: string
+          enum: ["", "semantic", "recent", "balanced", "deep"]
+
+    ScoreComponents:
+      type: object
+      properties:
+        semantic_similarity:
+          type: number
+          format: float
+        full_text_relevance:
+          type: number
+          format: float
+        decay_factor:
+          type: number
+          format: float
+        hebbian_boost:
+          type: number
+          format: float
+        transition_boost:
+          type: number
+          format: float
+        access_frequency:
+          type: number
+          format: float
+        recency:
+          type: number
+          format: float
+        raw:
+          type: number
+          format: float
+        final:
+          type: number
+          format: float
+
+    ActivationItem:
+      type: object
+      properties:
+        id:
+          type: string
+        concept:
+          type: string
+        content:
+          type: string
+        score:
+          type: number
+          format: float
+        confidence:
+          type: number
+          format: float
+        score_components:
+          $ref: "#/components/schemas/ScoreComponents"
+        why:
+          type: string
+        hop_path:
+          type: array
+          items:
+            type: string
+        dormant:
+          type: boolean
+
+    BriefSentence:
+      type: object
+      properties:
+        engram_id:
+          type: string
+        text:
+          type: string
+        score:
+          type: number
+          format: double
+
+    ActivateResponse:
+      type: object
+      properties:
+        query_id:
+          type: string
+        total_found:
+          type: integer
+        activations:
+          type: array
+          items:
+            $ref: "#/components/schemas/ActivationItem"
+        latency_ms:
+          type: number
+          format: double
+        frame:
+          type: integer
+        total_frames:
+          type: integer
+        brief:
+          type: array
+          items:
+            $ref: "#/components/schemas/BriefSentence"
+
+    # ── Link ─────────────────────────────────────────────────────────────────
+
+    LinkRequest:
+      type: object
+      required: [source_id, target_id, rel_type]
+      properties:
+        source_id:
+          type: string
+        target_id:
+          type: string
+        rel_type:
+          type: integer
+          format: int32
+        weight:
+          type: number
+          format: float
+        vault:
+          type: string
+          default: "default"
+
+    LinkResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+
+    # ── Forget ───────────────────────────────────────────────────────────────
+
+    ForgetResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+
+    # ── Stats ────────────────────────────────────────────────────────────────
+
+    CoherenceResult:
+      type: object
+      properties:
+        score:
+          type: number
+          format: double
+        orphan_ratio:
+          type: number
+          format: double
+        contradiction_density:
+          type: number
+          format: double
+        duplication_pressure:
+          type: number
+          format: double
+        temporal_variance:
+          type: number
+          format: double
+        total_engrams:
+          type: integer
+          format: int64
+
+    StatResponse:
+      type: object
+      properties:
+        engramCount:
+          type: integer
+          format: int64
+        vaultCount:
+          type: integer
+        indexSize:
+          type: integer
+          format: int64
+        storageBytes:
+          type: integer
+          format: int64
+        coherence:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/CoherenceResult"
+
+    # ── Health / Ready ───────────────────────────────────────────────────────
+
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        version:
+          type: string
+        uptime_seconds:
+          type: integer
+          format: int64
+        db_writable:
+          type: boolean
+
+    ReadyResponse:
+      type: object
+      properties:
+        status:
+          type: string
+
+    # ── List engrams ─────────────────────────────────────────────────────────
+
+    EngramItem:
+      type: object
+      properties:
+        id:
+          type: string
+        concept:
+          type: string
+        content:
+          type: string
+        confidence:
+          type: number
+          format: float
+        tags:
+          type: array
+          items:
+            type: string
+        vault:
+          type: string
+        createdAt:
+          type: integer
+          format: int64
+
+    ListEngramsResponse:
+      type: object
+      properties:
+        engrams:
+          type: array
+          items:
+            $ref: "#/components/schemas/EngramItem"
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+
+    # ── Graph / Links ────────────────────────────────────────────────────────
+
+    AssociationItem:
+      type: object
+      properties:
+        targetId:
+          type: string
+        relType:
+          type: integer
+          format: int32
+        weight:
+          type: number
+          format: float
+
+    GetEngramLinksResponse:
+      type: object
+      properties:
+        links:
+          type: array
+          items:
+            $ref: "#/components/schemas/AssociationItem"
+
+    # ── Session ──────────────────────────────────────────────────────────────
+
+    SessionItem:
+      type: object
+      properties:
+        id:
+          type: string
+        concept:
+          type: string
+        content:
+          type: string
+        createdAt:
+          type: integer
+          format: int64
+
+    GetSessionResponse:
+      type: object
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/SessionItem"
+        total:
+          type: integer
+        offset:
+          type: integer
+        limit:
+          type: integer
+
+    # ── Cognitive operations ─────────────────────────────────────────────────
+
+    EvolveRequest:
+      type: object
+      required: [new_content, reason]
+      properties:
+        new_content:
+          type: string
+        reason:
+          type: string
+        vault:
+          type: string
+          default: "default"
+
+    EvolveResponse:
+      type: object
+      properties:
+        id:
+          type: string
+
+    ConsolidateRequest:
+      type: object
+      required: [ids, merged_content]
+      properties:
+        vault:
+          type: string
+          default: "default"
+        ids:
+          type: array
+          items:
+            type: string
+          minItems: 2
+          maxItems: 50
+        merged_content:
+          type: string
+
+    ConsolidateResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          description: "ID of the surviving engram."
+        archived:
+          type: array
+          items:
+            type: string
+          description: "IDs of the archived source engrams."
+        warnings:
+          type: array
+          items:
+            type: string
+
+    DecideRequest:
+      type: object
+      required: [decision, rationale]
+      properties:
+        vault:
+          type: string
+          default: "default"
+        decision:
+          type: string
+        rationale:
+          type: string
+        alternatives:
+          type: array
+          items:
+            type: string
+        evidence_ids:
+          type: array
+          items:
+            type: string
+
+    DecideResponse:
+      type: object
+      properties:
+        id:
+          type: string
+
+    RestoreResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        concept:
+          type: string
+        restored:
+          type: boolean
+        state:
+          type: string
+
+    TraverseRequest:
+      type: object
+      required: [start_id]
+      properties:
+        vault:
+          type: string
+          default: "default"
+        start_id:
+          type: string
+        max_hops:
+          type: integer
+          default: 3
+          minimum: 1
+          maximum: 5
+        max_nodes:
+          type: integer
+          default: 50
+          maximum: 100
+        rel_types:
+          type: array
+          items:
+            type: string
+
+    TraversalNode:
+      type: object
+      properties:
+        id:
+          type: string
+        concept:
+          type: string
+        hop_dist:
+          type: integer
+        summary:
+          type: string
+
+    TraversalEdge:
+      type: object
+      properties:
+        from_id:
+          type: string
+        to_id:
+          type: string
+        rel_type:
+          type: string
+        weight:
+          type: number
+          format: float
+
+    TraverseResponse:
+      type: object
+      properties:
+        nodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/TraversalNode"
+        edges:
+          type: array
+          items:
+            $ref: "#/components/schemas/TraversalEdge"
+        total_reachable:
+          type: integer
+        query_ms:
+          type: number
+          format: double
+
+    ExplainRequest:
+      type: object
+      required: [engram_id]
+      properties:
+        vault:
+          type: string
+          default: "default"
+        engram_id:
+          type: string
+        query:
+          type: array
+          items:
+            type: string
+
+    ExplainComponents:
+      type: object
+      properties:
+        full_text_relevance:
+          type: number
+          format: double
+        semantic_similarity:
+          type: number
+          format: double
+        decay_factor:
+          type: number
+          format: double
+        hebbian_boost:
+          type: number
+          format: double
+        access_frequency:
+          type: number
+          format: double
+        confidence:
+          type: number
+          format: double
+
+    ExplainResponse:
+      type: object
+      properties:
+        engram_id:
+          type: string
+        concept:
+          type: string
+        final_score:
+          type: number
+          format: double
+        components:
+          $ref: "#/components/schemas/ExplainComponents"
+        fts_matches:
+          type: array
+          items:
+            type: string
+        assoc_path:
+          type: array
+          items:
+            type: string
+        would_return:
+          type: boolean
+        threshold:
+          type: number
+          format: double
+
+    SetStateRequest:
+      type: object
+      required: [state]
+      properties:
+        vault:
+          type: string
+          default: "default"
+        state:
+          type: string
+          enum: [planning, active, paused, blocked, completed, cancelled, archived]
+        reason:
+          type: string
+
+    SetStateResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        state:
+          type: string
+        updated:
+          type: boolean
+
+    DeletedEngramItem:
+      type: object
+      properties:
+        id:
+          type: string
+        concept:
+          type: string
+        deleted_at:
+          type: integer
+          format: int64
+        recoverable_until:
+          type: integer
+          format: int64
+        tags:
+          type: array
+          items:
+            type: string
+
+    ListDeletedResponse:
+      type: object
+      properties:
+        deleted:
+          type: array
+          items:
+            $ref: "#/components/schemas/DeletedEngramItem"
+        count:
+          type: integer
+
+    RetryEnrichResponse:
+      type: object
+      properties:
+        engram_id:
+          type: string
+        plugins_queued:
+          type: array
+          items:
+            type: string
+        already_complete:
+          type: array
+          items:
+            type: string
+        note:
+          type: string
+
+    ContradictionItem:
+      type: object
+      properties:
+        id_a:
+          type: string
+        concept_a:
+          type: string
+        id_b:
+          type: string
+        concept_b:
+          type: string
+        detected_at:
+          type: integer
+          format: int64
+
+    ContradictionsResponse:
+      type: object
+      properties:
+        contradictions:
+          type: array
+          items:
+            $ref: "#/components/schemas/ContradictionItem"
+
+    GuideResponse:
+      type: object
+      properties:
+        guide:
+          type: string
+
+    # ── Error ────────────────────────────────────────────────────────────────
+
+    ErrorDetail:
+      type: object
+      properties:
+        code:
+          type: integer
+          description: "Machine-readable MBP error code."
+        message:
+          type: string
+        request_id:
+          type: string
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          $ref: "#/components/schemas/ErrorDetail"
+
+    # ── Admin — API keys ─────────────────────────────────────────────────────
+
+    CreateAPIKeyRequest:
+      type: object
+      required: [vault]
+      properties:
+        vault:
+          type: string
+          default: "default"
+        label:
+          type: string
+          maxLength: 256
+        mode:
+          type: string
+          enum: ["full", "observe"]
+          default: "full"
+
+    APIKey:
+      type: object
+      properties:
+        id:
+          type: string
+        vault:
+          type: string
+        label:
+          type: string
+        mode:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    CreateAPIKeyResponse:
+      type: object
+      properties:
+        token:
+          type: string
+          description: "Bearer token — shown only once."
+        key:
+          $ref: "#/components/schemas/APIKey"
+
+    ListAPIKeysResponse:
+      type: object
+      properties:
+        keys:
+          type: array
+          items:
+            $ref: "#/components/schemas/APIKey"
+
+    # ── Admin — vault config ─────────────────────────────────────────────────
+
+    PlasticityConfig:
+      type: object
+      properties:
+        version:
+          type: integer
+        preset:
+          type: string
+          enum: [default, reference, scratchpad, knowledge-graph]
+        hebbian_enabled:
+          type: boolean
+          nullable: true
+        temporal_enabled:
+          type: boolean
+          nullable: true
+        auto_link_neighbors:
+          type: boolean
+          nullable: true
+        hop_depth:
+          type: integer
+          nullable: true
+          minimum: 0
+          maximum: 8
+        semantic_weight:
+          type: number
+          format: float
+          nullable: true
+        fts_weight:
+          type: number
+          format: float
+          nullable: true
+        relevance_floor:
+          type: number
+          format: float
+          nullable: true
+        temporal_halflife:
+          type: number
+          format: float
+          nullable: true
+        traversal_profile:
+          type: string
+          nullable: true
+          enum: ["", default, causal, confirmatory, adversarial, structural]
+        actr_decay:
+          type: number
+          format: double
+          nullable: true
+        actr_heb_scale:
+          type: number
+          format: double
+          nullable: true
+        experimental_cgdn:
+          type: boolean
+          nullable: true
+        recall_mode:
+          type: string
+          nullable: true
+          enum: ["", semantic, recent, balanced, deep]
+
+    VaultConfig:
+      type: object
+      properties:
+        name:
+          type: string
+        public:
+          type: boolean
+        plasticity:
+          $ref: "#/components/schemas/PlasticityConfig"
+
+    PlasticityResponse:
+      type: object
+      properties:
+        config:
+          $ref: "#/components/schemas/PlasticityConfig"
+        resolved:
+          type: object
+          description: "Fully resolved (preset + overrides applied) plasticity values."
+
+    ChangeAdminPasswordRequest:
+      type: object
+      required: [new_password]
+      properties:
+        username:
+          type: string
+        new_password:
+          type: string
+
+    # ── Admin — embed / plugins ──────────────────────────────────────────────
+
+    EmbedStatusResponse:
+      type: object
+      properties:
+        provider:
+          type: string
+        model:
+          type: string
+        enabled:
+          type: boolean
+        embedded_count:
+          type: integer
+          format: int64
+        total_count:
+          type: integer
+          format: int64
+        indexing:
+          type: boolean
+
+    PluginStatusResponse:
+      type: object
+      properties:
+        name:
+          type: string
+        tier:
+          type: integer
+          description: "2=embed, 3=enrich"
+        healthy:
+          type: boolean
+        last_check:
+          type: string
+          format: date-time
+        error:
+          type: string
+        provider:
+          type: string
+        model:
+          type: string
+
+    MCPInfoResponse:
+      type: object
+      properties:
+        url:
+          type: string
+        token_configured:
+          type: boolean
+
+    # ── Admin — vault operations ─────────────────────────────────────────────
+
+    CloneVaultRequest:
+      type: object
+      required: [new_name]
+      properties:
+        new_name:
+          type: string
+
+    MergeVaultRequest:
+      type: object
+      required: [target]
+      properties:
+        target:
+          type: string
+        delete_source:
+          type: boolean
+          default: false
+
+    RenameVaultRequest:
+      type: object
+      required: [new_name]
+      properties:
+        new_name:
+          type: string
+
+    JobResponse:
+      type: object
+      properties:
+        job_id:
+          type: string
+
+    ReindexFTSResponse:
+      type: object
+      properties:
+        vault:
+          type: string
+        engrams_reindexed:
+          type: integer
+          format: int64
+
+    ReembedVaultRequest:
+      type: object
+      properties:
+        model:
+          type: string
+
+    # ── Admin — backup ───────────────────────────────────────────────────────
+
+    BackupRequest:
+      type: object
+      required: [output_dir]
+      properties:
+        output_dir:
+          type: string
+
+    BackupResponse:
+      type: object
+      properties:
+        output_dir:
+          type: string
+        size_bytes:
+          type: integer
+          format: int64
+        elapsed:
+          type: string
+
+    # ── Admin — cluster ──────────────────────────────────────────────────────
+
+    ClusterTokenResponse:
+      type: object
+      properties:
+        token:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+        ttl_seconds:
+          type: integer
+
+    EnableClusterRequest:
+      type: object
+      required: [role, bind_addr]
+      properties:
+        role:
+          type: string
+          enum: [primary, replica, sentinel, observer]
+        bind_addr:
+          type: string
+        cluster_secret:
+          type: string
+        cortex_addr:
+          type: string
+
+    AddNodeRequest:
+      type: object
+      required: [addr]
+      properties:
+        addr:
+          type: string
+        token:
+          type: string
+
+    FailoverRequest:
+      type: object
+      required: [target_node_id]
+      properties:
+        target_node_id:
+          type: string
+
+    ClusterSettingsRequest:
+      type: object
+      properties:
+        heartbeat_ms:
+          type: integer
+          nullable: true
+        sdown_beats:
+          type: integer
+          nullable: true
+        ccs_interval_seconds:
+          type: integer
+          nullable: true
+        reconcile_on_heal:
+          type: boolean
+          nullable: true
+
+    TestNodeRequest:
+      type: object
+      required: [addr]
+      properties:
+        addr:
+          type: string
+
+    TestNodeResponse:
+      type: object
+      properties:
+        reachable:
+          type: boolean
+        latency_ms:
+          type: integer
+          format: int64
+        error:
+          type: string
+
+    # ── Cluster (public v1) ──────────────────────────────────────────────────
+
+    ClusterMemberInfo:
+      type: object
+      properties:
+        node_id:
+          type: string
+        addr:
+          type: string
+        role:
+          type: string
+        last_seq:
+          type: integer
+          format: int64
+
+    ClusterInfoResponse:
+      type: object
+      properties:
+        node_id:
+          type: string
+        role:
+          type: string
+        is_leader:
+          type: boolean
+        epoch:
+          type: integer
+          format: int64
+        fencing_token:
+          type: integer
+          format: int64
+        cortex_id:
+          type: string
+        members:
+          type: array
+          items:
+            $ref: "#/components/schemas/ClusterMemberInfo"
+
+    ClusterHealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded, down]
+        role:
+          type: string
+        is_leader:
+          type: boolean
+        epoch:
+          type: integer
+          format: int64
+        replication_lag:
+          type: integer
+          format: int64
+
+    ClusterNodesResponse:
+      type: object
+      properties:
+        nodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/ClusterMemberInfo"
+        count:
+          type: integer
+
+    CognitiveConsistencyResponse:
+      type: object
+      properties:
+        score:
+          type: number
+          format: double
+        assessment:
+          type: string
+        node_scores:
+          type: object
+          additionalProperties:
+            type: number
+            format: double
+        sampled_at:
+          type: string
+          format: date-time
+
+    # ── Replication ──────────────────────────────────────────────────────────
+
+    NodeInfoResponse:
+      type: object
+      properties:
+        node_id:
+          type: string
+        addr:
+          type: string
+        role:
+          type: string
+        last_seq:
+          type: integer
+          format: int64
+
+    ReplicationStatusResponse:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+        role:
+          type: string
+        is_leader:
+          type: boolean
+        epoch:
+          type: integer
+          format: int64
+        node_id:
+          type: string
+        known_nodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/NodeInfoResponse"
+
+    ReplicationLagResponse:
+      type: object
+      properties:
+        lag:
+          type: integer
+          format: int64
+        role:
+          type: string
+
+    ReplicationPromoteResponse:
+      type: object
+      properties:
+        triggered:
+          type: boolean
+
+  responses:
+    BadRequest:
+      description: "Invalid request body or parameters."
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Unauthorized:
+      description: "Missing or invalid authentication."
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    NotFound:
+      description: "Resource not found."
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Conflict:
+      description: "Conflict with current state."
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    InternalServerError:
+      description: "Internal server error."
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+tags:
+  - name: health
+    description: "Liveness and readiness probes."
+  - name: engrams
+    description: "Create, read, delete individual engrams."
+  - name: recall
+    description: "Associative recall and activation."
+  - name: graph
+    description: "Graph traversal and association links."
+  - name: vault
+    description: "Vault listing and session timeline."
+  - name: cognitive
+    description: "Higher-order cognitive operations (evolve, consolidate, decide, etc.)."
+  - name: admin-keys
+    description: "API key management (admin)."
+  - name: admin-vaults
+    description: "Vault lifecycle management (admin)."
+  - name: admin-system
+    description: "System-level admin operations (plugins, backup, observability)."
+  - name: cluster
+    description: "Cluster topology, replication, and admin cluster control."
+
+paths:
+
+  # ── OpenAPI spec ─────────────────────────────────────────────────────────
+
+  /api/openapi.yaml:
+    get:
+      tags: [health]
+      summary: "Serve this OpenAPI specification."
+      security: []
+      responses:
+        "200":
+          description: "OpenAPI 3.0 YAML document."
+          content:
+            application/yaml:
+              schema:
+                type: string
+
+  # ── Health / diagnostics ─────────────────────────────────────────────────
+
+  /api/health:
+    get:
+      tags: [health]
+      summary: "Liveness probe — returns server status and version."
+      security: []
+      responses:
+        "200":
+          description: "Server is alive."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+  /api/ready:
+    get:
+      tags: [health]
+      summary: "Readiness probe — returns ok when the DB is writable."
+      security: []
+      responses:
+        "200":
+          description: "Server is ready."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadyResponse"
+        "503":
+          description: "Server not ready."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadyResponse"
+
+  /api/hello:
+    post:
+      tags: [health]
+      summary: "Protocol handshake — returns session metadata."
+      security: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                version:
+                  type: string
+                auth_method:
+                  type: string
+                vault:
+                  type: string
+                client:
+                  type: string
+      responses:
+        "200":
+          description: "Handshake acknowledged."
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  server_version:
+                    type: string
+                  session_id:
+                    type: string
+                  vault_id:
+                    type: string
+                  capabilities:
+                    type: array
+                    items:
+                      type: string
+
+  /api/workers:
+    get:
+      tags: [health]
+      summary: "Return worker pool stats (no auth required)."
+      security: []
+      responses:
+        "200":
+          description: "Worker stats."
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /api/stats:
+    get:
+      tags: [health]
+      summary: "Return database statistics."
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: vault
+          in: query
+          schema:
+            type: string
+            default: "default"
+      responses:
+        "200":
+          description: "DB statistics."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # ── Engrams ───────────────────────────────────────────────────────────────
+
+  /api/engrams:
+    post:
+      tags: [engrams]
+      summary: "Write a new engram."
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WriteRequest"
+      responses:
+        "201":
+          description: "Engram created."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WriteResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: "Idempotency key collision."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+    get:
+      tags: [engrams]
+      summary: "List engrams for a vault (paginated)."
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: vault
+          in: query
+          schema:
+            type: string
+            default: "default"
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        "200":
+          description: "Paginated engram list."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListEngramsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/engrams/batch:
+    post:
+      tags: [engrams]
+      summary: "Batch-write multiple engrams atomically."
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BatchWriteRequest"
+      responses:
+        "200":
+          description: "Batch results (per-item success or error)."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchWriteResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/engrams/{id}:
+    get:
+      tags: [engrams]
+      summary: "Read a single engram by ID."
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: vault
+          in: query
+          schema:
+            type: string
+            default: "default"
+      responses:
+        "200":
+          description: "Engram data."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [engrams]
+      summary: "Soft-delete (forget) an engram."
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: vault
+          in: query
+          schema:
+            type: string
+            default: "default"
+        - name: hard
+          in: query
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "200":
+          description: "Deletion confirmed."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ForgetResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/engrams/{id}/links:
+    get:
+      tags: [graph]
+      summary: "Get outbound association links for an engram."
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: vault
+          in: query
+          schema:
+            type: string
+            default: "default"
+      responses:
+        "200":
+          description: "Association edges."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GetEngramLinksResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/engrams/{id}/evolve:
+    post:
+      tags: [cognitive]
+      summary: "Evolve the content of an engram, preserving history."
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: vault
+          in: query
+          schema:
+            type: string
+            default: "default"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EvolveRequest"
+      responses:
+        "200":
+          description: "Evolved engram ID."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EvolveResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/engrams/{id}/restore:
+    post:
+      tags: [cognitive]
+      summary: "Restore a soft-deleted engram."
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: vault
+          in: query
+          schema:
+            type: string
+            default: "default"
+      responses:
+        "200":
+          description: "Restore result."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RestoreResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/engrams/{id}/state:
+    put:
+      tags: [cognitive]
+      summary: "Set the lifecycle state of an engram."
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetStateRequest"
+      responses:
+        "200":
+          description: "State updated."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SetStateResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/engrams/{id}/retry-enrich:
+    post:
+      tags: [cognitive]
+      summary: "Re-queue background enrichment plugins for an engram."
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: vault
+          in: query
+          schema:
+            type: string
+            default: "default"
+      responses:
+        "200":
+          description: "Plugins queued."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RetryEnrichResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  # ── Recall ────────────────────────────────────────────────────────────────
+
+  /api/activate:
+    post:
+      tags: [recall]
+      summary: "Associative recall — retrieve engrams by semantic context."
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ActivateRequest"
+      responses:
+        "200":
+          description: "Activation results."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ActivateResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/subscribe:
+    get:
+      tags: [recall]
+      summary: "Open a long-lived SSE stream for push notifications on activation matches."
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: vault
+          in: query
+          schema:
+            type: string
+            default: "default"
+        - name: context
+          in: query
+          style: form
+          explode: true
+          schema:
+            type: array
+            items:
+              type: string
+          description: "Subscription context strings (repeatable)."
+        - name: threshold
+          in: query
+          schema:
+            type: number
+            format: float
+            default: 0.5
+        - name: on_write
+          in: query
+          schema:
+            type: string
+            enum: ["true", "1", "false"]
+            default: "false"
+        - name: ttl
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: rate
+          in: query
+          schema:
+            type: integer
+            default: 10
+      responses:
+        "200":
+          description: "SSE event stream (text/event-stream)."
+          content:
+            text/event-stream:
+              schema:
+                type: string
+
+  # ── Graph ─────────────────────────────────────────────────────────────────
+
+  /api/link:
+    post:
+      tags: [graph]
+      summary: "Create or update a directed association between two engrams."
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LinkRequest"
+      responses:
+        "200":
+          description: "Link created or updated."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LinkResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/traverse:
+    post:
+      tags: [graph]
+      summary: "BFS graph traversal from a starting engram."
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TraverseRequest"
+      responses:
+        "200":
+          description: "Traversal result."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TraverseResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/explain:
+    post:
+      tags: [graph]
+      summary: "Explain why an engram would (or would not) be returned for a query."
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ExplainRequest"
+      responses:
+        "200":
+          description: "Score breakdown."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExplainResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  # ── Vault ─────────────────────────────────────────────────────────────────
+
+  /api/vaults:
+    get:
+      tags: [vault]
+      summary: "List all vault names."
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: "Vault names."
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  vaults:
+                    type: array
+                    items:
+                      type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/session:
+    get:
+      tags: [vault]
+      summary: "Retrieve recent write activity (session timeline) for a vault."
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: vault
+          in: query
+          schema:
+            type: string
+            default: "default"
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: since
+          in: query
+          schema:
+            type: string
+            format: date-time
+      responses:
+        "200":
+          description: "Session timeline entries."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GetSessionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # ── Cognitive ─────────────────────────────────────────────────────────────
+
+  /api/consolidate:
+    post:
+      tags: [cognitive]
+      summary: "Merge multiple engrams into a single canonical engram."
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConsolidateRequest"
+      responses:
+        "200":
+          description: "Consolidation result."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsolidateResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/decide:
+    post:
+      tags: [cognitive]
+      summary: "Record a decision engram with rationale and supporting evidence."
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DecideRequest"
+      responses:
+        "201":
+          description: "Decision engram created."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DecideResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/deleted:
+    get:
+      tags: [cognitive]
+      summary: "List soft-deleted engrams that are still recoverable."
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: vault
+          in: query
+          schema:
+            type: string
+            default: "default"
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+            maximum: 100
+      responses:
+        "200":
+          description: "Deleted engrams."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListDeletedResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/contradictions:
+    get:
+      tags: [cognitive]
+      summary: "List detected contradiction pairs in a vault."
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: vault
+          in: query
+          schema:
+            type: string
+            default: "default"
+      responses:
+        "200":
+          description: "Contradiction pairs."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ContradictionsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/guide:
+    get:
+      tags: [cognitive]
+      summary: "Return best-practice guidance text for using a vault."
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: vault
+          in: query
+          schema:
+            type: string
+            default: "default"
+      responses:
+        "200":
+          description: "Guide text."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GuideResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # ── Admin — API keys ──────────────────────────────────────────────────────
+
+  /api/admin/keys:
+    post:
+      tags: [admin-keys]
+      summary: "Create a new API key for a vault."
+      security:
+        - AdminSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAPIKeyRequest"
+      responses:
+        "201":
+          description: "Key created (token shown once)."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateAPIKeyResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    get:
+      tags: [admin-keys]
+      summary: "List all API keys for a vault."
+      security:
+        - AdminSession: []
+      parameters:
+        - name: vault
+          in: query
+          schema:
+            type: string
+            default: "default"
+      responses:
+        "200":
+          description: "API key list."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListAPIKeysResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/admin/keys/{id}:
+    delete:
+      tags: [admin-keys]
+      summary: "Revoke an API key by ID."
+      security:
+        - AdminSession: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: vault
+          in: query
+          schema:
+            type: string
+            default: "default"
+      responses:
+        "200":
+          description: "Key revoked."
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  revoked:
+                    type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/admin/password:
+    put:
+      tags: [admin-keys]
+      summary: "Change the admin password."
+      security:
+        - AdminSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChangeAdminPasswordRequest"
+      responses:
+        "200":
+          description: "Password changed."
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  # ── Admin — vault config ──────────────────────────────────────────────────
+
+  /api/admin/vaults/config:
+    put:
+      tags: [admin-vaults]
+      summary: "Set vault configuration (public flag, plasticity defaults)."
+      security:
+        - AdminSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VaultConfig"
+      responses:
+        "200":
+          description: "Vault config saved."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VaultConfig"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/admin/vault/{name}/plasticity:
+    get:
+      tags: [admin-vaults]
+      summary: "Get the plasticity config (raw + resolved) for a vault."
+      security:
+        - AdminSession: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: "Plasticity config."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PlasticityResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+    put:
+      tags: [admin-vaults]
+      summary: "Update the plasticity config for a vault."
+      security:
+        - AdminSession: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PlasticityConfig"
+      responses:
+        "200":
+          description: "Updated plasticity config."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PlasticityResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  # ── Admin — vault lifecycle ───────────────────────────────────────────────
+
+  /api/admin/vaults/{name}:
+    delete:
+      tags: [admin-vaults]
+      summary: "Permanently delete a vault and all its engrams."
+      security:
+        - AdminSession: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: X-Allow-Default
+          in: header
+          schema:
+            type: string
+            enum: ["true"]
+          description: "Required when deleting the 'default' vault."
+      responses:
+        "204":
+          description: "Vault deleted."
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/admin/vaults/{name}/clear:
+    post:
+      tags: [admin-vaults]
+      summary: "Remove all engrams from a vault without deleting the vault itself."
+      security:
+        - AdminSession: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: X-Allow-Default
+          in: header
+          schema:
+            type: string
+            enum: ["true"]
+          description: "Required when clearing the 'default' vault."
+      responses:
+        "204":
+          description: "Vault cleared."
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/admin/vaults/{name}/clone:
+    post:
+      tags: [admin-vaults]
+      summary: "Start an async clone of a vault into a new vault."
+      security:
+        - AdminSession: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CloneVaultRequest"
+      responses:
+        "202":
+          description: "Clone job started."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/admin/vaults/{name}/merge-into:
+    post:
+      tags: [admin-vaults]
+      summary: "Start an async merge of this vault into a target vault."
+      security:
+        - AdminSession: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+            description: "Source vault name."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MergeVaultRequest"
+      responses:
+        "202":
+          description: "Merge job started."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/admin/vaults/{name}/rename:
+    post:
+      tags: [admin-vaults]
+      summary: "Atomically rename a vault (metadata-only)."
+      security:
+        - AdminSession: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RenameVaultRequest"
+      responses:
+        "200":
+          description: "Vault renamed."
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  old_name:
+                    type: string
+                  new_name:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/admin/vaults/{name}/job-status:
+    get:
+      tags: [admin-vaults]
+      summary: "Poll the status of a vault clone/merge/import job."
+      security:
+        - AdminSession: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: job_id
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: "Job status snapshot."
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  type:
+                    type: string
+                  status:
+                    type: string
+                  source:
+                    type: string
+                  target:
+                    type: string
+                  started_at:
+                    type: string
+                    format: date-time
+                  completed_at:
+                    type: string
+                    format: date-time
+                    nullable: true
+                  error:
+                    type: string
+                    nullable: true
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/admin/vaults/{name}/export:
+    get:
+      tags: [admin-vaults]
+      summary: "Export a vault as a .muninn archive (gzip'd tar)."
+      security:
+        - AdminSession: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: reset_metadata
+          in: query
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "200":
+          description: "Binary .muninn archive."
+          content:
+            application/gzip:
+              schema:
+                type: string
+                format: binary
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/admin/vaults/import:
+    post:
+      tags: [admin-vaults]
+      summary: "Import a .muninn archive into a new vault (async)."
+      security:
+        - AdminSession: []
+      parameters:
+        - name: vault
+          in: query
+          required: true
+          schema:
+            type: string
+          description: "Target vault name."
+        - name: reset_metadata
+          in: query
+          schema:
+            type: boolean
+            default: false
+      requestBody:
+        required: true
+        content:
+          application/gzip:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "202":
+          description: "Import job started."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/admin/vaults/{name}/reindex-fts:
+    post:
+      tags: [admin-vaults]
+      summary: "Rebuild the full-text-search index for a vault."
+      security:
+        - AdminSession: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: "Reindex complete."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReindexFTSResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/admin/vaults/{name}/reembed:
+    post:
+      tags: [admin-vaults]
+      summary: "Clear stale embeddings and re-embed all engrams with the current model (async)."
+      security:
+        - AdminSession: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReembedVaultRequest"
+      responses:
+        "202":
+          description: "Reembed job started."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  # ── Admin — system ────────────────────────────────────────────────────────
+
+  /api/admin/embed/status:
+    get:
+      tags: [admin-system]
+      summary: "Return the current embedder configuration and indexing progress."
+      security:
+        - AdminSession: []
+      responses:
+        "200":
+          description: "Embed status."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmbedStatusResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/admin/mcp-info:
+    get:
+      tags: [admin-system]
+      summary: "Return the MCP endpoint URL and token status."
+      security:
+        - AdminSession: []
+      responses:
+        "200":
+          description: "MCP info."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MCPInfoResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/admin/plugins:
+    get:
+      tags: [admin-system]
+      summary: "List registered plugins with runtime health status."
+      security:
+        - AdminSession: []
+      responses:
+        "200":
+          description: "Plugin list."
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PluginStatusResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/admin/plugin-config:
+    get:
+      tags: [admin-system]
+      summary: "Return saved plugin configuration from disk."
+      security:
+        - AdminSession: []
+      responses:
+        "200":
+          description: "Plugin config."
+          content:
+            application/json:
+              schema:
+                type: object
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+    put:
+      tags: [admin-system]
+      summary: "Save plugin configuration to disk (requires server restart to apply)."
+      security:
+        - AdminSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: "Config saved."
+          content:
+            application/json:
+              schema:
+                type: object
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/admin/backup:
+    post:
+      tags: [admin-system]
+      summary: "Create a point-in-time Pebble checkpoint backup."
+      security:
+        - AdminSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BackupRequest"
+      responses:
+        "200":
+          description: "Backup complete."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackupResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: "Output directory already exists."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/admin/observability:
+    get:
+      tags: [admin-system]
+      summary: "Return full system observability snapshot."
+      security:
+        - AdminSession: []
+      responses:
+        "200":
+          description: "Observability snapshot."
+          content:
+            application/json:
+              schema:
+                type: object
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  # ── Admin — cluster ───────────────────────────────────────────────────────
+
+  /api/admin/cluster/token:
+    get:
+      tags: [cluster]
+      summary: "Generate a one-time cluster join token."
+      security:
+        - AdminSession: []
+      responses:
+        "200":
+          description: "Join token."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClusterTokenResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "503":
+          description: "Cluster not enabled."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/admin/cluster/token/regenerate:
+    post:
+      tags: [cluster]
+      summary: "Regenerate the cluster join token."
+      security:
+        - AdminSession: []
+      responses:
+        "200":
+          description: "New join token."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClusterTokenResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/admin/cluster/enable:
+    post:
+      tags: [cluster]
+      summary: "Enable cluster mode on this node."
+      security:
+        - AdminSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnableClusterRequest"
+      responses:
+        "200":
+          description: "Cluster enabled."
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  enabled:
+                    type: boolean
+                  role:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/admin/cluster/disable:
+    post:
+      tags: [cluster]
+      summary: "Disable cluster mode on this node."
+      security:
+        - AdminSession: []
+      responses:
+        "200":
+          description: "Cluster disabled."
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  enabled:
+                    type: boolean
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/admin/cluster/nodes:
+    post:
+      tags: [cluster]
+      summary: "Register a new peer node in the cluster."
+      security:
+        - AdminSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddNodeRequest"
+      responses:
+        "202":
+          description: "Peer registered."
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  addr:
+                    type: string
+                  message:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "503":
+          description: "Cluster not enabled."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/admin/cluster/nodes/test:
+    post:
+      tags: [cluster]
+      summary: "Test reachability of a cluster node address."
+      security:
+        - AdminSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TestNodeRequest"
+      responses:
+        "200":
+          description: "Reachability result."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestNodeResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/admin/cluster/nodes/{id}:
+    delete:
+      tags: [cluster]
+      summary: "Remove a node from the cluster."
+      security:
+        - AdminSession: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: drain
+          in: query
+          schema:
+            type: boolean
+            default: false
+          description: "Wait for replication lag to reach 0 before removing (up to 30s)."
+      responses:
+        "200":
+          description: "Node removed."
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  removed:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "503":
+          description: "Cluster not enabled."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/admin/cluster/failover:
+    post:
+      tags: [cluster]
+      summary: "Initiate a graceful failover to a target node (Cortex only)."
+      security:
+        - AdminSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FailoverRequest"
+      responses:
+        "200":
+          description: "Failover initiated."
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  initiated:
+                    type: boolean
+                  target:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: "This node is not the current Cortex."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/admin/cluster/tls/rotate:
+    post:
+      tags: [cluster]
+      summary: "Rotate the cluster TLS certificate."
+      security:
+        - AdminSession: []
+      responses:
+        "200":
+          description: "TLS rotated."
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  rotated:
+                    type: boolean
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "503":
+          description: "Cluster or TLS not enabled."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/admin/cluster/settings:
+    put:
+      tags: [cluster]
+      summary: "Update cluster tuning settings (heartbeat, SDOWN threshold, etc.)."
+      security:
+        - AdminSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ClusterSettingsRequest"
+      responses:
+        "200":
+          description: "Settings saved."
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  saved:
+                    type: boolean
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/admin/cluster/events:
+    get:
+      tags: [cluster]
+      summary: "Stream replication log events as Server-Sent Events."
+      security:
+        - AdminSession: []
+      responses:
+        "200":
+          description: "SSE event stream."
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  # ── Cluster (public v1) ───────────────────────────────────────────────────
+
+  /v1/cluster/info:
+    get:
+      tags: [cluster]
+      summary: "Return cluster topology and current node status."
+      security:
+        - ClusterToken: []
+      responses:
+        "200":
+          description: "Cluster info."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClusterInfoResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1/cluster/health:
+    get:
+      tags: [cluster]
+      summary: "Load-balancer health probe — returns cluster health."
+      security:
+        - ClusterToken: []
+      responses:
+        "200":
+          description: "Cluster healthy."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClusterHealthResponse"
+        "503":
+          description: "Cluster down."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClusterHealthResponse"
+
+  /v1/cluster/nodes:
+    get:
+      tags: [cluster]
+      summary: "Return member list for cluster discovery."
+      security:
+        - ClusterToken: []
+      responses:
+        "200":
+          description: "Member list."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClusterNodesResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1/cluster/cognitive/consistency:
+    get:
+      tags: [cluster]
+      summary: "Return the last computed Cognitive Consistency Score (CCS)."
+      security:
+        - ClusterToken: []
+      responses:
+        "200":
+          description: "CCS measurement."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CognitiveConsistencyResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # ── Replication ───────────────────────────────────────────────────────────
+
+  /v1/replication/status:
+    get:
+      tags: [cluster]
+      summary: "Return replication status for this node."
+      security:
+        - ClusterToken: []
+      responses:
+        "200":
+          description: "Replication status."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReplicationStatusResponse"
+
+  /v1/replication/lag:
+    get:
+      tags: [cluster]
+      summary: "Return the current replication lag for this node."
+      security:
+        - ClusterToken: []
+      responses:
+        "200":
+          description: "Replication lag."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReplicationLagResponse"
+        "503":
+          description: "Cluster disabled."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/replication/promote:
+    post:
+      tags: [cluster]
+      summary: "Trigger a new leader election (promote this node)."
+      security:
+        - ClusterToken: []
+      responses:
+        "200":
+          description: "Election triggered."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReplicationPromoteResponse"
+        "503":
+          description: "Cluster disabled."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          $ref: "#/components/responses/InternalServerError"

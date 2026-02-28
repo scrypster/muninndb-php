@@ -85,7 +85,7 @@ func (f *fakeEngine) GetVaultPlasticity(_ context.Context, _ string) (*auth.Reso
 }
 
 func newTestServer() *MCPServer {
-	return New(":0", &fakeEngine{}, "")
+	return New(":0", &fakeEngine{}, "", nil)
 }
 
 func postRPC(t *testing.T, srv *MCPServer, body string) *httptest.ResponseRecorder {

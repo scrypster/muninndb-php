@@ -9,12 +9,13 @@ type AdminUser struct {
 }
 
 type APIKey struct {
-	ID          string    `json:"id"`
-	Vault       string    `json:"vault"`
-	Label       string    `json:"label"`
-	Mode        string    `json:"mode"`      // "full" or "observe"
-	CreatedAt   time.Time `json:"created_at"`
-	StorageHash []byte    `json:"storage_hash"`
+	ID          string     `json:"id"`
+	Vault       string     `json:"vault"`
+	Label       string     `json:"label"`
+	Mode        string     `json:"mode"`      // "full" or "observe"
+	CreatedAt   time.Time  `json:"created_at"`
+	StorageHash []byte     `json:"storage_hash"`
+	ExpiresAt   *time.Time `json:"expires_at,omitempty"` // nil = never expires
 }
 
 type VaultConfig struct {

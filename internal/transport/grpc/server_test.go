@@ -145,7 +145,7 @@ func freePort(t *testing.T) string {
 func TestServerStartStop(t *testing.T) {
 	addr := freePort(t)
 	engine := &mockEngine{}
-	srv := transportgrpc.NewServer(addr, engine, newTestAuthStore(t))
+	srv := transportgrpc.NewServer(addr, engine, newTestAuthStore(t), nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -189,7 +189,7 @@ func TestServerStartStop(t *testing.T) {
 func TestGracefulShutdown(t *testing.T) {
 	addr := freePort(t)
 	engine := &mockEngine{}
-	srv := transportgrpc.NewServer(addr, engine, newTestAuthStore(t))
+	srv := transportgrpc.NewServer(addr, engine, newTestAuthStore(t), nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -225,7 +225,7 @@ func TestGracefulShutdown(t *testing.T) {
 func TestEngineAPIInterface(t *testing.T) {
 	// Verify that NewServer accepts our mock without a cast.
 	engine := &mockEngine{}
-	_ = transportgrpc.NewServer(":0", engine, newTestAuthStore(t))
+	_ = transportgrpc.NewServer(":0", engine, newTestAuthStore(t), nil)
 }
 
 // TestSubscribeWithDeliverInterface verifies at compile-time and runtime that:
@@ -304,12 +304,12 @@ func TestSubscribeWithDeliverInterface(t *testing.T) {
 // vault, mode, and APIKey in its context.
 func TestAuthUnaryInterceptor_ValidKey(t *testing.T) {
 	store := newTestAuthStore(t)
-	token, _, err := store.GenerateAPIKey("testvault", "test-label", "full")
+	token, _, err := store.GenerateAPIKey("testvault", "test-label", "full", nil)
 	if err != nil {
 		t.Fatalf("GenerateAPIKey: %v", err)
 	}
 
-	srv := transportgrpc.NewServer(":0", &mockEngine{}, store)
+	srv := transportgrpc.NewServer(":0", &mockEngine{}, store, nil)
 
 	var capturedVault, capturedMode string
 	var capturedKey *auth.APIKey
@@ -349,7 +349,7 @@ func TestAuthUnaryInterceptor_ValidKey(t *testing.T) {
 // without invoking the handler.
 func TestAuthUnaryInterceptor_InvalidKey(t *testing.T) {
 	store := newTestAuthStore(t)
-	srv := transportgrpc.NewServer(":0", &mockEngine{}, store)
+	srv := transportgrpc.NewServer(":0", &mockEngine{}, store, nil)
 
 	handler := func(ctx context.Context, req any) (any, error) {
 		t.Fatal("handler should not be called with invalid key")
@@ -381,7 +381,7 @@ func TestAuthUnaryInterceptor_NoKeyPublicVault(t *testing.T) {
 		t.Fatalf("SetVaultConfig: %v", err)
 	}
 
-	srv := transportgrpc.NewServer(":0", &mockEngine{}, store)
+	srv := transportgrpc.NewServer(":0", &mockEngine{}, store, nil)
 
 	var capturedVault, capturedMode string
 	handler := func(ctx context.Context, req any) (any, error) {
@@ -415,7 +415,7 @@ func TestAuthUnaryInterceptor_NoKeyLockedVault(t *testing.T) {
 		t.Fatalf("SetVaultConfig: %v", err)
 	}
 
-	srv := transportgrpc.NewServer(":0", &mockEngine{}, store)
+	srv := transportgrpc.NewServer(":0", &mockEngine{}, store, nil)
 
 	handler := func(ctx context.Context, req any) (any, error) {
 		t.Fatal("handler should not be called for locked vault without auth")
@@ -442,7 +442,7 @@ func TestAuthUnaryInterceptor_NoKeyLockedVault(t *testing.T) {
 // rejected with codes.Unauthenticated.
 func TestAuthUnaryInterceptor_MissingKeyStore(t *testing.T) {
 	store := newTestAuthStore(t)
-	srv := transportgrpc.NewServer(":0", &mockEngine{}, store)
+	srv := transportgrpc.NewServer(":0", &mockEngine{}, store, nil)
 
 	handler := func(ctx context.Context, req any) (any, error) {
 		t.Fatal("handler should not be called when vault is unconfigured")
@@ -476,7 +476,7 @@ func TestAuthUnaryInterceptor_VaultFromRequest(t *testing.T) {
 		t.Fatalf("SetVaultConfig: %v", err)
 	}
 
-	srv := transportgrpc.NewServer(":0", &mockEngine{}, store)
+	srv := transportgrpc.NewServer(":0", &mockEngine{}, store, nil)
 
 	var capturedVault string
 	handler := func(ctx context.Context, req any) (any, error) {
@@ -499,12 +499,12 @@ func TestAuthUnaryInterceptor_VaultFromRequest(t *testing.T) {
 // header is accepted as an alternative to the authorization header.
 func TestAuthUnaryInterceptor_XApiKeyHeader(t *testing.T) {
 	store := newTestAuthStore(t)
-	token, _, err := store.GenerateAPIKey("default", "test-label", "full")
+	token, _, err := store.GenerateAPIKey("default", "test-label", "full", nil)
 	if err != nil {
 		t.Fatalf("GenerateAPIKey: %v", err)
 	}
 
-	srv := transportgrpc.NewServer(":0", &mockEngine{}, store)
+	srv := transportgrpc.NewServer(":0", &mockEngine{}, store, nil)
 
 	var capturedMode string
 	handler := func(ctx context.Context, req any) (any, error) {
@@ -548,12 +548,12 @@ func (m *mockServerStream) RecvMsg(msg any) error { return nil }
 
 func TestAuthStreamInterceptor_ValidKey(t *testing.T) {
 	store := newTestAuthStore(t)
-	token, _, err := store.GenerateAPIKey("testvault", "test-label", "full")
+	token, _, err := store.GenerateAPIKey("testvault", "test-label", "full", nil)
 	if err != nil {
 		t.Fatalf("GenerateAPIKey: %v", err)
 	}
 
-	srv := transportgrpc.NewServer(":0", &mockEngine{}, store)
+	srv := transportgrpc.NewServer(":0", &mockEngine{}, store, nil)
 
 	var capturedVault, capturedMode string
 	handler := func(srv any, stream grpc.ServerStream) error {
@@ -581,7 +581,7 @@ func TestAuthStreamInterceptor_ValidKey(t *testing.T) {
 
 func TestAuthStreamInterceptor_InvalidKey(t *testing.T) {
 	store := newTestAuthStore(t)
-	srv := transportgrpc.NewServer(":0", &mockEngine{}, store)
+	srv := transportgrpc.NewServer(":0", &mockEngine{}, store, nil)
 
 	handler := func(srv any, stream grpc.ServerStream) error {
 		t.Fatal("handler should not be called with invalid key")
@@ -611,7 +611,7 @@ func TestAuthStreamInterceptor_NoKeyPublicVault(t *testing.T) {
 		t.Fatalf("SetVaultConfig: %v", err)
 	}
 
-	srv := transportgrpc.NewServer(":0", &mockEngine{}, store)
+	srv := transportgrpc.NewServer(":0", &mockEngine{}, store, nil)
 
 	var capturedVault, capturedMode string
 	handler := func(srv any, stream grpc.ServerStream) error {
@@ -638,7 +638,7 @@ func TestAuthStreamInterceptor_NoKeyPublicVault(t *testing.T) {
 
 func TestAuthStreamInterceptor_NoKeyLockedVault(t *testing.T) {
 	store := newTestAuthStore(t)
-	srv := transportgrpc.NewServer(":0", &mockEngine{}, store)
+	srv := transportgrpc.NewServer(":0", &mockEngine{}, store, nil)
 
 	handler := func(srv any, stream grpc.ServerStream) error {
 		t.Fatal("handler should not be called for locked vault without auth")
@@ -663,12 +663,12 @@ func TestAuthStreamInterceptor_NoKeyLockedVault(t *testing.T) {
 
 func TestAuthStreamInterceptor_XApiKey(t *testing.T) {
 	store := newTestAuthStore(t)
-	token, _, err := store.GenerateAPIKey("default", "test-label", "observe")
+	token, _, err := store.GenerateAPIKey("default", "test-label", "observe", nil)
 	if err != nil {
 		t.Fatalf("GenerateAPIKey: %v", err)
 	}
 
-	srv := transportgrpc.NewServer(":0", &mockEngine{}, store)
+	srv := transportgrpc.NewServer(":0", &mockEngine{}, store, nil)
 
 	var capturedMode string
 	handler := func(srv any, stream grpc.ServerStream) error {
@@ -702,7 +702,7 @@ func newPublicTestServer(t *testing.T, eng *mockEngine) *transportgrpc.Server {
 	if err := store.SetVaultConfig(auth.VaultConfig{Name: "default", Public: true}); err != nil {
 		t.Fatalf("SetVaultConfig: %v", err)
 	}
-	return transportgrpc.NewServer(":0", eng, store)
+	return transportgrpc.NewServer(":0", eng, store, nil)
 }
 
 func TestHello_Success(t *testing.T) {
@@ -1189,7 +1189,7 @@ func TestSubscribe_NilEngram(t *testing.T) {
 func TestShutdown_ContextTimeout(t *testing.T) {
 	addr := freePort(t)
 	eng := &mockEngine{}
-	srv := transportgrpc.NewServer(addr, eng, newTestAuthStore(t))
+	srv := transportgrpc.NewServer(addr, eng, newTestAuthStore(t), nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

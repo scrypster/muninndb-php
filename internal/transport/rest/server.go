@@ -2,6 +2,7 @@ package rest
 
 import (
 	"context"
+	"crypto/tls"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -55,6 +56,7 @@ type Server struct {
 	corsOrigins   []string // allowed CORS origins; nil = no cross-origin allowed
 	mux           *http.ServeMux
 	server        *http.Server
+	tlsConfig     *tls.Config // nil = plain TCP
 
 	// Embedder info — set at construction time, static for the lifetime of the server.
 	embedProvider string // "ollama", "openai", "voyage", or "none"
@@ -105,7 +107,7 @@ type MCPInfo struct {
 //
 // sessionSecret is used to validate admin session cookies on /api/admin/* routes.
 // corsOrigins is the set of allowed CORS origins; nil disables cross-origin access.
-func NewServer(addr string, engine EngineAPI, authStore *auth.Store, sessionSecret []byte, corsOrigins []string, embedInfo EmbedInfo, pluginRegistry *plugin.Registry, dataDir string, mcpInfo ...MCPInfo) *Server {
+func NewServer(addr string, engine EngineAPI, authStore *auth.Store, sessionSecret []byte, corsOrigins []string, embedInfo EmbedInfo, pluginRegistry *plugin.Registry, dataDir string, tlsConfig *tls.Config, mcpInfo ...MCPInfo) *Server {
 	mux := http.NewServeMux()
 	s := &Server{
 		addr:           addr,
@@ -118,6 +120,7 @@ func NewServer(addr string, engine EngineAPI, authStore *auth.Store, sessionSecr
 		embedModel:     embedInfo.Model,
 		pluginRegistry: pluginRegistry,
 		dataDir:        dataDir,
+		tlsConfig:      tlsConfig,
 		startTime:      time.Now(),
 		shutdown:       make(chan struct{}),
 		ready:          make(chan struct{}),
@@ -143,6 +146,7 @@ func NewServer(addr string, engine EngineAPI, authStore *auth.Store, sessionSecr
 	mux.HandleFunc("GET /v1/cluster/cognitive/consistency", s.withClusterAuthMiddleware(s.withPublicMiddleware(s.handleCognitiveConsistency)))
 
 	// Public routes — no auth, no body size limit (health/auth handshake).
+	mux.HandleFunc("GET /api/openapi.yaml", s.withPublicMiddleware(s.handleOpenAPISpec))
 	mux.HandleFunc("POST /api/hello", s.withPublicMiddleware(s.handleHello))
 	mux.HandleFunc("GET /api/health", s.withPublicMiddleware(s.handleHealth))
 	mux.HandleFunc("GET /api/ready", s.withPublicMiddleware(s.handleReady))
@@ -348,6 +352,10 @@ func (s *Server) Serve(ctx context.Context) error {
 	listener, err := net.Listen("tcp", s.addr)
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", s.addr, err)
+	}
+	if s.tlsConfig != nil {
+		listener = tls.NewListener(listener, s.tlsConfig)
+		slog.Info("rest: TLS enabled", "addr", listener.Addr().String())
 	}
 	slog.Info("rest: listening", "addr", listener.Addr().String())
 
@@ -625,6 +633,13 @@ func (s *Server) handleDeleteEngram(w http.ResponseWriter, r *http.Request) {
 	s.sendJSON(w, http.StatusOK, resp)
 }
 
+// activateTimeout is read once at startup from MUNINN_ACTIVATE_TIMEOUT (seconds).
+// Default: 30s. The context deadline ensures deep BFS traversals cannot run unbounded.
+var activateTimeout = func() time.Duration {
+	secs := envIntDefault("MUNINN_ACTIVATE_TIMEOUT", 30)
+	return time.Duration(secs) * time.Second
+}()
+
 func (s *Server) handleActivate(w http.ResponseWriter, r *http.Request) {
 	var req ActivateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -643,8 +658,17 @@ func (s *Server) handleActivate(w http.ResponseWriter, r *http.Request) {
 		}
 		applyRecallModePreset(&req, preset)
 	}
-	resp, err := s.engine.Activate(r.Context(), &req)
+	// Apply a hard activation timeout so deep BFS traversals on large vaults
+	// cannot run unbounded. MUNINN_ACTIVATE_TIMEOUT (default 30s) is capped
+	// to the outer WriteTimeout so we never wait longer than the HTTP server allows.
+	ctx, cancel := context.WithTimeout(r.Context(), activateTimeout)
+	defer cancel()
+	resp, err := s.engine.Activate(ctx, &req)
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			s.sendError(r, w, http.StatusGatewayTimeout, ErrIndexError, "activation timeout: query took too long")
+			return
+		}
 		s.sendError(r, w, http.StatusInternalServerError, ErrIndexError, err.Error())
 		return
 	}

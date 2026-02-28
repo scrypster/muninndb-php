@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -18,10 +20,11 @@ import (
 
 // MCPServer serves the MCP JSON-RPC 2.0 protocol on a single HTTP mux.
 type MCPServer struct {
-	engine  EngineInterface
-	token   string // required Bearer token; empty = no auth
-	limiter *rate.Limiter
-	srv     *http.Server
+	engine    EngineInterface
+	token     string // required Bearer token; empty = no auth
+	limiter   *rate.Limiter
+	srv       *http.Server
+	tlsConfig *tls.Config // nil = plain TCP
 
 	sseSessionsMu sync.Mutex
 	sseSessions   map[string]*sseSession // sessionID → session
@@ -34,12 +37,14 @@ type sseSession struct {
 
 // New creates an MCPServer. addr is the listen address (e.g., ":8750").
 // token is the required Bearer token; pass "" to disable auth.
-func New(addr string, eng EngineInterface, token string) *MCPServer {
+// tlsConfig, if non-nil, enables TLS on the listener.
+func New(addr string, eng EngineInterface, token string, tlsConfig *tls.Config) *MCPServer {
 	s := &MCPServer{
 		engine:      eng,
 		token:       token,
 		limiter:     rate.NewLimiter(rate.Limit(100), 200),
 		sseSessions: make(map[string]*sseSession),
+		tlsConfig:   tlsConfig,
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {
@@ -75,7 +80,17 @@ func New(addr string, eng EngineInterface, token string) *MCPServer {
 }
 
 // Serve starts listening. Blocks until the server is stopped.
-func (s *MCPServer) Serve() error { return s.srv.ListenAndServe() }
+func (s *MCPServer) Serve() error {
+	ln, err := net.Listen("tcp", s.srv.Addr)
+	if err != nil {
+		return err
+	}
+	if s.tlsConfig != nil {
+		ln = tls.NewListener(ln, s.tlsConfig)
+		slog.Info("mcp: TLS enabled", "addr", ln.Addr().String())
+	}
+	return s.srv.Serve(ln)
+}
 
 // Shutdown gracefully stops the server.
 func (s *MCPServer) Shutdown(ctx context.Context) error { return s.srv.Shutdown(ctx) }

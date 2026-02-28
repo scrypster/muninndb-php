@@ -59,6 +59,7 @@ archives:
         format: zip
     files:
       - README.md
+      - CHANGELOG.md
       - docs/self-hosting.md
 
 checksum:

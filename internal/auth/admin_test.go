@@ -67,7 +67,7 @@ func TestAdminExists(t *testing.T) {
 func TestAPIKeyGenerateAndValidate(t *testing.T) {
 	s := auth.NewStore(openTestDB(t))
 
-	token, key, err := s.GenerateAPIKey("default", "test-agent", "full")
+	token, key, err := s.GenerateAPIKey("default", "test-agent", "full", nil)
 	if err != nil {
 		t.Fatalf("GenerateAPIKey: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestAPIKeyGenerateAndValidate(t *testing.T) {
 
 func TestAPIKeyInvalidMode(t *testing.T) {
 	s := auth.NewStore(openTestDB(t))
-	_, _, err := s.GenerateAPIKey("default", "agent", "superuser")
+	_, _, err := s.GenerateAPIKey("default", "agent", "superuser", nil)
 	if err == nil {
 		t.Error("expected error for invalid mode")
 	}
@@ -97,9 +97,9 @@ func TestAPIKeyInvalidMode(t *testing.T) {
 
 func TestAPIKeyList(t *testing.T) {
 	s := auth.NewStore(openTestDB(t))
-	s.GenerateAPIKey("vault-a", "agent-1", "full")
-	s.GenerateAPIKey("vault-a", "agent-2", "observe")
-	s.GenerateAPIKey("vault-b", "agent-3", "full")
+	s.GenerateAPIKey("vault-a", "agent-1", "full", nil)
+	s.GenerateAPIKey("vault-a", "agent-2", "observe", nil)
+	s.GenerateAPIKey("vault-b", "agent-3", "full", nil)
 
 	keys, err := s.ListAPIKeys("vault-a")
 	if err != nil {
@@ -112,7 +112,7 @@ func TestAPIKeyList(t *testing.T) {
 
 func TestAPIKeyRevoke(t *testing.T) {
 	s := auth.NewStore(openTestDB(t))
-	token, key, _ := s.GenerateAPIKey("default", "temp", "observe")
+	token, key, _ := s.GenerateAPIKey("default", "temp", "observe", nil)
 
 	if err := s.RevokeAPIKey("default", key.ID); err != nil {
 		t.Fatalf("RevokeAPIKey: %v", err)

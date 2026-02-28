@@ -290,7 +290,7 @@ var _ = bytes.NewReader
 
 func TestHealthEndpoint(t *testing.T) {
 	engine := &MockEngine{}
-	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	// Create a test request
 	req := httptest.NewRequest("GET", "/api/health", nil)
@@ -316,7 +316,7 @@ func TestHealthEndpoint(t *testing.T) {
 
 func TestReadyEndpoint(t *testing.T) {
 	engine := &MockEngine{}
-	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("GET", "/api/ready", nil)
 	w := httptest.NewRecorder()
@@ -339,7 +339,7 @@ func TestReadyEndpoint(t *testing.T) {
 
 func TestListEngrams(t *testing.T) {
 	engine := &MockEngine{}
-	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("GET", "/api/engrams?vault=default", nil)
 	w := httptest.NewRecorder()
@@ -362,7 +362,7 @@ func TestListEngrams(t *testing.T) {
 
 func TestListVaults(t *testing.T) {
 	engine := &MockEngine{}
-	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("GET", "/api/vaults", nil)
 	w := httptest.NewRecorder()
@@ -385,7 +385,7 @@ func TestListVaults(t *testing.T) {
 
 func TestGetSession(t *testing.T) {
 	engine := &MockEngine{}
-	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("GET", "/api/session?vault=default&since=2020-01-01T00:00:00Z", nil)
 	w := httptest.NewRecorder()
@@ -405,7 +405,7 @@ func TestGetSession(t *testing.T) {
 func TestCORSHeaders(t *testing.T) {
 	engine := &MockEngine{}
 	const testOrigin = "http://example.com"
-	server := NewServer("localhost:8080", engine, nil, nil, []string{testOrigin}, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", engine, nil, nil, []string{testOrigin}, EmbedInfo{}, nil, "", nil)
 
 	// Test OPTIONS preflight with matching origin.
 	req := httptest.NewRequest("OPTIONS", "/api/health", nil)
@@ -440,7 +440,7 @@ func TestCORSHeaders(t *testing.T) {
 
 func TestListEngramsDefaultVault(t *testing.T) {
 	engine := &MockEngine{}
-	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	// No vault param — should default to "default"
 	req := httptest.NewRequest("GET", "/api/engrams", nil)
@@ -462,7 +462,7 @@ func TestListEngramsDefaultVault(t *testing.T) {
 
 func TestListEngramsLimitClamping(t *testing.T) {
 	engine := &MockEngine{}
-	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	// Overlarge limit should be clamped to 100
 	req := httptest.NewRequest("GET", "/api/engrams?vault=default&limit=500", nil)
@@ -484,7 +484,7 @@ func TestListEngramsLimitClamping(t *testing.T) {
 
 func TestGetEngramLinks(t *testing.T) {
 	engine := &MockEngine{}
-	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("GET", "/api/engrams/test-id/links", nil)
 	w := httptest.NewRecorder()
@@ -505,7 +505,7 @@ func TestGetEngramLinks(t *testing.T) {
 
 func TestGetSessionDefaultSince(t *testing.T) {
 	engine := &MockEngine{}
-	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	// No since param — should default to last 24h
 	req := httptest.NewRequest("GET", "/api/session?vault=default", nil)
@@ -519,7 +519,7 @@ func TestGetSessionDefaultSince(t *testing.T) {
 
 func TestGetSessionMalformedSince(t *testing.T) {
 	engine := &MockEngine{}
-	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	// Malformed since — should fall back to 24h, not error
 	req := httptest.NewRequest("GET", "/api/session?vault=default&since=not-a-date", nil)
@@ -533,7 +533,7 @@ func TestGetSessionMalformedSince(t *testing.T) {
 
 func TestGetSessionLimitClamping(t *testing.T) {
 	engine := &MockEngine{}
-	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("GET", "/api/session?vault=default&limit=9999", nil)
 	w := httptest.NewRecorder()
@@ -547,7 +547,7 @@ func TestGetSessionLimitClamping(t *testing.T) {
 func TestCORSHeadersOnNewRoutes(t *testing.T) {
 	engine := &MockEngine{}
 	const testOrigin = "http://example.com"
-	server := NewServer("localhost:8080", engine, nil, nil, []string{testOrigin}, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", engine, nil, nil, []string{testOrigin}, EmbedInfo{}, nil, "", nil)
 
 	routes := []string{
 		"/api/engrams",
@@ -568,7 +568,7 @@ func TestCORSHeadersOnNewRoutes(t *testing.T) {
 
 func TestPreflightOnNewRoutes(t *testing.T) {
 	engine := &MockEngine{}
-	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	routes := []string{"/api/engrams", "/api/vaults", "/api/session"}
 	for _, path := range routes {
@@ -598,7 +598,7 @@ func (e *errorEngine) GetEngramLinks(ctx context.Context, req *GetEngramLinksReq
 }
 
 func TestListEngramsEngineError(t *testing.T) {
-	server := NewServer("localhost:8080", &errorEngine{}, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", &errorEngine{}, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 	req := httptest.NewRequest("GET", "/api/engrams?vault=default", nil)
 	w := httptest.NewRecorder()
 	server.mux.ServeHTTP(w, req)
@@ -609,7 +609,7 @@ func TestListEngramsEngineError(t *testing.T) {
 }
 
 func TestListVaultsEngineError(t *testing.T) {
-	server := NewServer("localhost:8080", &errorEngine{}, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", &errorEngine{}, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 	req := httptest.NewRequest("GET", "/api/vaults", nil)
 	w := httptest.NewRecorder()
 	server.mux.ServeHTTP(w, req)
@@ -620,7 +620,7 @@ func TestListVaultsEngineError(t *testing.T) {
 }
 
 func TestGetSessionEngineError(t *testing.T) {
-	server := NewServer("localhost:8080", &errorEngine{}, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", &errorEngine{}, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 	req := httptest.NewRequest("GET", "/api/session?vault=default", nil)
 	w := httptest.NewRecorder()
 	server.mux.ServeHTTP(w, req)
@@ -631,7 +631,7 @@ func TestGetSessionEngineError(t *testing.T) {
 }
 
 func TestGetEngramLinksEngineError(t *testing.T) {
-	server := NewServer("localhost:8080", &errorEngine{}, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", &errorEngine{}, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 	req := httptest.NewRequest("GET", "/api/engrams/test-id/links", nil)
 	w := httptest.NewRecorder()
 	server.mux.ServeHTTP(w, req)
@@ -643,7 +643,7 @@ func TestGetEngramLinksEngineError(t *testing.T) {
 
 func TestShutdown(t *testing.T) {
 	engine := &MockEngine{}
-	server := NewServer("localhost:0", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:0", engine, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -676,7 +676,7 @@ func TestShutdown(t *testing.T) {
 func TestContextPropagation(t *testing.T) {
 	var gotCtx context.Context
 	eng := &ctxCapturingEngine{captureCtx: func(ctx context.Context) { gotCtx = ctx }}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("GET", "/api/stats", nil)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -728,7 +728,7 @@ func TestServer_PersistClusterDisabled_NoDataDir(t *testing.T) {
 // TestCreateEngram tests POST /api/engrams → 201
 func TestCreateEngram(t *testing.T) {
 	engine := &MockEngine{}
-	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	body := `{"concept":"test concept","content":"test content","vault":"default"}`
 	req := httptest.NewRequest("POST", "/api/engrams", strings.NewReader(body))
@@ -752,7 +752,7 @@ func TestCreateEngram(t *testing.T) {
 // TestCreateEngram_InvalidJSON tests POST /api/engrams with bad body → 400
 func TestCreateEngram_InvalidJSON(t *testing.T) {
 	engine := &MockEngine{}
-	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("POST", "/api/engrams", strings.NewReader("not json"))
 	req.Header.Set("Content-Type", "application/json")
@@ -767,7 +767,7 @@ func TestCreateEngram_InvalidJSON(t *testing.T) {
 // TestActivate tests POST /api/activate → 200
 func TestActivate(t *testing.T) {
 	engine := &MockEngine{}
-	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	body := `{"context":["memory","learning"],"vault":"default","max_results":10}`
 	req := httptest.NewRequest("POST", "/api/activate", strings.NewReader(body))
@@ -790,7 +790,7 @@ func TestActivate(t *testing.T) {
 // TestActivate_InvalidJSON tests POST /api/activate with bad body → 400
 func TestActivate_InvalidJSON(t *testing.T) {
 	engine := &MockEngine{}
-	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("POST", "/api/activate", strings.NewReader("invalid json"))
 	req.Header.Set("Content-Type", "application/json")
@@ -805,7 +805,7 @@ func TestActivate_InvalidJSON(t *testing.T) {
 // TestDeleteEngram tests DELETE /api/engrams/{id} → 200
 func TestDeleteEngram(t *testing.T) {
 	engine := &MockEngine{}
-	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("DELETE", "/api/engrams/01ARZ3NDEKTSV4RRFFQ69G5FAV", nil)
 	w := httptest.NewRecorder()
@@ -826,7 +826,7 @@ func TestDeleteEngram(t *testing.T) {
 // TestDeleteEngram_MissingID tests DELETE /api/engrams/ without ID → 400
 func TestDeleteEngram_MissingID(t *testing.T) {
 	engine := &MockEngine{}
-	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	// The mux will not match /api/engrams/ (missing {id}), so request will 404
 	req := httptest.NewRequest("DELETE", "/api/engrams/", nil)
@@ -843,7 +843,7 @@ func TestDeleteEngram_MissingID(t *testing.T) {
 // TestActivate_EmptyContext tests POST /api/activate with empty context array
 func TestActivate_EmptyContext(t *testing.T) {
 	engine := &MockEngine{}
-	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	body := `{"context":[],"vault":"default","max_results":10}`
 	req := httptest.NewRequest("POST", "/api/activate", strings.NewReader(body))
@@ -878,7 +878,7 @@ func TestOnlineBackupEndpoint(t *testing.T) {
 	db.Close()
 
 	eng := &backupMockEngine{pebbleDir: pebbleDir}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	outputDir := filepath.Join(t.TempDir(), "online-backup-out")
 	body := fmt.Sprintf(`{"output_dir":%q}`, outputDir)
@@ -925,7 +925,7 @@ func TestOnlineBackupEndpoint(t *testing.T) {
 
 func TestOnlineBackupEndpoint_ConflictExistingDir(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	existingDir := t.TempDir()
 	body := fmt.Sprintf(`{"output_dir":%q}`, existingDir)
@@ -941,7 +941,7 @@ func TestOnlineBackupEndpoint_ConflictExistingDir(t *testing.T) {
 
 func TestOnlineBackupEndpoint_MissingOutputDir(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	body := `{}`
 	req := httptest.NewRequest("POST", "/api/admin/backup", strings.NewReader(body))
@@ -978,7 +978,7 @@ func TestRemoveNode_SelfRemoval_Returns400(t *testing.T) {
 	coord := replication.NewClusterCoordinator(cfg, repLog, applier, epochStore)
 
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 	server.SetCoordinator(coord)
 
 	req := httptest.NewRequest("DELETE", "/api/admin/cluster/nodes/cortex-1", nil)
@@ -1022,7 +1022,7 @@ func TestRemoveNode_OtherNode_Returns200(t *testing.T) {
 	coord := replication.NewClusterCoordinator(cfg, repLog, applier, epochStore)
 
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 	server.SetCoordinator(coord)
 
 	req := httptest.NewRequest("DELETE", "/api/admin/cluster/nodes/lobe-2", nil)
@@ -1036,7 +1036,7 @@ func TestRemoveNode_OtherNode_Returns200(t *testing.T) {
 
 func TestBatchCreateEngrams(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	body := `{"engrams":[{"content":"one","concept":"c1"},{"content":"two","concept":"c2"},{"content":"three"}]}`
 	req := httptest.NewRequest("POST", "/api/engrams/batch", strings.NewReader(body))
@@ -1074,7 +1074,7 @@ func TestBatchCreateEngrams(t *testing.T) {
 
 func TestBatchCreateEngramsExceedsLimit(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	engrams := make([]map[string]string, 51)
 	for i := range engrams {
@@ -1093,7 +1093,7 @@ func TestBatchCreateEngramsExceedsLimit(t *testing.T) {
 
 func TestBatchCreateEngramsEmptyArray(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	body := `{"engrams":[]}`
 	req := httptest.NewRequest("POST", "/api/engrams/batch", strings.NewReader(body))
@@ -1108,7 +1108,7 @@ func TestBatchCreateEngramsEmptyArray(t *testing.T) {
 
 func TestEvolveEndpoint(t *testing.T) {
 	engine := &MockEngine{}
-	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	body := `{"new_content":"updated content","reason":"correction"}`
 	req := httptest.NewRequest("POST", "/api/engrams/test-id/evolve", strings.NewReader(body))
@@ -1131,7 +1131,7 @@ func TestEvolveEndpoint(t *testing.T) {
 
 func TestEvolveEndpoint_MissingFields(t *testing.T) {
 	engine := &MockEngine{}
-	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	body := `{}`
 	req := httptest.NewRequest("POST", "/api/engrams/test-id/evolve", strings.NewReader(body))
@@ -1146,7 +1146,7 @@ func TestEvolveEndpoint_MissingFields(t *testing.T) {
 
 func TestConsolidateEndpoint(t *testing.T) {
 	engine := &MockEngine{}
-	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	body := `{"vault":"default","ids":["id-1","id-2","id-3"],"merged_content":"combined content"}`
 	req := httptest.NewRequest("POST", "/api/consolidate", strings.NewReader(body))
@@ -1172,7 +1172,7 @@ func TestConsolidateEndpoint(t *testing.T) {
 
 func TestConsolidateEndpoint_TooFewIDs(t *testing.T) {
 	engine := &MockEngine{}
-	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	body := `{"vault":"default","ids":["only-one"],"merged_content":"content"}`
 	req := httptest.NewRequest("POST", "/api/consolidate", strings.NewReader(body))
@@ -1187,7 +1187,7 @@ func TestConsolidateEndpoint_TooFewIDs(t *testing.T) {
 
 func TestDecideEndpoint(t *testing.T) {
 	engine := &MockEngine{}
-	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	body := `{"vault":"default","decision":"use postgres","rationale":"better for relational data"}`
 	req := httptest.NewRequest("POST", "/api/decide", strings.NewReader(body))
@@ -1210,7 +1210,7 @@ func TestDecideEndpoint(t *testing.T) {
 
 func TestDecideEndpoint_MissingFields(t *testing.T) {
 	engine := &MockEngine{}
-	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	body := `{"vault":"default"}`
 	req := httptest.NewRequest("POST", "/api/decide", strings.NewReader(body))
@@ -1225,7 +1225,7 @@ func TestDecideEndpoint_MissingFields(t *testing.T) {
 
 func TestRestoreEndpoint(t *testing.T) {
 	engine := &MockEngine{}
-	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("POST", "/api/engrams/test-id/restore", nil)
 	w := httptest.NewRecorder()
@@ -1249,7 +1249,7 @@ func TestRestoreEndpoint(t *testing.T) {
 
 func TestTraverseEndpoint(t *testing.T) {
 	engine := &MockEngine{}
-	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	body := `{"vault":"default","start_id":"node-1"}`
 	req := httptest.NewRequest("POST", "/api/traverse", strings.NewReader(body))
@@ -1275,7 +1275,7 @@ func TestTraverseEndpoint(t *testing.T) {
 
 func TestTraverseEndpoint_MissingStartID(t *testing.T) {
 	engine := &MockEngine{}
-	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	body := `{"vault":"default"}`
 	req := httptest.NewRequest("POST", "/api/traverse", strings.NewReader(body))
@@ -1290,7 +1290,7 @@ func TestTraverseEndpoint_MissingStartID(t *testing.T) {
 
 func TestExplainEndpoint(t *testing.T) {
 	engine := &MockEngine{}
-	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	body := `{"vault":"default","engram_id":"eng-1","query":["test query"]}`
 	req := httptest.NewRequest("POST", "/api/explain", strings.NewReader(body))
@@ -1316,7 +1316,7 @@ func TestExplainEndpoint(t *testing.T) {
 
 func TestExplainEndpoint_MissingFields(t *testing.T) {
 	engine := &MockEngine{}
-	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	body := `{"vault":"default","query":["test"]}`
 	req := httptest.NewRequest("POST", "/api/explain", strings.NewReader(body))
@@ -1331,7 +1331,7 @@ func TestExplainEndpoint_MissingFields(t *testing.T) {
 
 func TestSetStateEndpoint(t *testing.T) {
 	engine := &MockEngine{}
-	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	body := `{"state":"active","reason":"resuming work"}`
 	req := httptest.NewRequest("PUT", "/api/engrams/test-id/state", strings.NewReader(body))
@@ -1357,7 +1357,7 @@ func TestSetStateEndpoint(t *testing.T) {
 
 func TestSetStateEndpoint_InvalidState(t *testing.T) {
 	engine := &MockEngine{}
-	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	body := `{"state":"invalid"}`
 	req := httptest.NewRequest("PUT", "/api/engrams/test-id/state", strings.NewReader(body))
@@ -1372,7 +1372,7 @@ func TestSetStateEndpoint_InvalidState(t *testing.T) {
 
 func TestListDeletedEndpoint(t *testing.T) {
 	engine := &MockEngine{}
-	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("GET", "/api/deleted?vault=default", nil)
 	w := httptest.NewRecorder()
@@ -1396,7 +1396,7 @@ func TestListDeletedEndpoint(t *testing.T) {
 
 func TestRetryEnrichEndpoint(t *testing.T) {
 	engine := &MockEngine{}
-	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("POST", "/api/engrams/test-id/retry-enrich", nil)
 	w := httptest.NewRecorder()
@@ -1420,7 +1420,7 @@ func TestRetryEnrichEndpoint(t *testing.T) {
 
 func TestContradictionsEndpoint(t *testing.T) {
 	engine := &MockEngine{}
-	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("GET", "/api/contradictions?vault=default", nil)
 	w := httptest.NewRecorder()
@@ -1441,7 +1441,7 @@ func TestContradictionsEndpoint(t *testing.T) {
 
 func TestGuideEndpoint(t *testing.T) {
 	engine := &MockEngine{}
-	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", engine, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("GET", "/api/guide?vault=default", nil)
 	w := httptest.NewRecorder()
@@ -1462,7 +1462,7 @@ func TestGuideEndpoint(t *testing.T) {
 
 func TestHandleReembedVault(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("POST", "/api/admin/vaults/test-vault/reembed", nil)
 	w := httptest.NewRecorder()
@@ -1483,7 +1483,7 @@ func TestHandleReembedVault(t *testing.T) {
 
 func TestHandleObservability(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("GET", "/api/admin/observability", nil)
 	w := httptest.NewRecorder()
@@ -1501,7 +1501,7 @@ func TestHandleObservability(t *testing.T) {
 
 func TestHandleRenameVault_Success(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	body := strings.NewReader(`{"new_name":"renamed-vault"}`)
 	req := httptest.NewRequest("POST", "/api/admin/vaults/old-vault/rename", body)
@@ -1524,7 +1524,7 @@ func TestHandleRenameVault_Success(t *testing.T) {
 
 func TestHandleRenameVault_InvalidName(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	body := strings.NewReader(`{"new_name":"BAD NAME!"}`)
 	req := httptest.NewRequest("POST", "/api/admin/vaults/old-vault/rename", body)
@@ -1539,7 +1539,7 @@ func TestHandleRenameVault_InvalidName(t *testing.T) {
 
 func TestHandleRenameVault_SameName(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	body := strings.NewReader(`{"new_name":"same-vault"}`)
 	req := httptest.NewRequest("POST", "/api/admin/vaults/same-vault/rename", body)
@@ -1562,7 +1562,7 @@ func (m *renameMockNotFound) RenameVault(_ context.Context, _, _ string) error {
 
 func TestHandleRenameVault_NotFound(t *testing.T) {
 	eng := &renameMockNotFound{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	body := strings.NewReader(`{"new_name":"new-vault"}`)
 	req := httptest.NewRequest("POST", "/api/admin/vaults/old-vault/rename", body)
@@ -1585,7 +1585,7 @@ func (m *renameMockJobActive) RenameVault(_ context.Context, _, _ string) error 
 
 func TestHandleRenameVault_JobActive(t *testing.T) {
 	eng := &renameMockJobActive{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	body := strings.NewReader(`{"new_name":"new-vault"}`)
 	req := httptest.NewRequest("POST", "/api/admin/vaults/old-vault/rename", body)
@@ -1608,7 +1608,7 @@ func (m *renameMockCollision) RenameVault(_ context.Context, _, _ string) error 
 
 func TestHandleRenameVault_Collision(t *testing.T) {
 	eng := &renameMockCollision{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	body := strings.NewReader(`{"new_name":"new-vault"}`)
 	req := httptest.NewRequest("POST", "/api/admin/vaults/old-vault/rename", body)
@@ -1623,7 +1623,7 @@ func TestHandleRenameVault_Collision(t *testing.T) {
 
 func TestHandleRenameVault_MissingBody(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("POST", "/api/admin/vaults/old-vault/rename", strings.NewReader(""))
 	req.Header.Set("Content-Type", "application/json")
@@ -1637,7 +1637,7 @@ func TestHandleRenameVault_MissingBody(t *testing.T) {
 
 func TestHandleRenameVault_EmptyNewName(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	body := strings.NewReader(`{"new_name":""}`)
 	req := httptest.NewRequest("POST", "/api/admin/vaults/old-vault/rename", body)
@@ -1654,7 +1654,7 @@ func TestHandleRenameVault_EmptyNewName(t *testing.T) {
 // exactly two keys (old_name, new_name), correct Content-Type header.
 func TestHandleRenameVault_ResponseBody(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	body := strings.NewReader(`{"new_name":"renamed-vault"}`)
 	req := httptest.NewRequest("POST", "/api/admin/vaults/old-vault/rename", body)
@@ -1710,7 +1710,7 @@ func (m *renameMockInternalError) RenameVault(_ context.Context, _, _ string) er
 // error falls through to the 500 Internal Server Error branch.
 func TestHandleRenameVault_InternalServerError(t *testing.T) {
 	eng := &renameMockInternalError{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "")
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
 
 	body := strings.NewReader(`{"new_name":"new-vault"}`)
 	req := httptest.NewRequest("POST", "/api/admin/vaults/old-vault/rename", body)

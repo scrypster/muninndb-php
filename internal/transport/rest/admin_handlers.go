@@ -50,9 +50,10 @@ func isValidVaultName(name string) bool {
 func (s *Server) handleCreateAPIKey(authStore *auth.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			Vault string `json:"vault"`
-			Label string `json:"label"`
-			Mode  string `json:"mode"`
+			Vault   string `json:"vault"`
+			Label   string `json:"label"`
+			Mode    string `json:"mode"`
+			Expires string `json:"expires"` // optional: duration like "90d", "1y", or RFC3339 date
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "invalid request body")
@@ -73,7 +74,16 @@ func (s *Server) handleCreateAPIKey(authStore *auth.Store) http.HandlerFunc {
 			s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "mode must be 'full' or 'observe'")
 			return
 		}
-		token, key, err := authStore.GenerateAPIKey(req.Vault, req.Label, req.Mode)
+		var expiresAt *time.Time
+		if req.Expires != "" {
+			t, err := parseKeyExpiry(req.Expires)
+			if err != nil {
+				s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "invalid expires: "+err.Error())
+				return
+			}
+			expiresAt = &t
+		}
+		token, key, err := authStore.GenerateAPIKey(req.Vault, req.Label, req.Mode, expiresAt)
 		if err != nil {
 			s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, err.Error())
 			return
@@ -83,6 +93,40 @@ func (s *Server) handleCreateAPIKey(authStore *auth.Store) http.HandlerFunc {
 			"key":   key,
 		})
 	}
+}
+
+// parseKeyExpiry parses an expiry specification into an absolute time.
+// Accepted formats:
+//   - Nd  — N days from now (e.g. "90d")
+//   - Ny  — N years from now (e.g. "1y")
+//   - RFC3339 date/datetime string (e.g. "2027-01-01" or "2027-01-01T00:00:00Z")
+func parseKeyExpiry(s string) (time.Time, error) {
+	now := time.Now()
+	if len(s) >= 2 {
+		unit := s[len(s)-1]
+		numStr := s[:len(s)-1]
+		switch unit {
+		case 'd', 'D':
+			var n int
+			if _, err := fmt.Sscanf(numStr, "%d", &n); err == nil && n > 0 {
+				return now.AddDate(0, 0, n), nil
+			}
+		case 'y', 'Y':
+			var n int
+			if _, err := fmt.Sscanf(numStr, "%d", &n); err == nil && n > 0 {
+				return now.AddDate(n, 0, 0), nil
+			}
+		}
+	}
+	// Try RFC3339 datetime.
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t, nil
+	}
+	// Try date-only (YYYY-MM-DD).
+	if t, err := time.Parse("2006-01-02", s); err == nil {
+		return t, nil
+	}
+	return time.Time{}, fmt.Errorf("use Nd, Ny, or RFC3339 date (e.g. '90d', '1y', '2027-01-01')")
 }
 
 func (s *Server) handleListAPIKeys(authStore *auth.Store) http.HandlerFunc {

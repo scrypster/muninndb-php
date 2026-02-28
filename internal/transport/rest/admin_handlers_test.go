@@ -27,7 +27,7 @@ func newTestAuthStore(t *testing.T) *auth.Store {
 
 func newTestServer(t *testing.T, store *auth.Store) *Server {
 	t.Helper()
-	return NewServer("localhost:0", &MockEngine{}, store, nil, nil, EmbedInfo{}, nil, "")
+	return NewServer("localhost:0", &MockEngine{}, store, nil, nil, EmbedInfo{}, nil, "", nil)
 }
 
 // TestCreateAPIKey tests POST /api/admin/keys
@@ -220,7 +220,7 @@ func TestChangeAdminPasswordEndpoint(t *testing.T) {
 // TestMCPInfo tests GET /api/admin/mcp-info
 func TestMCPInfo(t *testing.T) {
 	store := newTestAuthStore(t)
-	srv := NewServer("localhost:0", &MockEngine{}, store, nil, nil, EmbedInfo{}, nil, "", MCPInfo{
+	srv := NewServer("localhost:0", &MockEngine{}, store, nil, nil, EmbedInfo{}, nil, "", nil, MCPInfo{
 		Addr:     ":8750",
 		HasToken: true,
 	})
@@ -248,7 +248,7 @@ func TestMCPInfo(t *testing.T) {
 // TestMCPInfo_NoToken verifies token_configured=false when no token.
 func TestMCPInfo_NoToken(t *testing.T) {
 	store := newTestAuthStore(t)
-	srv := NewServer("localhost:0", &MockEngine{}, store, nil, nil, EmbedInfo{}, nil, "", MCPInfo{
+	srv := NewServer("localhost:0", &MockEngine{}, store, nil, nil, EmbedInfo{}, nil, "", nil, MCPInfo{
 		Addr:     ":8750",
 		HasToken: false,
 	})
@@ -267,7 +267,7 @@ func TestMCPInfo_NoToken(t *testing.T) {
 // TestMCPInfo_CustomPort verifies custom port is reflected in URL.
 func TestMCPInfo_CustomPort(t *testing.T) {
 	store := newTestAuthStore(t)
-	srv := NewServer("localhost:0", &MockEngine{}, store, nil, nil, EmbedInfo{}, nil, "", MCPInfo{
+	srv := NewServer("localhost:0", &MockEngine{}, store, nil, nil, EmbedInfo{}, nil, "", nil, MCPInfo{
 		Addr:     ":9999",
 		HasToken: false,
 	})
@@ -327,7 +327,7 @@ func TestHandlePlugins_NilRegistry(t *testing.T) {
 func TestHandlePlugins_EmptyRegistry(t *testing.T) {
 	store := newTestAuthStore(t)
 	reg := plugin.NewRegistry()
-	srv := NewServer("localhost:0", &MockEngine{}, store, nil, nil, EmbedInfo{}, reg, "", MCPInfo{})
+	srv := NewServer("localhost:0", &MockEngine{}, store, nil, nil, EmbedInfo{}, reg, "", nil, MCPInfo{})
 
 	req := httptest.NewRequest("GET", "/api/admin/plugins", nil)
 	w := httptest.NewRecorder()

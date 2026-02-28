@@ -13,7 +13,8 @@ import (
 
 // GenerateAPIKey creates a new API key for the given vault.
 // Returns the raw token (shown once) and the key metadata.
-func (s *Store) GenerateAPIKey(vault, label, mode string) (token string, key APIKey, err error) {
+// expiresAt is optional; pass nil for a key that never expires.
+func (s *Store) GenerateAPIKey(vault, label, mode string, expiresAt *time.Time) (token string, key APIKey, err error) {
 	if mode != "full" && mode != "observe" {
 		err = fmt.Errorf("mode must be 'full' or 'observe'")
 		return
@@ -37,6 +38,7 @@ func (s *Store) GenerateAPIKey(vault, label, mode string) (token string, key API
 		Mode:        mode,
 		CreatedAt:   time.Now(),
 		StorageHash: storageHash,
+		ExpiresAt:   expiresAt,
 	}
 
 	data, marshalErr := json.Marshal(key)
@@ -80,6 +82,9 @@ func (s *Store) ValidateAPIKey(token string) (APIKey, error) {
 	var key APIKey
 	if err := json.Unmarshal(data, &key); err != nil {
 		return APIKey{}, fmt.Errorf("corrupt key record: %w", err)
+	}
+	if key.ExpiresAt != nil && time.Now().After(*key.ExpiresAt) {
+		return APIKey{}, fmt.Errorf("api key has expired")
 	}
 	return key, nil
 }

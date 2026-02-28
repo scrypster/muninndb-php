@@ -76,7 +76,7 @@ func TestAuthMiddleware_LockedVaultNoKey(t *testing.T) {
 func TestAuthMiddleware_ValidKey(t *testing.T) {
 	s := newTestStore(t)
 	s.SetVaultConfig(auth.VaultConfig{Name: "myv", Public: false})
-	token, _, _ := s.GenerateAPIKey("myv", "agent", "observe")
+	token, _, _ := s.GenerateAPIKey("myv", "agent", "observe", nil)
 
 	var capturedMode string
 	handler := s.VaultAuthMiddleware(func(w http.ResponseWriter, r *http.Request) {

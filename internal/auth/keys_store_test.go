@@ -2,6 +2,7 @@ package auth
 
 import (
 	"testing"
+	"time"
 
 	"github.com/cockroachdb/pebble"
 	"github.com/cockroachdb/pebble/vfs"
@@ -22,7 +23,7 @@ func openAuthTestDB(t *testing.T) *pebble.DB {
 func TestAPIKey_CreateAndValidate(t *testing.T) {
 	s := NewStore(openAuthTestDB(t))
 
-	token, key, err := s.GenerateAPIKey("v1", "test-label", "full")
+	token, key, err := s.GenerateAPIKey("v1", "test-label", "full", nil)
 	if err != nil {
 		t.Fatalf("GenerateAPIKey: %v", err)
 	}
@@ -57,7 +58,7 @@ func TestAPIKey_NotFound(t *testing.T) {
 func TestAPIKey_RevokeIdempotent(t *testing.T) {
 	s := NewStore(openAuthTestDB(t))
 
-	_, key, err := s.GenerateAPIKey("vault-idem", "label", "full")
+	_, key, err := s.GenerateAPIKey("vault-idem", "label", "full", nil)
 	if err != nil {
 		t.Fatalf("GenerateAPIKey: %v", err)
 	}
@@ -75,7 +76,7 @@ func TestAPIKey_RevokeIdempotent(t *testing.T) {
 func TestAPIKey_RevokedKeyInvalid(t *testing.T) {
 	s := NewStore(openAuthTestDB(t))
 
-	token, key, err := s.GenerateAPIKey("vault-rev", "label", "full")
+	token, key, err := s.GenerateAPIKey("vault-rev", "label", "full", nil)
 	if err != nil {
 		t.Fatalf("GenerateAPIKey: %v", err)
 	}
@@ -90,13 +91,57 @@ func TestAPIKey_RevokedKeyInvalid(t *testing.T) {
 	}
 }
 
+// TestAPIKey_ExpiryNeverExpires creates a key with no expiry and verifies it is valid.
+func TestAPIKey_ExpiryNeverExpires(t *testing.T) {
+	s := NewStore(openAuthTestDB(t))
+
+	token, _, err := s.GenerateAPIKey("vault-exp", "no-expiry", "full", nil)
+	if err != nil {
+		t.Fatalf("GenerateAPIKey: %v", err)
+	}
+	if _, err := s.ValidateAPIKey(token); err != nil {
+		t.Fatalf("key with nil expiry should always be valid, got: %v", err)
+	}
+}
+
+// TestAPIKey_ExpiryFuture creates a key expiring in the future and verifies it validates.
+func TestAPIKey_ExpiryFuture(t *testing.T) {
+	s := NewStore(openAuthTestDB(t))
+
+	future := time.Now().Add(24 * time.Hour)
+	token, key, err := s.GenerateAPIKey("vault-exp", "future-key", "full", &future)
+	if err != nil {
+		t.Fatalf("GenerateAPIKey: %v", err)
+	}
+	if key.ExpiresAt == nil {
+		t.Fatal("expected ExpiresAt to be set")
+	}
+	if _, err := s.ValidateAPIKey(token); err != nil {
+		t.Fatalf("key with future expiry should be valid, got: %v", err)
+	}
+}
+
+// TestAPIKey_ExpiryPast creates a key that is already expired and verifies it is rejected.
+func TestAPIKey_ExpiryPast(t *testing.T) {
+	s := NewStore(openAuthTestDB(t))
+
+	past := time.Now().Add(-1 * time.Hour)
+	token, _, err := s.GenerateAPIKey("vault-exp", "expired-key", "full", &past)
+	if err != nil {
+		t.Fatalf("GenerateAPIKey: %v", err)
+	}
+	if _, err := s.ValidateAPIKey(token); err == nil {
+		t.Fatal("expected ValidateAPIKey to reject an expired key, got nil")
+	}
+}
+
 // TestAPIKey_WrongVault creates a key for "vault-a" and verifies that
 // ValidateAPIKey still succeeds (keys are global by token, not vault-scoped)
 // but the returned key's vault is "vault-a", not "vault-b".
 func TestAPIKey_WrongVault(t *testing.T) {
 	s := NewStore(openAuthTestDB(t))
 
-	token, _, err := s.GenerateAPIKey("vault-a", "label", "full")
+	token, _, err := s.GenerateAPIKey("vault-a", "label", "full", nil)
 	if err != nil {
 		t.Fatalf("GenerateAPIKey: %v", err)
 	}

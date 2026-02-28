@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -29,6 +30,7 @@ type Server struct {
 	authStore     *auth.Store
 	sessionSecret []byte
 	ring          *logging.RingBuffer
+	tlsConfig     *tls.Config // nil = plain TCP
 }
 
 // sseHub manages connected SSE clients.
@@ -71,7 +73,8 @@ func (h *sseHub) broadcast(data []byte) {
 // NewServer creates a new UI server using the provided embedded FS, engine, and API handler.
 // apiHandler is mounted at /api/ so the SPA can make same-origin API calls.
 // authStore and sessionSecret are used to handle admin login/logout via cookie sessions.
-func NewServer(webFS fs.FS, engine rest.EngineAPI, apiHandler http.Handler, authStore *auth.Store, sessionSecret []byte, ring *logging.RingBuffer) (*Server, error) {
+// tlsConfig, if non-nil, enables TLS on the listener.
+func NewServer(webFS fs.FS, engine rest.EngineAPI, apiHandler http.Handler, authStore *auth.Store, sessionSecret []byte, ring *logging.RingBuffer, tlsConfig *tls.Config) (*Server, error) {
 	staticFS, err := fs.Sub(webFS, "static")
 	if err != nil {
 		return nil, err
@@ -90,6 +93,7 @@ func NewServer(webFS fs.FS, engine rest.EngineAPI, apiHandler http.Handler, auth
 		authStore:     authStore,
 		sessionSecret: sessionSecret,
 		ring:          ring,
+		tlsConfig:     tlsConfig,
 	}
 
 	mux := http.NewServeMux()
@@ -133,6 +137,10 @@ func (s *Server) Start(ctx context.Context, addr string) error {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
+	}
+	if s.tlsConfig != nil {
+		ln = tls.NewListener(ln, s.tlsConfig)
+		slog.Info("ui: TLS enabled", "addr", ln.Addr().String())
 	}
 	s.server.Addr = addr
 

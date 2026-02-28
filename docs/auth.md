@@ -254,6 +254,7 @@ If each user had their own relevance weights, the vault would have N brains inst
 | Transport | HTTP by default; run behind TLS-terminating proxy in production |
 | Key revocation | Immediate, no grace period |
 | Observe isolation | Enforced in engine activation layer — not just an honor system |
+| Encryption at rest | Not built-in — use OS/volume encryption; see [self-hosting guide](self-hosting.md#encryption-at-rest) |
 
 ---
 

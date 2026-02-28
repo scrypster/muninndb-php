@@ -385,6 +385,10 @@ func (e *ActivationEngine) Run(ctx context.Context, req *ActivateRequest) (*Acti
 	// The early-exit in phase5Traverse handles the no-association case efficiently.
 	var traversed []traversedCandidate
 	if req.HopDepth > 0 {
+		// Check deadline before starting BFS — skip traversal if already expired.
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		traversed = e.phase5Traverse(ctx, req, ws, profile, fused)
 	}
 
@@ -898,6 +902,17 @@ func (e *ActivationEngine) phase5Traverse(
 	expanded := 0
 
 	for len(currentLevel) > 0 && expanded < maxBFSNodes {
+		// Check context deadline at the start of each BFS level.
+		// Each level issues a Pebble batch read; on large vaults with 8-hop depth
+		// this can loop many times — abort early if the caller timed out.
+		select {
+		case <-ctx.Done():
+			slog.Warn("activation: bfs truncated by context deadline",
+				"vault", req.VaultID, "expanded", expanded)
+			return discovered
+		default:
+		}
+
 		// Collect IDs eligible for expansion at this level.
 		ids := make([]storage.ULID, 0, len(currentLevel))
 		eligible := currentLevel[:0:len(currentLevel)]

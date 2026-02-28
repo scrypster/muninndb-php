@@ -270,3 +270,51 @@ jobs:
           if [ -n "$SERVER_PID" ]; then
             kill $SERVER_PID 2>/dev/null || true
           fi
+
+  # ── API spec validation — catches drift before it ships ───────────────
+  api-spec-validation:
+    name: API spec validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check openapi.yaml exists
+        run: |
+          if [ ! -f internal/transport/rest/openapi.yaml ]; then
+            echo "ERROR: internal/transport/rest/openapi.yaml not found"
+            echo "The OpenAPI spec must be present. Add or restore the file."
+            exit 1
+          fi
+          echo "openapi.yaml found ($(wc -c < internal/transport/rest/openapi.yaml) bytes)"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Lint OpenAPI spec
+        run: npx --yes @redocly/cli@latest lint internal/transport/rest/openapi.yaml
+
+      - name: Check route count parity (informational)
+        run: |
+          # Count paths defined in the OpenAPI spec (lines starting with "  /")
+          spec_routes=$(grep -c "^  /" internal/transport/rest/openapi.yaml || true)
+
+          # Count mux.HandleFunc / router.Handle / r.Handle / r.HandleFunc registrations in server.go
+          server_routes=$(grep -cE "\.(HandleFunc|Handle)\(" internal/transport/rest/server.go || true)
+
+          echo "OpenAPI spec paths : $spec_routes"
+          echo "server.go handlers : $server_routes"
+
+          # Warn (not fail) if they diverge by more than 5 — exact parity is
+          # unlikely because server.go includes middleware mounts, health
+          # endpoints, and static-file routes that are intentionally omitted
+          # from the public-facing spec.
+          diff=$((server_routes - spec_routes))
+          abs_diff=${diff#-}
+          if [ "$abs_diff" -gt 5 ]; then
+            echo "WARNING: route count diverges by $abs_diff (spec=$spec_routes, server=$server_routes)."
+            echo "Consider updating openapi.yaml if new public routes were added."
+          else
+            echo "Route count parity OK (delta=$diff, within threshold of 5)."
+          fi

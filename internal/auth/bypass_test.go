@@ -200,7 +200,7 @@ func TestMiddleware_CrossVaultAccess(t *testing.T) {
 	s.SetVaultConfig(VaultConfig{Name: "private", Public: false})
 	s.SetVaultConfig(VaultConfig{Name: "other", Public: false})
 
-	token, _, err := s.GenerateAPIKey("private", "agent", "full")
+	token, _, err := s.GenerateAPIKey("private", "agent", "full", nil)
 	if err != nil {
 		t.Fatalf("GenerateAPIKey: %v", err)
 	}
@@ -231,7 +231,7 @@ func TestMiddleware_ObserveModeWriteAttempt(t *testing.T) {
 	s := newBypassTestStore(t)
 	s.SetVaultConfig(VaultConfig{Name: "vault", Public: false})
 
-	token, _, err := s.GenerateAPIKey("vault", "reader", "observe")
+	token, _, err := s.GenerateAPIKey("vault", "reader", "observe", nil)
 	if err != nil {
 		t.Fatalf("GenerateAPIKey: %v", err)
 	}

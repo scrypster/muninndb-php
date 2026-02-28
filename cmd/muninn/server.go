@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -443,6 +444,8 @@ func runServer() {
 	metricsAddr := flag.String("metrics-addr", "", "Prometheus /metrics listen address (empty = disabled)")
 	mcpToken := flag.String("mcp-token", "", "Bearer token for MCP auth (empty = no auth)")
 	dev := flag.Bool("dev", false, "serve web assets from ./web directory (development mode)")
+	tlsCert := flag.String("tls-cert", "", "Path to TLS certificate file (PEM)")
+	tlsKey  := flag.String("tls-key",  "", "Path to TLS private key file (PEM)")
 	var logLevelStr string
 	flag.StringVar(&logLevelStr, "log-level", "info", "Log level: debug, info, warn, error")
 	flag.Usage = func() {
@@ -466,6 +469,31 @@ func runServer() {
 		fmt.Fprintf(os.Stderr, "  MUNINN_RATE_LIMIT_PER_IP_RPS Per-IP rate limit requests/sec (default: 100)\n")
 	}
 	flag.Parse()
+
+	// TLS env fallbacks — flags take priority; env vars are the fallback.
+	if *tlsCert == "" { *tlsCert = os.Getenv("MUNINN_TLS_CERT") }
+	if *tlsKey == "" { *tlsKey = os.Getenv("MUNINN_TLS_KEY") }
+
+	// Validate: both cert and key must be provided together, or neither.
+	if (*tlsCert == "") != (*tlsKey == "") {
+		slog.Error("tls: --tls-cert and --tls-key must both be set (or neither)")
+		os.Exit(1)
+	}
+
+	// Load TLS configuration if cert/key pair is provided.
+	var clientTLS *tls.Config
+	if *tlsCert != "" {
+		cert, err := tls.LoadX509KeyPair(*tlsCert, *tlsKey)
+		if err != nil {
+			slog.Error("tls: failed to load certificate", "cert", *tlsCert, "err", err)
+			os.Exit(1)
+		}
+		clientTLS = &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			MinVersion:   tls.VersionTLS12,
+		}
+		slog.Info("tls: client-facing TLS enabled", "cert", *tlsCert)
+	}
 
 	// Validate address flags early so misconfigurations are caught before any
 	// resources are allocated. metricsAddr is optional (empty = disabled).
@@ -740,9 +768,9 @@ func runServer() {
 	}
 
 	// Build transport servers
-	mbpServer := mbp.NewServer(*mbpAddr, eng, authStore)
+	mbpServer := mbp.NewServer(*mbpAddr, eng, authStore, clientTLS)
 	corsOrigins := parseCORSOrigins(os.Getenv("MUNINN_CORS_ORIGINS"))
-	restServer := rest.NewServer(*restAddr, restWrapper, authStore, sessionSecret, corsOrigins, embedInfo, pluginRegistry, *dataDir, rest.MCPInfo{
+	restServer := rest.NewServer(*restAddr, restWrapper, authStore, sessionSecret, corsOrigins, embedInfo, pluginRegistry, *dataDir, clientTLS, rest.MCPInfo{
 		Addr:     *mcpAddr,
 		HasToken: *mcpToken != "",
 	})
@@ -750,11 +778,11 @@ func runServer() {
 
 	// Build MCP server
 	mcpAdapter := mcp.NewEngineAdapter(eng, enrichPlugin)
-	mcpServer := mcp.New(*mcpAddr, mcpAdapter, *mcpToken)
+	mcpServer := mcp.New(*mcpAddr, mcpAdapter, *mcpToken, clientTLS)
 
 	// Build gRPC server
 	grpcAdapter := grpcpkg.NewEngineAdapter(eng)
-	grpcServer := grpcpkg.NewServer(*grpcAddr, grpcAdapter, authStore)
+	grpcServer := grpcpkg.NewServer(*grpcAddr, grpcAdapter, authStore, clientTLS)
 
 	// Signal handling
 	ctx, cancel := context.WithCancel(context.Background())
@@ -903,7 +931,7 @@ func runServer() {
 	}()
 
 	// Start UI server
-	uiSrv, err := ui.NewServer(webFS, restWrapper, restServer.Handler(), authStore, sessionSecret, ring)
+	uiSrv, err := ui.NewServer(webFS, restWrapper, restServer.Handler(), authStore, sessionSecret, ring, clientTLS)
 	if err != nil {
 		slog.Error("create ui server", "err", err)
 		os.Exit(1)
