@@ -121,3 +121,127 @@ func TestObserveFromContext_Defaults(t *testing.T) {
 		t.Error("expected ObserveFromContext to return false with no context value")
 	}
 }
+
+func TestAdminSessionMiddleware_ValidCookie(t *testing.T) {
+	secret := []byte("test-secret-32-bytes-long-enough!")
+	token, err := auth.NewSessionToken("admin", secret)
+	if err != nil {
+		t.Fatalf("NewSessionToken: %v", err)
+	}
+
+	reached := false
+	handler := auth.AdminSessionMiddleware(secret, func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest("GET", "/admin", nil)
+	req.AddCookie(&http.Cookie{Name: "muninn_session", Value: token})
+	w := httptest.NewRecorder()
+	handler(w, req)
+
+	if !reached {
+		t.Error("expected next handler to be called with valid session cookie")
+	}
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", w.Code)
+	}
+}
+
+func TestAdminSessionMiddleware_NoCookie(t *testing.T) {
+	secret := []byte("test-secret-32-bytes-long-enough!")
+
+	handler := auth.AdminSessionMiddleware(secret, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest("GET", "/admin", nil)
+	w := httptest.NewRecorder()
+	handler(w, req)
+
+	if w.Code != http.StatusFound {
+		t.Errorf("expected redirect (302) with no cookie, got %d", w.Code)
+	}
+	if loc := w.Header().Get("Location"); loc != "/login" {
+		t.Errorf("expected redirect to /login, got %q", loc)
+	}
+}
+
+func TestAdminSessionMiddleware_InvalidCookie(t *testing.T) {
+	secret := []byte("test-secret-32-bytes-long-enough!")
+
+	handler := auth.AdminSessionMiddleware(secret, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest("GET", "/admin", nil)
+	req.AddCookie(&http.Cookie{Name: "muninn_session", Value: "bad.token"})
+	w := httptest.NewRecorder()
+	handler(w, req)
+
+	if w.Code != http.StatusFound {
+		t.Errorf("expected redirect (302) with invalid cookie, got %d", w.Code)
+	}
+}
+
+func TestAdminAPIMiddleware_ValidCookie(t *testing.T) {
+	s := newTestStore(t)
+	secret := []byte("test-secret-32-bytes-long-enough!")
+	token, err := auth.NewSessionToken("admin", secret)
+	if err != nil {
+		t.Fatalf("NewSessionToken: %v", err)
+	}
+
+	reached := false
+	handler := s.AdminAPIMiddleware(secret, func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest("GET", "/api/admin/keys", nil)
+	req.AddCookie(&http.Cookie{Name: "muninn_session", Value: token})
+	w := httptest.NewRecorder()
+	handler(w, req)
+
+	if !reached {
+		t.Error("expected next handler to be called with valid session cookie")
+	}
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", w.Code)
+	}
+}
+
+func TestAdminAPIMiddleware_NoCookie(t *testing.T) {
+	s := newTestStore(t)
+	secret := []byte("test-secret-32-bytes-long-enough!")
+
+	handler := s.AdminAPIMiddleware(secret, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest("GET", "/api/admin/keys", nil)
+	w := httptest.NewRecorder()
+	handler(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 with no cookie, got %d", w.Code)
+	}
+}
+
+func TestAdminAPIMiddleware_InvalidCookie(t *testing.T) {
+	s := newTestStore(t)
+	secret := []byte("test-secret-32-bytes-long-enough!")
+
+	handler := s.AdminAPIMiddleware(secret, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest("GET", "/api/admin/keys", nil)
+	req.AddCookie(&http.Cookie{Name: "muninn_session", Value: "tampered.value"})
+	w := httptest.NewRecorder()
+	handler(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 with invalid cookie, got %d", w.Code)
+	}
+}
