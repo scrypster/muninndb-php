@@ -1599,11 +1599,11 @@ func TestHandleRenameVault_JobActive(t *testing.T) {
 }
 
 // renameMockCollision embeds MockEngine and overrides RenameVault to return
-// an error containing "already exists" to simulate a name collision.
+// ErrVaultNameCollision to simulate a name collision.
 type renameMockCollision struct{ MockEngine }
 
 func (m *renameMockCollision) RenameVault(_ context.Context, _, _ string) error {
-	return fmt.Errorf("vault %q already exists", "new-vault")
+	return fmt.Errorf("vault %q: %w", "new-vault", engine.ErrVaultNameCollision)
 }
 
 func TestHandleRenameVault_Collision(t *testing.T) {

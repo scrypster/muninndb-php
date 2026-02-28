@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/scrypster/muninndb/internal/auth"
@@ -120,10 +119,16 @@ func parseKeyExpiry(s string) (time.Time, error) {
 	}
 	// Try RFC3339 datetime.
 	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		if t.Before(now) {
+			return time.Time{}, fmt.Errorf("expiry date is in the past")
+		}
 		return t, nil
 	}
 	// Try date-only (YYYY-MM-DD).
 	if t, err := time.Parse("2006-01-02", s); err == nil {
+		if t.Before(now) {
+			return time.Time{}, fmt.Errorf("expiry date is in the past")
+		}
 		return t, nil
 	}
 	return time.Time{}, fmt.Errorf("use Nd, Ny, or RFC3339 date (e.g. '90d', '1y', '2027-01-01')")
@@ -489,8 +494,7 @@ func (s *Server) handleRenameVault(w http.ResponseWriter, r *http.Request) {
 			s.sendError(r, w, http.StatusConflict, ErrVaultForbidden, err.Error())
 			return
 		}
-		// Name collision or other error.
-		if strings.Contains(err.Error(), "already exists") {
+		if errors.Is(err, engine.ErrVaultNameCollision) {
 			s.sendError(r, w, http.StatusConflict, ErrVaultForbidden, err.Error())
 			return
 		}

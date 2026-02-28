@@ -20,6 +20,10 @@ var ErrEngramNotFound = errors.New("engram not found")
 // been soft-deleted. Use errors.Is to check for this error in callers.
 var ErrEngramSoftDeleted = errors.New("engram is soft-deleted")
 
+// ErrVaultNameCollision is returned when a rename or clone targets a vault name
+// that already exists. Use errors.Is to check for this error in callers.
+var ErrVaultNameCollision = errors.New("vault name already exists")
+
 // ClearVault removes all memories from a vault. The vault name remains registered.
 // It evicts all in-memory state (HNSW, FTS IDF cache, novelty fingerprints, coherence
 // counters, activity tracking) and adjusts the global engramCount.
@@ -160,7 +164,7 @@ func (e *Engine) RenameVault(ctx context.Context, oldName, newName string) error
 		return fmt.Errorf("vault %q: %w", oldName, ErrVaultNotFound)
 	}
 	if newFound {
-		return fmt.Errorf("vault %q already exists", newName)
+		return fmt.Errorf("vault %q: %w", newName, ErrVaultNameCollision)
 	}
 
 	// Reject if a clone/merge job is targeting this vault.

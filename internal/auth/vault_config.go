@@ -72,12 +72,21 @@ func (s *Store) RenameVaultConfig(oldName, newName string) error {
 	closer.Close()
 
 	cfg.Name = newName
-	if err := s.SetVaultConfig(cfg); err != nil {
-		return fmt.Errorf("rename vault config: write new: %w", err)
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("rename vault config: marshal: %w", err)
 	}
-	if err := s.db.Delete(vaultConfigKey(oldName), pebble.Sync); err != nil {
-		return fmt.Errorf("rename vault config: delete old: %w", err)
+
+	// Atomic batch: write new key + delete old key in a single commit.
+	// Prevents duplicate config entries if the process crashes mid-operation.
+	batch := s.db.NewBatch()
+	batch.Set(vaultConfigKey(newName), data, nil)
+	batch.Delete(vaultConfigKey(oldName), nil)
+	if err := batch.Commit(pebble.Sync); err != nil {
+		batch.Close()
+		return fmt.Errorf("rename vault config: commit: %w", err)
 	}
+	batch.Close()
 	return nil
 }
 

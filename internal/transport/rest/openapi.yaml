@@ -1,7 +1,7 @@
 openapi: "3.0.3"
 info:
   title: MuninnDB API
-  version: "0.2.5"
+  version: "0.2.6"
   description: "Cognitive memory engine with associative recall, Hebbian reinforcement, and semantic search."
   license:
     name: BSL 1.1

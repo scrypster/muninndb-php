@@ -208,24 +208,13 @@ func TestRenameVaultConfig_SetVaultConfigError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error from RenameVaultConfig on read-only DB, got nil")
 	}
-	if !strings.Contains(err.Error(), "rename vault config: write new") {
-		t.Errorf("expected 'rename vault config: write new' in error, got: %v", err)
+	if !strings.Contains(err.Error(), "rename vault config: commit") {
+		t.Errorf("expected 'rename vault config: commit' in error, got: %v", err)
 	}
 }
 
-// NOTE: The db.Delete error path (vault_config.go:78) in RenameVaultConfig is
-// not tested because it is unreachable via Pebble's real implementation:
-//
-//  - pebble.ErrReadOnly affects both db.Set and db.Delete equally. Since
-//    SetVaultConfig (db.Set) is checked first on line 75, the function returns
-//    before reaching the db.Delete call on line 78.
-//
-//  - FS-level write errors (via errorfs) cause Pebble to call Logger.Fatalf
-//    and then return nil from db.Set/db.Delete, so the error never propagates
-//    back to the caller.
-//
-//  - Closing the DB causes Pebble v1.1.5 to panic (not return an error) on
-//    subsequent db.Get/Set/Delete calls.
-//
+// NOTE: RenameVaultConfig uses an atomic Pebble batch (Set new + Delete old in
+// one commit). On a read-only DB, batch.Commit returns ErrReadOnly, which is
+// tested above. The individual Set/Delete error paths no longer exist.
 // The branch is defensive code for hypothetical storage backends where db.Set
 // can succeed but a subsequent db.Delete fails.

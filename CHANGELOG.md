@@ -11,21 +11,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Vault rename — metadata-only rename with full test coverage
-
-### Fixed
-- Windowed average calculation in latency tracker
-- Unconditional Prometheus metric recording and reembed vault response handling
-
-### Added (Observability)
+- Native TLS support via `--tls-cert` and `--tls-key` flags on all client-facing servers
+- OpenAPI 3.0 spec served at `GET /api/openapi.yaml` (60+ routes documented)
+- API key TTL — optional `expires` field on key creation (`"90d"`, `"1y"`, RFC3339)
+- Query timeout enforcement — 30s activation deadline with BFS short-circuit (configurable via `MUNINN_ACTIVATE_TIMEOUT`)
 - Observability tab in Web UI with live polling
 - `GET /api/admin/observability` REST endpoint
 - `Engine.Observability()` full system snapshot assembler
 - Per-vault per-operation ring-buffer latency tracker with percentile reporting
 - Vault-labeled Prometheus histograms for write/activate/read latency
 - Write/Activate/Read operations instrumented with latency tracking and Prometheus
-
-### Added (Vault Reembed)
 - `vault reembed` command (CLI, REST, Web UI) to re-embed all memories in a vault using the current embedder
+- CHANGELOG.md following Keep a Changelog format
+- Encryption at rest documentation (LUKS, FileVault, BitLocker, Docker)
+- CI OpenAPI spec validation with Redocly lint
+- PR template with release checklist
+- Hookify rules for API spec and SDK drift detection
+
+### Fixed
+- Windowed average calculation in latency tracker
+- Unconditional Prometheus metric recording and reembed vault response handling
 - MCP vault default fix
 
 ---
