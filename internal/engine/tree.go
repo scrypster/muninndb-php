@@ -114,18 +114,6 @@ func flattenTree(root TreeNodeInput) []flatTreeItem {
 	return items
 }
 
-// rollbackTree attempts to hard-delete engrams that were already written when a
-// subsequent wiring step fails. Errors are swallowed because this is a
-// best-effort cleanup — the caller already has a real error to return.
-func (e *Engine) rollbackTree(ctx context.Context, vault string, ids []string) {
-	for _, id := range ids {
-		if id == "" {
-			continue
-		}
-		_, _ = e.Forget(ctx, &mbp.ForgetRequest{ID: id, Hard: true, Vault: vault})
-	}
-}
-
 // RememberTree writes all nodes, associations, and ordinal keys. All engram
 // records are committed in a single atomic Pebble batch so that a crash cannot
 // leave the constellation in a partially-written state. Associations and
@@ -204,77 +192,6 @@ func (e *Engine) RememberTree(ctx context.Context, req *RememberTreeRequest) (*R
 	}
 
 	return &RememberTreeResult{RootID: idStrings[0], NodeMap: nodeMap}, nil
-}
-
-// writeTreeNode writes a single node and all its children recursively (depth-first).
-// Returns the ULID of the written engram.
-// Deprecated: RememberTree now uses the batch path via WriteBatch. This helper
-// is retained for use by existing test helpers.
-func (e *Engine) writeTreeNode(
-	ctx context.Context,
-	ws [8]byte,
-	vault string,
-	input TreeNodeInput,
-	parentID *storage.ULID,
-	ordinal int32,
-	nodeMap map[string]string,
-) (storage.ULID, error) {
-	// Build the WriteRequest for this node.
-	wr := &mbp.WriteRequest{
-		Vault:   vault,
-		Concept: input.Concept,
-		Content: input.Content,
-		Tags:    input.Tags,
-	}
-
-	// Map the type string to a MemoryType value.
-	if input.Type != "" {
-		mt, ok := storage.ParseMemoryType(input.Type)
-		if ok {
-			wr.MemoryType = uint8(mt)
-		} else {
-			// Store as TypeLabel when not a recognized MemoryType.
-			wr.TypeLabel = input.Type
-		}
-	}
-
-	resp, err := e.Write(ctx, wr)
-	if err != nil {
-		return storage.ULID{}, fmt.Errorf("write node %q: %w", input.Concept, err)
-	}
-
-	id, err := storage.ParseULID(resp.ID)
-	if err != nil {
-		return storage.ULID{}, fmt.Errorf("parse written ULID %q: %w", resp.ID, err)
-	}
-
-	nodeMap[input.Concept] = resp.ID
-
-	// Wire parent relationship for non-root nodes.
-	if parentID != nil {
-		assoc := &storage.Association{
-			TargetID:   *parentID,
-			RelType:    storage.RelIsPartOf,
-			Weight:     1.0,
-			Confidence: 1.0,
-			CreatedAt:  time.Now(),
-		}
-		if err := e.store.WriteAssociation(ctx, ws, id, *parentID, assoc); err != nil {
-			return storage.ULID{}, fmt.Errorf("write association for %q: %w", input.Concept, err)
-		}
-		if err := e.store.WriteOrdinal(ctx, ws, *parentID, id, ordinal); err != nil {
-			return storage.ULID{}, fmt.Errorf("write ordinal for %q: %w", input.Concept, err)
-		}
-	}
-
-	// Recurse for children (ordinals are 1-based to match insertion order).
-	for i, child := range input.Children {
-		if _, err := e.writeTreeNode(ctx, ws, vault, child, &id, int32(i+1), nodeMap); err != nil {
-			return storage.ULID{}, err
-		}
-	}
-
-	return id, nil
 }
 
 // CountChildren returns the number of direct children of engramID registered in the

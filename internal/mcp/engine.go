@@ -58,8 +58,8 @@ type EngineInterface interface {
 	GetVaultPlasticity(ctx context.Context, vault string) (*auth.ResolvedPlasticity, error)
 
 	// RememberTree writes a nested engram tree in one call.
-	// Creates all engrams, is_part_of associations, and ordinal keys depth-first.
-	// On failure, already-written nodes remain in storage (not atomic).
+	// All engram records are committed atomically in a single Pebble batch (Phase 1).
+	// Association and ordinal keys are wired in Phase 2 after the batch commits.
 	RememberTree(ctx context.Context, req *RememberTreeRequest) (*RememberTreeResult, error)
 
 	// RecallTree returns the complete ordered tree rooted at rootID.
