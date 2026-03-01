@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -150,4 +151,38 @@ func TestUpsertEntityRecord_UpdatesWhenHigherConfidence(t *testing.T) {
 	require.NoError(t, err)
 	assert.InDelta(t, float32(0.9), got.Confidence, 0.001, "higher confidence must be accepted")
 	assert.Equal(t, "plugin:enrich", got.Source)
+}
+
+func TestUpsertEntityRecord_ConcurrentPreservesHighestConfidence(t *testing.T) {
+	ps := newTestStore(t)
+	ctx := context.Background()
+
+	// Seed with a low baseline.
+	require.NoError(t, ps.UpsertEntityRecord(ctx, EntityRecord{
+		Name: "ConcurrentEntity", Type: "test", Confidence: 0.1,
+	}, "baseline"))
+
+	var wg sync.WaitGroup
+	// 20 goroutines: 10 write 0.8, 10 write 0.7.
+	for i := 0; i < 10; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			_ = ps.UpsertEntityRecord(ctx, EntityRecord{
+				Name: "ConcurrentEntity", Type: "test", Confidence: 0.8,
+			}, "high")
+		}()
+		go func() {
+			defer wg.Done()
+			_ = ps.UpsertEntityRecord(ctx, EntityRecord{
+				Name: "ConcurrentEntity", Type: "test", Confidence: 0.7,
+			}, "mid")
+		}()
+	}
+	wg.Wait()
+
+	got, err := ps.GetEntityRecord(ctx, "ConcurrentEntity")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.InDelta(t, float32(0.8), got.Confidence, 0.001, "highest confidence must survive concurrent writes")
 }

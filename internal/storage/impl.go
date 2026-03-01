@@ -68,7 +68,8 @@ type PebbleStore struct {
 	// All transition reads/writes go through this layer; Pebble is only hit on
 	// cold-start loads and periodic flushes.
 	transCache *TransitionCache
-	closeOnce  sync.Once
+	closeOnce   sync.Once
+	entityLocks sync.Map // key: normalized entity name → *sync.Mutex
 }
 
 // assocCacheEntry holds a cached association list.

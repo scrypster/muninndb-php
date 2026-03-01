@@ -3,12 +3,15 @@ package storage
 import (
 	"context"
 	"fmt"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/cockroachdb/pebble"
 	"github.com/scrypster/muninndb/internal/storage/erf"
 	"github.com/scrypster/muninndb/internal/storage/keys"
 	"github.com/vmihailenco/msgpack/v5"
+	"golang.org/x/text/unicode/norm"
 )
 
 // EntityRecord is a named entity stored at the global 0x1F key prefix.
@@ -35,7 +38,12 @@ type RelationshipRecord struct {
 // UpsertEntityRecord stores or updates a global entity record at 0x1F|nameHash.
 // Applies confidence-preserving merge: if an existing record has higher confidence,
 // the existing confidence is preserved (last-writer-wins on all other fields).
+// Safe for concurrent calls — uses per-entity locking to prevent TOCTOU races.
 func (ps *PebbleStore) UpsertEntityRecord(ctx context.Context, record EntityRecord, source string) error {
+	mu := ps.getEntityLock(record.Name)
+	mu.Lock()
+	defer mu.Unlock()
+
 	nameHash := keys.EntityNameHash(record.Name)
 	key := keys.EntityKey(nameHash)
 
@@ -73,6 +81,14 @@ func (ps *PebbleStore) GetEntityRecord(ctx context.Context, name string) (*Entit
 		return nil, fmt.Errorf("decode entity record: %w", err)
 	}
 	return &record, nil
+}
+
+// getEntityLock returns a per-entity mutex for the given entity name.
+// Uses the same NFKC normalization as EntityNameHash for consistent keying.
+func (ps *PebbleStore) getEntityLock(name string) *sync.Mutex {
+	normalized := strings.ToLower(strings.TrimSpace(norm.NFKC.String(name)))
+	m, _ := ps.entityLocks.LoadOrStore(normalized, &sync.Mutex{})
+	return m.(*sync.Mutex)
 }
 
 // WriteEntityEngramLink writes a vault-scoped engram→entity link at 0x20.
