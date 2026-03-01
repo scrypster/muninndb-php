@@ -40,6 +40,21 @@ type RememberTreeResult struct {
 	NodeMap map[string]string // concept → ULID string
 }
 
+// AddChildInput is the input for adding a single child engram to a parent.
+type AddChildInput struct {
+	Concept string
+	Content string
+	Type    string
+	Tags    []string
+	Ordinal *int32 // nil = append at end (max ordinal + 1)
+}
+
+// AddChildResult is returned by AddChild.
+type AddChildResult struct {
+	ChildID string
+	Ordinal int32
+}
+
 // RememberTree writes all nodes, associations, and ordinal keys depth-first;
 // on failure, already-written nodes are left in storage.
 // Returns the root ID and a map of concept → ULID.
@@ -125,6 +140,73 @@ func (e *Engine) writeTreeNode(
 	}
 
 	return id, nil
+}
+
+// AddChild writes a single child engram, wires the is_part_of association (child → parent),
+// and assigns an ordinal key. If input.Ordinal is nil, appends after the last existing child.
+func (e *Engine) AddChild(ctx context.Context, vault, parentID string, input *AddChildInput) (*AddChildResult, error) {
+	ws := e.store.ResolveVaultPrefix(vault)
+	pid, err := storage.ParseULID(parentID)
+	if err != nil {
+		return nil, fmt.Errorf("add child: parse parent id: %w", err)
+	}
+
+	// Write the child engram.
+	wr := &mbp.WriteRequest{
+		Vault:   vault,
+		Concept: input.Concept,
+		Content: input.Content,
+		Tags:    input.Tags,
+	}
+	if input.Type != "" {
+		mt, ok := storage.ParseMemoryType(input.Type)
+		if ok {
+			wr.MemoryType = uint8(mt)
+		} else {
+			wr.TypeLabel = input.Type
+		}
+	}
+	resp, err := e.Write(ctx, wr)
+	if err != nil {
+		return nil, fmt.Errorf("add child: write engram: %w", err)
+	}
+	cid, err := storage.ParseULID(resp.ID)
+	if err != nil {
+		return nil, fmt.Errorf("add child: parse child id: %w", err)
+	}
+
+	// Wire is_part_of association: child → parent.
+	if err := e.store.WriteAssociation(ctx, ws, cid, pid, &storage.Association{
+		TargetID:   pid,
+		RelType:    storage.RelIsPartOf,
+		Weight:     1.0,
+		Confidence: 1.0,
+		CreatedAt:  time.Now(),
+	}); err != nil {
+		return nil, fmt.Errorf("add child: write association: %w", err)
+	}
+
+	// Determine ordinal: explicit or append after max existing.
+	ordinal := int32(1)
+	if input.Ordinal != nil {
+		ordinal = *input.Ordinal
+	} else {
+		existing, err := e.store.ListChildOrdinals(ctx, ws, pid)
+		if err != nil {
+			return nil, fmt.Errorf("add child: list ordinals: %w", err)
+		}
+		for _, entry := range existing {
+			if entry.Ordinal >= ordinal {
+				ordinal = entry.Ordinal + 1
+			}
+		}
+	}
+
+	if err := e.store.WriteOrdinal(ctx, ws, pid, cid, ordinal); err != nil {
+		return nil, fmt.Errorf("add child: write ordinal: %w", err)
+	}
+
+	return &AddChildResult{ChildID: resp.ID, Ordinal: ordinal}, nil
 }
 
 // lifecycleStateString converts a LifecycleState to a human-readable string.

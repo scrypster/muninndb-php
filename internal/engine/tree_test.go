@@ -3,6 +3,8 @@ package engine
 import (
 	"context"
 	"testing"
+
+	"github.com/scrypster/muninndb/internal/transport/mbp"
 )
 
 func TestRememberAndRecallTree(t *testing.T) {
@@ -147,6 +149,57 @@ func TestRecallTree_FilterCompleted(t *testing.T) {
 	}
 	if tree.Children[0].Concept != "Active Child" {
 		t.Errorf("expected Active Child, got %q", tree.Children[0].Concept)
+	}
+}
+
+func TestAddChild(t *testing.T) {
+	eng, cleanup := testEnv(t)
+	defer cleanup()
+	ctx := context.Background()
+	vault := "addchild-test"
+
+	// Create a parent.
+	resp, err := eng.Write(ctx, &mbp.WriteRequest{Vault: vault, Concept: "Parent", Content: "root node"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parentID := resp.ID
+
+	// Add first child (no explicit ordinal — should get ordinal 1).
+	r1, err := eng.AddChild(ctx, vault, parentID, &AddChildInput{
+		Concept: "Child A", Content: "first child", Type: "task",
+	})
+	if err != nil {
+		t.Fatalf("AddChild A: %v", err)
+	}
+	if r1.Ordinal != 1 {
+		t.Errorf("Child A ordinal: got %d, want 1", r1.Ordinal)
+	}
+
+	// Add second child — should get ordinal 2.
+	r2, err := eng.AddChild(ctx, vault, parentID, &AddChildInput{
+		Concept: "Child B", Content: "second child", Type: "task",
+	})
+	if err != nil {
+		t.Fatalf("AddChild B: %v", err)
+	}
+	if r2.Ordinal != 2 {
+		t.Errorf("Child B ordinal: got %d, want 2", r2.Ordinal)
+	}
+
+	// Recall tree — children must appear in ordinal order.
+	tree, err := eng.RecallTree(ctx, vault, parentID, 0, 0, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tree.Children) != 2 {
+		t.Fatalf("expected 2 children, got %d", len(tree.Children))
+	}
+	if tree.Children[0].Concept != "Child A" {
+		t.Errorf("first child: got %q, want Child A", tree.Children[0].Concept)
+	}
+	if tree.Children[1].Concept != "Child B" {
+		t.Errorf("second child: got %q, want Child B", tree.Children[1].Concept)
 	}
 }
 

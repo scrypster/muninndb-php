@@ -255,9 +255,18 @@ func (a *mcpEngineAdapter) RecallTree(ctx context.Context, vault, rootID string,
 }
 
 func (a *mcpEngineAdapter) AddChild(ctx context.Context, vault, parentID string, child *AddChildRequest) (*AddChildResult, error) {
-	// AddChild is implemented in Task 7; for now stub to keep the build green.
-	// Remove this stub when Task 7 is complete.
-	return nil, fmt.Errorf("AddChild: not yet implemented")
+	input := &engine.AddChildInput{
+		Concept: child.Concept,
+		Content: child.Content,
+		Type:    child.Type,
+		Tags:    child.Tags,
+		Ordinal: child.Ordinal,
+	}
+	r, err := a.eng.AddChild(ctx, vault, parentID, input)
+	if err != nil {
+		return nil, err
+	}
+	return &AddChildResult{ChildID: r.ChildID, Ordinal: r.Ordinal}, nil
 }
 
 // convertTreeNodeInput converts MCP → engine input types.
