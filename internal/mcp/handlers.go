@@ -1084,3 +1084,103 @@ func relTypeFromString(rel string) uint16 {
 	}
 	return uint16(storage.RelRelatesTo) // default
 }
+
+func (s *MCPServer) handleSimilarEntities(ctx context.Context, w http.ResponseWriter, id json.RawMessage, vault string, args map[string]any) {
+	if vault == "" {
+		sendError(w, id, -32602, "invalid params: 'vault' is required")
+		return
+	}
+	threshold := 0.85
+	if v, ok := args["threshold"].(float64); ok {
+		if v < 0 || v > 1 {
+			sendError(w, id, -32602, "invalid params: 'threshold' must be between 0.0 and 1.0")
+			return
+		}
+		threshold = v
+	}
+	topN := 20
+	if v, ok := args["top_n"].(float64); ok {
+		topN = int(v)
+	}
+	if topN < 1 {
+		topN = 1
+	}
+	if topN > 100 {
+		topN = 100
+	}
+
+	pairs, err := s.engine.FindSimilarEntities(ctx, vault, threshold, topN)
+	if err != nil {
+		sendError(w, id, -32000, "tool error: "+err.Error())
+		return
+	}
+
+	type similarPair struct {
+		EntityA    string  `json:"entity_a"`
+		EntityB    string  `json:"entity_b"`
+		Similarity float64 `json:"similarity"`
+	}
+	out := make([]similarPair, 0, len(pairs))
+	for _, p := range pairs {
+		out = append(out, similarPair{
+			EntityA:    p.EntityA,
+			EntityB:    p.EntityB,
+			Similarity: p.Similarity,
+		})
+	}
+	sendResult(w, id, textContent(mustJSON(map[string]any{
+		"similar": out,
+		"count":   len(out),
+	})))
+}
+
+func (s *MCPServer) handleMergeEntity(ctx context.Context, w http.ResponseWriter, id json.RawMessage, vault string, args map[string]any) {
+	if vault == "" {
+		sendError(w, id, -32602, "invalid params: 'vault' is required")
+		return
+	}
+	entityA, ok1 := args["entity_a"].(string)
+	entityB, ok2 := args["entity_b"].(string)
+	if !ok1 || entityA == "" || !ok2 || entityB == "" {
+		sendError(w, id, -32602, "invalid params: 'entity_a' and 'entity_b' are required")
+		return
+	}
+	dryRun, _ := args["dry_run"].(bool)
+
+	result, err := s.engine.MergeEntity(ctx, vault, entityA, entityB, dryRun)
+	if err != nil {
+		sendError(w, id, -32000, "tool error: "+err.Error())
+		return
+	}
+	sendResult(w, id, textContent(mustJSON(map[string]any{
+		"merged":           !dryRun,
+		"entity_a":         result.EntityA,
+		"entity_b":         result.EntityB,
+		"engrams_relinked": result.EngramsRelinked,
+		"dry_run":          result.DryRun,
+	})))
+}
+
+func (s *MCPServer) handleEntityTimeline(ctx context.Context, w http.ResponseWriter, id json.RawMessage, vault string, args map[string]any) {
+	entityName, ok := args["entity_name"].(string)
+	if !ok || entityName == "" {
+		sendError(w, id, -32602, "invalid params: 'entity_name' is required")
+		return
+	}
+	limit := 10
+	if v, ok := args["limit"].(float64); ok {
+		limit = int(v)
+	}
+	if limit < 1 {
+		limit = 1
+	}
+	if limit > 50 {
+		limit = 50
+	}
+	timeline, err := s.engine.GetEntityTimeline(ctx, vault, entityName, limit)
+	if err != nil {
+		sendError(w, id, -32000, "tool error: "+err.Error())
+		return
+	}
+	sendResult(w, id, textContent(mustJSON(timeline)))
+}

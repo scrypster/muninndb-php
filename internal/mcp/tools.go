@@ -476,5 +476,47 @@ func allToolDefinitions() []ToolDefinition {
 				"required": []string{"parent_id", "concept", "content"},
 			},
 		},
+		// Entity similarity detection and merge
+		{
+			Name:        "muninn_similar_entities",
+			Description: "Find entity names in a vault that are likely duplicates based on trigram similarity. Returns pairs of similar names that may need merging. Use muninn_merge_entity to merge confirmed duplicates.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"vault":     vaultProp,
+					"threshold": map[string]any{"type": "number", "description": "Minimum similarity score 0.0-1.0 to include a pair (default 0.85)."},
+					"top_n":     map[string]any{"type": "integer", "description": "Maximum number of similar pairs to return, sorted by similarity descending (default 20)."},
+				},
+				"required": []string{},
+			},
+		},
+		{
+			Name:        "muninn_merge_entity",
+			Description: "Merge entity_a into entity_b (canonical). Sets entity_a state to merged, relinks all engrams in the vault from entity_a to entity_b, and updates entity_b mention count. Use dry_run=true to preview the operation without writing.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"vault":    vaultProp,
+					"entity_a": map[string]any{"type": "string", "description": "The entity name to be merged away (becomes state=merged)."},
+					"entity_b": map[string]any{"type": "string", "description": "The canonical entity name to keep."},
+					"dry_run":  map[string]any{"type": "boolean", "description": "When true, report what would happen without writing any data (default false)."},
+				},
+				"required": []string{"entity_a", "entity_b"},
+			},
+		},
+		// Entity timeline
+		{
+			Name:        "muninn_entity_timeline",
+			Description: "Return a chronological view of when an entity first appeared in memory and how it has evolved. Shows all engrams mentioning the entity, sorted by creation time (oldest first).",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"vault":       vaultProp,
+					"entity_name": map[string]any{"type": "string", "description": "The entity name to look up (e.g. 'PostgreSQL', 'Alice')"},
+					"limit":       map[string]any{"type": "integer", "description": "Max timeline entries to return (1-50, default 10)"},
+				},
+				"required": []string{"entity_name"},
+			},
+		},
 	}
 }

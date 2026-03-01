@@ -222,6 +222,13 @@ func (s *MCPServer) dispatchToolCall(ctx context.Context, w http.ResponseWriter,
 
 		// Knowledge graph export
 		"muninn_export_graph": s.handleExportGraph,
+
+		// Entity similarity detection and merge
+		"muninn_similar_entities": s.handleSimilarEntities,
+		"muninn_merge_entity":     s.handleMergeEntity,
+
+		// Entity timeline
+		"muninn_entity_timeline": s.handleEntityTimeline,
 	}
 
 	handler, found := handlers[req.Params.Name]

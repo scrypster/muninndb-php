@@ -109,4 +109,17 @@ type EngineInterface interface {
 	// ExportGraph builds the entity→relationship graph for vault and returns
 	// the raw graph data. The caller chooses the output format.
 	ExportGraph(ctx context.Context, vault string, includeEngrams bool) (*engine.ExportGraph, error)
+
+	// GetEntityTimeline returns a chronological view of when an entity first appeared
+	// in memory and how it has evolved. Results are ordered by creation time (oldest first)
+	// and capped at limit entries.
+	GetEntityTimeline(ctx context.Context, vault, entityName string, limit int) (*engine.EntityTimeline, error)
+
+	// FindSimilarEntities scans all entity names in vault and returns pairs whose
+	// trigram similarity is >= threshold. Results are capped at topN entries.
+	FindSimilarEntities(ctx context.Context, vault string, threshold float64, topN int) ([]engine.SimilarEntityPair, error)
+
+	// MergeEntity merges entityA into entityB (canonical). When dryRun=true it
+	// reports what would happen without writing any data.
+	MergeEntity(ctx context.Context, vault, entityA, entityB string, dryRun bool) (*engine.MergeEntityResult, error)
 }

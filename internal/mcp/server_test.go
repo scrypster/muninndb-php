@@ -121,6 +121,15 @@ func (f *fakeEngine) GetEntityClusters(_ context.Context, _ string, _, _ int) ([
 func (f *fakeEngine) ExportGraph(_ context.Context, _ string, _ bool) (*engine.ExportGraph, error) {
 	return &engine.ExportGraph{Nodes: []engine.GraphNode{}, Edges: []engine.GraphEdge{}}, nil
 }
+func (f *fakeEngine) GetEntityTimeline(_ context.Context, _ string, _ string, _ int) (*engine.EntityTimeline, error) {
+	return &engine.EntityTimeline{Entity: "test", FirstSeen: time.Now(), MentionCount: 0, Entries: []engine.TimelineEntry{}, Count: 0}, nil
+}
+func (f *fakeEngine) FindSimilarEntities(_ context.Context, _ string, _ float64, _ int) ([]engine.SimilarEntityPair, error) {
+	return []engine.SimilarEntityPair{}, nil
+}
+func (f *fakeEngine) MergeEntity(_ context.Context, _, _, _ string, _ bool) (*engine.MergeEntityResult, error) {
+	return &engine.MergeEntityResult{}, nil
+}
 
 func newTestServer() *MCPServer {
 	return New(":0", &fakeEngine{}, "", nil)
@@ -219,8 +228,8 @@ func TestListTools(t *testing.T) {
 	var result map[string]any
 	json.NewDecoder(w.Body).Decode(&result)
 	tools, _ := result["tools"].([]any)
-	if len(tools) != 27 {
-		t.Errorf("expected 27 tools, got %d", len(tools))
+	if len(tools) != 30 {
+		t.Errorf("expected 30 tools, got %d", len(tools))
 	}
 }
 

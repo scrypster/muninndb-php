@@ -442,6 +442,47 @@ func (ps *PebbleStore) UpdateDigest(ctx context.Context, id ULID, summary string
 	return nil
 }
 
+// ScanVaultEntityNames scans the 0x20 forward index for all distinct entity names
+// in a vault. The same entity name may appear multiple times (once per engram-link);
+// fn is called exactly once per unique name.
+func (ps *PebbleStore) ScanVaultEntityNames(ctx context.Context, ws [8]byte, fn func(name string) error) error {
+	prefix := make([]byte, 1+8)
+	prefix[0] = 0x20
+	copy(prefix[1:9], ws[:])
+
+	upperBound := make([]byte, len(prefix))
+	copy(upperBound, prefix)
+	for i := len(upperBound) - 1; i >= 0; i-- {
+		upperBound[i]++
+		if upperBound[i] != 0 {
+			break
+		}
+	}
+
+	iter, err := ps.db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: upperBound})
+	if err != nil {
+		return fmt.Errorf("scan vault entity names: iter: %w", err)
+	}
+	defer iter.Close()
+
+	seen := make(map[string]struct{})
+	for valid := iter.First(); valid; valid = iter.Next() {
+		val := iter.Value()
+		name := string(val)
+		if name == "" {
+			continue
+		}
+		if _, already := seen[name]; already {
+			continue
+		}
+		seen[name] = struct{}{}
+		if err := fn(name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // relTypeBytes maps relationship type strings to 1-byte discriminants for the 0x21 key.
 var relTypeBytes = map[string]uint8{
 	"manages": 0x01, "uses": 0x02, "depends_on": 0x03,

@@ -297,6 +297,10 @@ func (a *mcpEngineAdapter) ExportGraph(ctx context.Context, vault string, includ
 	return a.eng.ExportGraph(ctx, vault, includeEngrams)
 }
 
+func (a *mcpEngineAdapter) GetEntityTimeline(ctx context.Context, vault, entityName string, limit int) (*engine.EntityTimeline, error) {
+	return a.eng.GetEntityTimeline(ctx, vault, entityName, limit)
+}
+
 func (a *mcpEngineAdapter) GetEntityClusters(ctx context.Context, vault string, minCount, topN int) ([]EntityClusterResult, error) {
 	clusters, err := a.eng.GetEntityClusters(ctx, vault, minCount, topN)
 	if err != nil {
@@ -354,6 +358,14 @@ func lifecycleStateLabel(s storage.LifecycleState) string {
 	default:
 		return "unknown"
 	}
+}
+
+func (a *mcpEngineAdapter) FindSimilarEntities(ctx context.Context, vault string, threshold float64, topN int) ([]engine.SimilarEntityPair, error) {
+	return a.eng.FindSimilarEntities(ctx, vault, threshold, topN)
+}
+
+func (a *mcpEngineAdapter) MergeEntity(ctx context.Context, vault, entityA, entityB string, dryRun bool) (*engine.MergeEntityResult, error) {
+	return a.eng.MergeEntity(ctx, vault, entityA, entityB, dryRun)
 }
 
 // convertTreeNodeInput converts MCP → engine input types.
