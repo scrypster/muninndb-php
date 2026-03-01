@@ -359,7 +359,7 @@ func (w *RESTEngineWrapper) Restore(ctx context.Context, vault, engramID string)
 
 func (w *RESTEngineWrapper) Traverse(ctx context.Context, vault string, req *TraverseRequest) (*TraverseResponse, error) {
 	start := time.Now()
-	nodes, edges, err := w.engine.Traverse(ctx, vault, req.StartID, req.MaxHops, req.MaxNodes, false)
+	nodes, edges, err := w.engine.Traverse(ctx, vault, req.StartID, req.MaxHops, req.MaxNodes, req.FollowEntities)
 	if err != nil {
 		return nil, err
 	}

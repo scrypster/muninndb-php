@@ -257,11 +257,12 @@ type RestoreResponse struct {
 
 // TraverseRequest is the body for POST /api/traverse.
 type TraverseRequest struct {
-	Vault    string   `json:"vault"`
-	StartID  string   `json:"start_id"`
-	MaxHops  int      `json:"max_hops,omitempty"`
-	MaxNodes int      `json:"max_nodes,omitempty"`
-	RelTypes []string `json:"rel_types,omitempty"`
+	Vault           string   `json:"vault"`
+	StartID         string   `json:"start_id"`
+	MaxHops         int      `json:"max_hops,omitempty"`
+	MaxNodes        int      `json:"max_nodes,omitempty"`
+	RelTypes        []string `json:"rel_types,omitempty"`
+	FollowEntities  bool     `json:"follow_entities,omitempty"`
 }
 
 // TraversalNode is a single node in a graph traversal result.

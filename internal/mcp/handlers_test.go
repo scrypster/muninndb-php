@@ -80,6 +80,21 @@ func (e *traverseErrEngine) Traverse(_ context.Context, _ string, _ *TraverseReq
 	return nil, fmt.Errorf("start node not found")
 }
 
+type traverseCapturingEngine struct {
+	fakeEngine
+	capturedFollowEntities bool
+}
+
+func (e *traverseCapturingEngine) Traverse(_ context.Context, _ string, req *TraverseRequest) (*TraverseResult, error) {
+	e.capturedFollowEntities = req.FollowEntities
+	return &TraverseResult{
+		Nodes:          []TraversalNode{{ID: "s1", Concept: "start", HopDist: 0}},
+		Edges:          []TraversalEdge{},
+		TotalReachable: 1,
+		QueryMs:        0.5,
+	}, nil
+}
+
 type explainErrEngine struct{ fakeEngine }
 
 func (e *explainErrEngine) Explain(_ context.Context, _ string, _ *ExplainRequest) (*ExplainResult, error) {
@@ -312,6 +327,20 @@ func TestHandleTraverseEngineError(t *testing.T) {
 	resp := decodeResp(t, w.Body.String())
 	if resp.Error == nil || resp.Error.Code != -32000 {
 		t.Errorf("expected -32000 for engine error, got %v", resp.Error)
+	}
+}
+
+func TestHandleTraverseWithFollowEntities(t *testing.T) {
+	eng := &traverseCapturingEngine{}
+	srv := newTestServerWith(eng)
+	body := `{"jsonrpc":"2.0","method":"tools/call","id":1,"params":{"name":"muninn_traverse","arguments":{"vault":"default","start_id":"s1","follow_entities":true}}}`
+	w := postRPC(t, srv, body)
+	resp := decodeResp(t, w.Body.String())
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %v", resp.Error)
+	}
+	if !eng.capturedFollowEntities {
+		t.Error("engine should have received follow_entities=true")
 	}
 }
 
