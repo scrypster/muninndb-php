@@ -358,6 +358,20 @@ func allToolDefinitions() []ToolDefinition {
 				"required": []string{},
 			},
 		},
+		// Entity reverse index tool
+		{
+			Name:        "muninn_find_by_entity",
+			Description: "Return all memories that mention a given named entity. Uses the entity reverse index for fast O(matches) lookup.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"entity_name": map[string]any{"type": "string", "description": "The entity name to look up (e.g. 'PostgreSQL', 'Alice')"},
+					"vault":       vaultProp,
+					"limit":       map[string]any{"type": "integer", "description": "Max results (1-50, default 20)"},
+				},
+				"required": []string{"entity_name"},
+			},
+		},
 		// Hierarchical memory tools
 		{
 			Name:        "muninn_remember_tree",

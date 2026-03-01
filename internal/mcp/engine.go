@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/scrypster/muninndb/internal/auth"
+	"github.com/scrypster/muninndb/internal/storage"
 	"github.com/scrypster/muninndb/internal/transport/mbp"
 )
 
@@ -84,4 +85,8 @@ type EngineInterface interface {
 	// WhereLeftOff returns the most recently accessed active engrams, sorted by
 	// LastAccess descending. limit caps results (default 10, max 50).
 	WhereLeftOff(ctx context.Context, vault string, limit int) ([]WhereLeftOffEntry, error)
+
+	// FindByEntity returns all engrams that mention the given entity name,
+	// scanned from the 0x23 reverse index. Results are limited to limit entries.
+	FindByEntity(ctx context.Context, vault, entityName string, limit int) ([]*storage.Engram, error)
 }

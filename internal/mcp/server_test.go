@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/scrypster/muninndb/internal/auth"
+	"github.com/scrypster/muninndb/internal/storage"
 	"github.com/scrypster/muninndb/internal/transport/mbp"
 )
 
@@ -100,6 +101,9 @@ func (f *fakeEngine) GetEnrichmentMode(_ context.Context) string {
 }
 func (f *fakeEngine) WhereLeftOff(_ context.Context, _ string, _ int) ([]WhereLeftOffEntry, error) {
 	return []WhereLeftOffEntry{}, nil
+}
+func (f *fakeEngine) FindByEntity(_ context.Context, _, _ string, _ int) ([]*storage.Engram, error) {
+	return nil, nil
 }
 
 func newTestServer() *MCPServer {
@@ -199,8 +203,8 @@ func TestListTools(t *testing.T) {
 	var result map[string]any
 	json.NewDecoder(w.Body).Decode(&result)
 	tools, _ := result["tools"].([]any)
-	if len(tools) != 23 {
-		t.Errorf("expected 23 tools, got %d", len(tools))
+	if len(tools) != 24 {
+		t.Errorf("expected 24 tools, got %d", len(tools))
 	}
 }
 

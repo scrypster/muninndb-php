@@ -277,6 +277,10 @@ func (a *mcpEngineAdapter) AddChild(ctx context.Context, vault, parentID string,
 	return &AddChildResult{ChildID: r.ChildID, Ordinal: r.Ordinal}, nil
 }
 
+func (a *mcpEngineAdapter) FindByEntity(ctx context.Context, vault, entityName string, limit int) ([]*storage.Engram, error) {
+	return a.eng.FindByEntity(ctx, vault, entityName, limit)
+}
+
 func (a *mcpEngineAdapter) WhereLeftOff(ctx context.Context, vault string, limit int) ([]WhereLeftOffEntry, error) {
 	engrams, err := a.eng.WhereLeftOff(ctx, vault, limit)
 	if err != nil {

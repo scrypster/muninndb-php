@@ -200,6 +200,9 @@ func (s *MCPServer) dispatchToolCall(ctx context.Context, w http.ResponseWriter,
 		"muninn_remember_tree": s.handleRememberTree,
 		"muninn_recall_tree":   s.handleRecallTree,
 		"muninn_add_child":     s.handleAddChild,
+
+		// Entity reverse index
+		"muninn_find_by_entity": s.handleFindByEntity,
 	}
 
 	handler, found := handlers[req.Params.Name]

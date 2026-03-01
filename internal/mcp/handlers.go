@@ -747,6 +747,50 @@ func (s *MCPServer) handleRecallTree(ctx context.Context, w http.ResponseWriter,
 	sendResult(w, id, textContent(mustJSON(result)))
 }
 
+func (s *MCPServer) handleFindByEntity(ctx context.Context, w http.ResponseWriter, id json.RawMessage, vault string, args map[string]any) {
+	entityName, ok := args["entity_name"].(string)
+	if !ok || entityName == "" {
+		sendError(w, id, -32602, "invalid params: 'entity_name' is required")
+		return
+	}
+	limit := 20
+	if v, ok := args["limit"].(float64); ok {
+		limit = int(v)
+	}
+	if limit < 1 {
+		limit = 1
+	}
+	if limit > 50 {
+		limit = 50
+	}
+	engrams, err := s.engine.FindByEntity(ctx, vault, entityName, limit)
+	if err != nil {
+		sendError(w, id, -32000, "tool error: "+err.Error())
+		return
+	}
+	type engramEntry struct {
+		ID      string `json:"id"`
+		Concept string `json:"concept"`
+		Summary string `json:"summary,omitempty"`
+		State   string `json:"state"`
+	}
+	entries := make([]engramEntry, 0, len(engrams))
+	for _, e := range engrams {
+		entries = append(entries, engramEntry{
+			ID:      e.ID.String(),
+			Concept: e.Concept,
+			Summary: e.Summary,
+			State:   lifecycleStateLabel(e.State),
+		})
+	}
+	out, _ := json.Marshal(map[string]any{
+		"entity":  entityName,
+		"engrams": entries,
+		"count":   len(entries),
+	})
+	sendResult(w, id, textContent(string(out)))
+}
+
 func (s *MCPServer) handleAddChild(ctx context.Context, w http.ResponseWriter, id json.RawMessage, vault string, args map[string]any) {
 	parentID, ok := args["parent_id"].(string)
 	if !ok || parentID == "" {

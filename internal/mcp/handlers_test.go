@@ -990,6 +990,84 @@ func TestHandleStatus_IncludesEnrichmentMode(t *testing.T) {
 	}
 }
 
+// ── muninn_find_by_entity ────────────────────────────────────────────────────
+
+type findByEntityEngine struct{ fakeEngine }
+
+func (f *findByEntityEngine) FindByEntity(_ context.Context, _, name string, _ int) ([]*storage.Engram, error) {
+	if name == "PostgreSQL" {
+		id := storage.NewULID()
+		return []*storage.Engram{
+			{ID: id, Concept: "DB choice", Summary: "Chose PostgreSQL"},
+		}, nil
+	}
+	return nil, nil
+}
+
+func TestHandleFindByEntity_HappyPath(t *testing.T) {
+	srv := newTestServerWith(&findByEntityEngine{})
+	body := `{"jsonrpc":"2.0","method":"tools/call","id":1,"params":{"name":"muninn_find_by_entity","arguments":{"vault":"default","entity_name":"PostgreSQL"}}}`
+	w := postRPC(t, srv, body)
+	content := extractInnerJSON(t, decodeResp(t, w.Body.String()))
+
+	for _, field := range []string{"entity", "engrams", "count"} {
+		if _, ok := content[field]; !ok {
+			t.Errorf("response missing field: %q", field)
+		}
+	}
+	count, _ := content["count"].(float64)
+	if int(count) != 1 {
+		t.Errorf("expected count=1, got %v", content["count"])
+	}
+	engrams, _ := content["engrams"].([]any)
+	if len(engrams) != 1 {
+		t.Fatalf("expected 1 engram, got %d", len(engrams))
+	}
+	entry, _ := engrams[0].(map[string]any)
+	if entry["concept"] != "DB choice" {
+		t.Errorf("concept = %v, want 'DB choice'", entry["concept"])
+	}
+	if content["entity"] != "PostgreSQL" {
+		t.Errorf("entity = %v, want 'PostgreSQL'", content["entity"])
+	}
+}
+
+func TestHandleFindByEntity_EmptyName(t *testing.T) {
+	srv := newTestServerWith(&findByEntityEngine{})
+	body := `{"jsonrpc":"2.0","method":"tools/call","id":1,"params":{"name":"muninn_find_by_entity","arguments":{"vault":"default","entity_name":""}}}`
+	w := postRPC(t, srv, body)
+	resp := decodeResp(t, w.Body.String())
+	if resp.Error == nil || resp.Error.Code != -32602 {
+		t.Errorf("expected -32602 for empty entity_name, got %v", resp.Error)
+	}
+}
+
+func TestHandleFindByEntity_MissingName(t *testing.T) {
+	srv := newTestServerWith(&findByEntityEngine{})
+	body := `{"jsonrpc":"2.0","method":"tools/call","id":1,"params":{"name":"muninn_find_by_entity","arguments":{"vault":"default"}}}`
+	w := postRPC(t, srv, body)
+	resp := decodeResp(t, w.Body.String())
+	if resp.Error == nil || resp.Error.Code != -32602 {
+		t.Errorf("expected -32602 for missing entity_name, got %v", resp.Error)
+	}
+}
+
+func TestHandleFindByEntity_NoResults(t *testing.T) {
+	srv := newTestServerWith(&findByEntityEngine{})
+	body := `{"jsonrpc":"2.0","method":"tools/call","id":1,"params":{"name":"muninn_find_by_entity","arguments":{"vault":"default","entity_name":"UnknownEntity"}}}`
+	w := postRPC(t, srv, body)
+	content := extractInnerJSON(t, decodeResp(t, w.Body.String()))
+
+	count, _ := content["count"].(float64)
+	if int(count) != 0 {
+		t.Errorf("expected count=0, got %v", content["count"])
+	}
+	engrams, _ := content["engrams"].([]any)
+	if len(engrams) != 0 {
+		t.Errorf("expected empty engrams, got %d", len(engrams))
+	}
+}
+
 // ── muninn_where_left_off ────────────────────────────────────────────────────
 
 // whereLeftOffEngine returns a populated WhereLeftOff result for shape tests.
