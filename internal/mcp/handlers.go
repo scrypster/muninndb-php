@@ -17,6 +17,16 @@ import (
 func (s *MCPServer) handleRemember(ctx context.Context, w http.ResponseWriter, id json.RawMessage, vault string, args map[string]any) {
 	opID, _ := args["op_id"].(string)
 	if opID != "" {
+		// Acquire a per-op_id mutex to prevent TOCTOU races: without this lock,
+		// two concurrent requests with the same op_id could both pass the nil
+		// receipt check and each call Write, producing duplicate engrams.
+		// defer mu.Unlock() holds the lock until the handler returns, covering
+		// the entire check→write→store-receipt window.
+		mu := s.getIdempotencyLock(opID)
+		mu.Lock()
+		defer mu.Unlock()
+
+		// Re-check inside lock (now safe from concurrent duplicates).
 		if receipt, err := s.engine.CheckIdempotency(ctx, opID); err == nil && receipt != nil {
 			out, _ := json.Marshal(map[string]any{
 				"id":         receipt.EngramID,

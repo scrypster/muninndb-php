@@ -26,8 +26,18 @@ type MCPServer struct {
 	srv       *http.Server
 	tlsConfig *tls.Config // nil = plain TCP
 
-	sseSessionsMu sync.Mutex
-	sseSessions   map[string]*sseSession // sessionID → session
+	sseSessionsMu    sync.Mutex
+	sseSessions      map[string]*sseSession // sessionID → session
+	idempotencyLocks sync.Map               // per-op_id mutex for idempotent remember
+}
+
+// getIdempotencyLock returns (or lazily creates) a per-op_id mutex. This is
+// used by handleRemember to prevent TOCTOU races when two concurrent requests
+// arrive with the same op_id: only one goroutine at a time can execute the
+// check→write→store-receipt flow for a given op_id.
+func (s *MCPServer) getIdempotencyLock(opID string) *sync.Mutex {
+	m, _ := s.idempotencyLocks.LoadOrStore(opID, &sync.Mutex{})
+	return m.(*sync.Mutex)
 }
 
 type sseSession struct {

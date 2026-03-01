@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/scrypster/muninndb/internal/auth"
 	"github.com/scrypster/muninndb/internal/storage"
 	"github.com/scrypster/muninndb/internal/transport/mbp"
 	"github.com/stretchr/testify/require"
@@ -1333,5 +1336,171 @@ func TestHandleRemember_NoOpID(t *testing.T) {
 
 	if eng.writeCalls != 1 {
 		t.Errorf("expected Write to be called once, got %d", eng.writeCalls)
+	}
+}
+
+// slowIdempotentEngine is like idempotentEngine but introduces a brief delay in
+// Write so that a concurrent goroutine has time to reach the CheckIdempotency
+// gate while the first goroutine is inside Write. Without the per-op_id mutex
+// in handleRemember, both goroutines would see a nil receipt and each call
+// Write — producing two engrams for a single op_id.
+type slowIdempotentEngine struct {
+	mu        sync.Mutex
+	writeCalls int32 // accessed atomically
+
+	// storedReceipt is written after the first Write completes; subsequent
+	// CheckIdempotency calls inside the lock will see it.
+	storedOpID    string
+	storedReceipt *storage.IdempotencyReceipt
+}
+
+func (e *slowIdempotentEngine) CheckIdempotency(_ context.Context, opID string) (*storage.IdempotencyReceipt, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.storedOpID == opID && e.storedReceipt != nil {
+		return e.storedReceipt, nil
+	}
+	return nil, nil
+}
+
+func (e *slowIdempotentEngine) WriteIdempotency(_ context.Context, opID, engramID string) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.storedOpID = opID
+	e.storedReceipt = &storage.IdempotencyReceipt{EngramID: engramID}
+	return nil
+}
+
+func (e *slowIdempotentEngine) Write(_ context.Context, _ *mbp.WriteRequest) (*mbp.WriteResponse, error) {
+	atomic.AddInt32(&e.writeCalls, 1)
+	// Small sleep so a concurrent goroutine can race toward CheckIdempotency.
+	time.Sleep(5 * time.Millisecond)
+	return &mbp.WriteResponse{ID: "idempotent-engram"}, nil
+}
+
+// Delegate everything else to fakeEngine.
+func (e *slowIdempotentEngine) WriteBatch(ctx context.Context, reqs []*mbp.WriteRequest) ([]*mbp.WriteResponse, []error) {
+	f := &fakeEngine{}
+	return f.WriteBatch(ctx, reqs)
+}
+func (e *slowIdempotentEngine) Activate(ctx context.Context, req *mbp.ActivateRequest) (*mbp.ActivateResponse, error) {
+	return (&fakeEngine{}).Activate(ctx, req)
+}
+func (e *slowIdempotentEngine) Read(ctx context.Context, req *mbp.ReadRequest) (*mbp.ReadResponse, error) {
+	return (&fakeEngine{}).Read(ctx, req)
+}
+func (e *slowIdempotentEngine) Forget(ctx context.Context, req *mbp.ForgetRequest) (*mbp.ForgetResponse, error) {
+	return (&fakeEngine{}).Forget(ctx, req)
+}
+func (e *slowIdempotentEngine) Link(ctx context.Context, req *mbp.LinkRequest) (*mbp.LinkResponse, error) {
+	return (&fakeEngine{}).Link(ctx, req)
+}
+func (e *slowIdempotentEngine) Stat(ctx context.Context, req *mbp.StatRequest) (*mbp.StatResponse, error) {
+	return (&fakeEngine{}).Stat(ctx, req)
+}
+func (e *slowIdempotentEngine) GetContradictions(ctx context.Context, vault string) ([]ContradictionPair, error) {
+	return (&fakeEngine{}).GetContradictions(ctx, vault)
+}
+func (e *slowIdempotentEngine) Evolve(ctx context.Context, vault, oldID, newContent, reason string) (*WriteResult, error) {
+	return (&fakeEngine{}).Evolve(ctx, vault, oldID, newContent, reason)
+}
+func (e *slowIdempotentEngine) Consolidate(ctx context.Context, vault string, ids []string, merged string) (*ConsolidateResult, error) {
+	return (&fakeEngine{}).Consolidate(ctx, vault, ids, merged)
+}
+func (e *slowIdempotentEngine) Session(ctx context.Context, vault string, since time.Time) (*SessionSummary, error) {
+	return (&fakeEngine{}).Session(ctx, vault, since)
+}
+func (e *slowIdempotentEngine) Decide(ctx context.Context, vault, decision, rationale string, alternatives, evidenceIDs []string) (*WriteResult, error) {
+	return (&fakeEngine{}).Decide(ctx, vault, decision, rationale, alternatives, evidenceIDs)
+}
+func (e *slowIdempotentEngine) Restore(ctx context.Context, vault string, id string) (*RestoreResult, error) {
+	return (&fakeEngine{}).Restore(ctx, vault, id)
+}
+func (e *slowIdempotentEngine) Traverse(ctx context.Context, vault string, req *TraverseRequest) (*TraverseResult, error) {
+	return (&fakeEngine{}).Traverse(ctx, vault, req)
+}
+func (e *slowIdempotentEngine) Explain(ctx context.Context, vault string, req *ExplainRequest) (*ExplainResult, error) {
+	return (&fakeEngine{}).Explain(ctx, vault, req)
+}
+func (e *slowIdempotentEngine) UpdateState(ctx context.Context, vault string, id string, state string, reason string) error {
+	return (&fakeEngine{}).UpdateState(ctx, vault, id, state, reason)
+}
+func (e *slowIdempotentEngine) ListDeleted(ctx context.Context, vault string, limit int) ([]DeletedEngram, error) {
+	return (&fakeEngine{}).ListDeleted(ctx, vault, limit)
+}
+func (e *slowIdempotentEngine) RetryEnrich(ctx context.Context, vault string, id string) (*RetryEnrichResult, error) {
+	return (&fakeEngine{}).RetryEnrich(ctx, vault, id)
+}
+func (e *slowIdempotentEngine) GetVaultPlasticity(ctx context.Context, vault string) (*auth.ResolvedPlasticity, error) {
+	return (&fakeEngine{}).GetVaultPlasticity(ctx, vault)
+}
+func (e *slowIdempotentEngine) RememberTree(ctx context.Context, req *RememberTreeRequest) (*RememberTreeResult, error) {
+	return (&fakeEngine{}).RememberTree(ctx, req)
+}
+func (e *slowIdempotentEngine) RecallTree(ctx context.Context, vault, rootID string, maxDepth, limit int, includeCompleted bool) (*RecallTreeResult, error) {
+	return (&fakeEngine{}).RecallTree(ctx, vault, rootID, maxDepth, limit, includeCompleted)
+}
+func (e *slowIdempotentEngine) AddChild(ctx context.Context, vault, parentID string, child *AddChildRequest) (*AddChildResult, error) {
+	return (&fakeEngine{}).AddChild(ctx, vault, parentID, child)
+}
+func (e *slowIdempotentEngine) CountChildren(ctx context.Context, vault, engramID string) (int, error) {
+	return (&fakeEngine{}).CountChildren(ctx, vault, engramID)
+}
+func (e *slowIdempotentEngine) GetEnrichmentMode(ctx context.Context) string {
+	return (&fakeEngine{}).GetEnrichmentMode(ctx)
+}
+func (e *slowIdempotentEngine) WhereLeftOff(ctx context.Context, vault string, limit int) ([]WhereLeftOffEntry, error) {
+	return (&fakeEngine{}).WhereLeftOff(ctx, vault, limit)
+}
+func (e *slowIdempotentEngine) FindByEntity(ctx context.Context, vault, entityName string, limit int) ([]*storage.Engram, error) {
+	return (&fakeEngine{}).FindByEntity(ctx, vault, entityName, limit)
+}
+
+// TestHandleRemember_ConcurrentSameOpID verifies that two concurrent
+// muninn_remember calls carrying the same op_id do not produce duplicate
+// engrams. The per-op_id mutex in handleRemember ensures only one Write
+// executes; the second goroutine must observe the cached receipt and return
+// the same engram ID with idempotent=true.
+func TestHandleRemember_ConcurrentSameOpID(t *testing.T) {
+	eng := &slowIdempotentEngine{}
+	srv := newTestServerWith(eng)
+
+	body := `{"jsonrpc":"2.0","method":"tools/call","id":1,"params":{"name":"muninn_remember","arguments":{"vault":"default","content":"concurrent test","op_id":"race-op-123"}}}`
+
+	type result struct {
+		id         string
+		idempotent bool
+	}
+	results := make([]result, 2)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	for i := 0; i < 2; i++ {
+		i := i
+		go func() {
+			defer wg.Done()
+			w := postRPC(t, srv, body)
+			resp := decodeResp(t, w.Body.String())
+			if resp.Error != nil {
+				t.Errorf("goroutine %d got unexpected error: %v", i, resp.Error)
+				return
+			}
+			content := extractInnerJSON(t, resp)
+			id, _ := content["id"].(string)
+			idempotent, _ := content["idempotent"].(bool)
+			results[i] = result{id: id, idempotent: idempotent}
+		}()
+	}
+	wg.Wait()
+
+	// Both responses must reference the same engram ID.
+	if results[0].id != results[1].id {
+		t.Errorf("concurrent op_id produced different engram IDs: %q vs %q — TOCTOU race not fixed", results[0].id, results[1].id)
+	}
+
+	// Write must have been called exactly once; the second goroutine must have
+	// hit the receipt cache inside the lock.
+	if calls := atomic.LoadInt32(&eng.writeCalls); calls != 1 {
+		t.Errorf("expected exactly 1 Write call, got %d — duplicate engrams were created", calls)
 	}
 }
