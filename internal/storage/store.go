@@ -82,6 +82,10 @@ type EngineStore interface {
 	// GetConceptAssociations returns up to maxN neighbor IDs for spreading activation.
 	GetConceptAssociations(ctx context.Context, wsPrefix [8]byte, id ULID, maxN int) ([]ULID, error)
 
+	// GetChildrenByParent returns IDs of all engrams that have an is_part_of
+	// association pointing to parentID. Scans the 0x04 reverse index.
+	GetChildrenByParent(ctx context.Context, wsPrefix [8]byte, parentID ULID) ([]ULID, error)
+
 	// FlagContradiction writes the 0x0A contradiction key for pair (a,b).
 	FlagContradiction(ctx context.Context, wsPrefix [8]byte, a, b ULID) error
 

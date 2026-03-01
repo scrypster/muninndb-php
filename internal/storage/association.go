@@ -450,6 +450,40 @@ func (ps *PebbleStore) GetConceptAssociations(ctx context.Context, wsPrefix [8]b
 	return neighbors, nil
 }
 
+// GetChildrenByParent returns the IDs of all engrams that have a RelIsPartOf
+// association targeting parentID. Scans the 0x04 reverse index and filters
+// by RelType in the value bytes.
+func (ps *PebbleStore) GetChildrenByParent(ctx context.Context, wsPrefix [8]byte, parentID ULID) ([]ULID, error) {
+	prefix := keys.AssocRevPrefixForID(wsPrefix, [16]byte(parentID))
+	iter, err := PrefixIterator(ps.db, prefix)
+	if err != nil {
+		return nil, fmt.Errorf("GetChildrenByParent prefix iter: %w", err)
+	}
+	defer iter.Close()
+
+	// Reverse key: 0x04 | ws(8) | dstID(16) | weightComplement(4) | srcID(16) = 45 bytes
+	// srcID (the child) is at offset 29.
+	var children []ULID
+	for iter.First(); iter.Valid(); iter.Next() {
+		k := iter.Key()
+		if len(k) < 45 {
+			continue
+		}
+		val := iter.Value()
+		relType, _, _, _ := decodeAssocValue(val)
+		if relType != RelIsPartOf {
+			continue
+		}
+		var childID ULID
+		copy(childID[:], k[29:45])
+		children = append(children, childID)
+	}
+	if err := iter.Error(); err != nil {
+		return nil, fmt.Errorf("GetChildrenByParent scan: %w", err)
+	}
+	return children, nil
+}
+
 // FlagContradiction writes the 0x0A contradiction key for pair (a,b).
 func (ps *PebbleStore) FlagContradiction(ctx context.Context, wsPrefix [8]byte, a, b ULID) error {
 	batch := ps.db.NewBatch()

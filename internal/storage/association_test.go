@@ -286,6 +286,51 @@ func TestResolveContradiction_BothDirections(t *testing.T) {
 	}
 }
 
+func TestGetChildrenByParent_IsPartOf(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	ws := store.VaultPrefix("children-test")
+
+	parent := NewULID()
+	child1 := NewULID()
+	child2 := NewULID()
+	other := NewULID()
+
+	// child1 → parent (is_part_of)
+	if err := store.WriteAssociation(ctx, ws, child1, parent, &Association{
+		TargetID: parent, Weight: 0.9, RelType: RelIsPartOf,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// child2 → parent (is_part_of)
+	if err := store.WriteAssociation(ctx, ws, child2, parent, &Association{
+		TargetID: parent, Weight: 0.9, RelType: RelIsPartOf,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// other → parent (RelSupports — must be excluded)
+	if err := store.WriteAssociation(ctx, ws, other, parent, &Association{
+		TargetID: parent, Weight: 0.9, RelType: RelSupports,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	children, err := store.GetChildrenByParent(ctx, ws, parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(children) != 2 {
+		t.Fatalf("expected 2 children (is_part_of only), got %d", len(children))
+	}
+	got := map[ULID]bool{children[0]: true, children[1]: true}
+	if !got[child1] || !got[child2] {
+		t.Errorf("missing expected children")
+	}
+	if got[other] {
+		t.Error("GetChildrenByParent must not return non-is_part_of edges")
+	}
+}
+
 // newTestStore creates a PebbleStore backed by a temp dir.
 // openTestPebble already registers Cleanup for the DB; we just wrap it in a store.
 func newTestStore(t *testing.T) *PebbleStore {
