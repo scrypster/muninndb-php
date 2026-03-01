@@ -432,6 +432,14 @@ func (ps *PebbleStore) WriteEngramBatch(ctx context.Context, items []EngramBatch
 		batch.Set(keys.CreatorIndexKey(ws, keys.Hash(eng.CreatedBy), id16), []byte{}, nil)
 		batch.Set(keys.RelevanceBucketKey(ws, eng.Relevance, id16), []byte{}, nil)
 
+		// 0x22: LastAccess index — seed with LastAccess (= CreatedAt for new engrams).
+		laMillis := eng.LastAccess.UnixMilli()
+		laKey := keys.LastAccessIndexKey(ws, laMillis, id16)
+		if err := batch.Set(laKey, nil, nil); err != nil {
+			errs[i] = fmt.Errorf("write engram batch: last access index: %w", err)
+			continue
+		}
+
 		ids[i] = eng.ID
 	}
 
