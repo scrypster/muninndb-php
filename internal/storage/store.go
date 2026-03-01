@@ -19,10 +19,25 @@ type OrdinalEntry struct {
 	Ordinal int32
 }
 
+// StoreBatch is a write-only handle for atomic multi-write operations.
+// Callers must call Commit or Discard exactly once.
+type StoreBatch interface {
+	// WriteEngram queues an engram write into the batch.
+	WriteEngram(ctx context.Context, wsPrefix [8]byte, eng *Engram) error
+	// Commit atomically commits all queued writes.
+	Commit() error
+	// Discard releases the batch without writing anything.
+	// Safe to call after Commit (idempotent).
+	Discard()
+}
+
 // EngineStore is the storage interface for the MuninnDB engine.
 // Implemented by the Pebble-backed store. All operations are vault-scoped
 // via the vault prefix in the key construction.
 type EngineStore interface {
+	// NewBatch returns a StoreBatch for atomic multi-engram writes.
+	// The caller must call Commit or Discard exactly once on the returned batch.
+	NewBatch() StoreBatch
 	// WriteEngram atomically writes the full engram record (0x01 key) and
 	// the metadata-only copy (0x02 key) in a single Pebble batch.
 	// Also writes association forward/reverse keys (0x03/0x04) and secondary

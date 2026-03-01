@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/scrypster/muninndb/internal/storage"
 	"github.com/scrypster/muninndb/internal/transport/mbp"
 )
 
@@ -244,6 +245,64 @@ func TestRecallTree_Limit(t *testing.T) {
 	}
 	if tree.Children[1].Concept != "Child 2" {
 		t.Errorf("expected Child 2 as second child, got %q", tree.Children[1].Concept)
+	}
+}
+
+// TestRememberTree_AtomicBatch_AllNodesReadable verifies that after a single
+// RememberTree call with 3 nodes, all three engrams are individually readable
+// from the store. This is the integration-level proof that the atomic Pebble
+// batch commit wrote all nodes, not just the root.
+func TestRememberTree_AtomicBatch_AllNodesReadable(t *testing.T) {
+	eng, cleanup := testEnv(t)
+	defer cleanup()
+	ctx := context.Background()
+	vault := "atomic-batch-3nodes"
+
+	result, err := eng.RememberTree(ctx, &RememberTreeRequest{
+		Vault: vault,
+		Root: TreeNodeInput{
+			Concept: "Root Node",
+			Content: "root content",
+			Children: []TreeNodeInput{
+				{Concept: "Child A", Content: "child A content"},
+				{Concept: "Child B", Content: "child B content"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("RememberTree: %v", err)
+	}
+	if len(result.NodeMap) != 3 {
+		t.Fatalf("NodeMap: got %d entries, want 3", len(result.NodeMap))
+	}
+
+	ws := eng.store.ResolveVaultPrefix(vault)
+
+	// Verify each node is individually readable from the store.
+	concepts := []string{"Root Node", "Child A", "Child B"}
+	for _, concept := range concepts {
+		idStr, ok := result.NodeMap[concept]
+		if !ok {
+			t.Errorf("concept %q missing from NodeMap", concept)
+			continue
+		}
+		id, err := storage.ParseULID(idStr)
+		if err != nil {
+			t.Errorf("parse ULID for %q: %v", concept, err)
+			continue
+		}
+		engram, err := eng.store.GetEngram(ctx, ws, id)
+		if err != nil {
+			t.Errorf("GetEngram for %q: %v", concept, err)
+			continue
+		}
+		if engram == nil {
+			t.Errorf("engram for %q not found in store after RememberTree", concept)
+			continue
+		}
+		if engram.Concept != concept {
+			t.Errorf("concept mismatch: got %q want %q", engram.Concept, concept)
+		}
 	}
 }
 

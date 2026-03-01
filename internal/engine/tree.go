@@ -126,10 +126,10 @@ func (e *Engine) rollbackTree(ctx context.Context, vault string, ids []string) {
 	}
 }
 
-// RememberTree writes all nodes, associations, and ordinal keys using batched
-// writes to reduce I/O overhead. On Phase 2 (wiring) failure, already-written
-// engrams are hard-deleted via a best-effort rollback. Returns the root ID and
-// a map of concept → ULID.
+// RememberTree writes all nodes, associations, and ordinal keys. All engram
+// records are committed in a single atomic Pebble batch so that a crash cannot
+// leave the constellation in a partially-written state. Associations and
+// ordinal keys are wired after the batch commits (Phase 2).
 func (e *Engine) RememberTree(ctx context.Context, req *RememberTreeRequest) (*RememberTreeResult, error) {
 	if err := validateTreeNode(req.Root, 0); err != nil {
 		return nil, fmt.Errorf("RememberTree: %w", err)
@@ -137,48 +137,47 @@ func (e *Engine) RememberTree(ctx context.Context, req *RememberTreeRequest) (*R
 	ws := e.store.ResolveVaultPrefix(req.Vault)
 	items := flattenTree(req.Root)
 
-	// Build write requests.
-	reqs := make([]*mbp.WriteRequest, len(items))
+	// Build storage.Engram objects for every node.
+	engrams := make([]*storage.Engram, len(items))
 	for i, item := range items {
-		wr := &mbp.WriteRequest{Vault: req.Vault, Concept: item.input.Concept, Content: item.input.Content, Tags: item.input.Tags}
+		eng := &storage.Engram{
+			Concept: item.input.Concept,
+			Content: item.input.Content,
+			Tags:    item.input.Tags,
+		}
 		if item.input.Type != "" {
 			if mt, ok := storage.ParseMemoryType(item.input.Type); ok {
-				wr.MemoryType = uint8(mt)
+				eng.MemoryType = mt
 			} else {
-				wr.TypeLabel = item.input.Type
+				eng.TypeLabel = item.input.Type
 			}
 		}
-		reqs[i] = wr
+		engrams[i] = eng
 	}
 
-	// Batch write (chunk into MaxBatchSize slices).
+	// Phase 1: write all engram records in a single atomic Pebble batch.
+	batch := e.store.NewBatch()
+	defer batch.Discard()
+
+	for i, eng := range engrams {
+		if err := batch.WriteEngram(ctx, ws, eng); err != nil {
+			return nil, fmt.Errorf("RememberTree: queue node %q: %w", items[i].input.Concept, err)
+		}
+	}
+	if err := batch.Commit(); err != nil {
+		return nil, fmt.Errorf("RememberTree: commit batch: %w", err)
+	}
+
+	// Build ID slices now that the batch has assigned ULIDs via defaulting.
 	ids := make([]storage.ULID, len(items))
 	idStrings := make([]string, len(items))
-	writtenCount := 0
-	for start := 0; start < len(reqs); start += MaxBatchSize {
-		end := start + MaxBatchSize
-		if end > len(reqs) {
-			end = len(reqs)
-		}
-		resps, errs := e.WriteBatch(ctx, reqs[start:end])
-		for j, batchErr := range errs {
-			if batchErr != nil {
-				e.rollbackTree(ctx, req.Vault, idStrings[:writtenCount])
-				return nil, fmt.Errorf("RememberTree: write node %q: %w", items[start+j].input.Concept, batchErr)
-			}
-			id, err := storage.ParseULID(resps[j].ID)
-			if err != nil {
-				e.rollbackTree(ctx, req.Vault, idStrings[:writtenCount])
-				return nil, fmt.Errorf("RememberTree: parse ULID %q: %w", resps[j].ID, err)
-			}
-			ids[start+j] = id
-			idStrings[start+j] = resps[j].ID
-			writtenCount++
-		}
+	for i, eng := range engrams {
+		ids[i] = eng.ID
+		idStrings[i] = eng.ID.String()
 	}
 
-	// Wire associations and ordinals (second pass).
-	// On any failure, roll back all written engrams before returning.
+	// Phase 2: wire associations and ordinals (individual writes — not crash-critical
+	// because the engrams themselves are already durable from Phase 1).
 	for i, item := range items {
 		if item.parentIdx >= 0 {
 			parentID := ids[item.parentIdx]
@@ -190,11 +189,9 @@ func (e *Engine) RememberTree(ctx context.Context, req *RememberTreeRequest) (*R
 				CreatedAt:  time.Now(),
 			}
 			if err := e.store.WriteAssociation(ctx, ws, ids[i], parentID, assoc); err != nil {
-				e.rollbackTree(ctx, req.Vault, idStrings)
 				return nil, fmt.Errorf("RememberTree: write association for %q: %w", item.input.Concept, err)
 			}
 			if err := e.store.WriteOrdinal(ctx, ws, parentID, ids[i], item.ordinal); err != nil {
-				e.rollbackTree(ctx, req.Vault, idStrings)
 				return nil, fmt.Errorf("RememberTree: write ordinal for %q: %w", item.input.Concept, err)
 			}
 		}
