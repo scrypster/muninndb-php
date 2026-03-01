@@ -411,12 +411,9 @@ func (rp *RetroactiveProcessor) processEngram(ctx context.Context, eng *Engram) 
 		hasEntities := flags&DigestEntities != 0
 		hasRelationships := flags&DigestRelationships != 0
 		hasClassification := flags&DigestClassified != 0
-		_ = hasRelationships // will be used in Task 2 wiring
-		_ = hasClassification // will be used in Task 2 wiring
 
-		// Both summary and entity extraction are already done for this engram — skip it.
-		// hasRelationships and hasClassification will be added to this gate in Task 2.
-		if hasSummary && hasEntities {
+		// All pipeline stages are already done for this engram — skip it entirely.
+		if hasSummary && hasEntities && hasRelationships && hasClassification {
 			return nil
 		}
 
@@ -451,6 +448,13 @@ func (rp *RetroactiveProcessor) processEngram(ctx context.Context, eng *Engram) 
 				if err := rp.store.LinkEngramToEntity(ctx, eng.ID, entity.Name); err != nil {
 					slog.Warn("enrich: failed to link engram to entity", "id", eng.ID.String(), "name", entity.Name, "err", err)
 				}
+			}
+		}
+
+		// Mark entity extraction complete so subsequent polls skip this stage.
+		if !hasEntities && len(result.Entities) > 0 {
+			if err := rp.store.SetDigestFlag(ctx, eng.ID, DigestEntities); err != nil {
+				slog.Warn("enrich: failed to set DigestEntities flag", "id", eng.ID.String(), "err", err)
 			}
 		}
 

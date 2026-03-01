@@ -64,7 +64,10 @@ func (ps *PebbleStore) GetEntityRecord(ctx context.Context, name string) (*Entit
 }
 
 // WriteEntityEngramLink writes a vault-scoped engram→entity link at 0x20.
-// Value is the canonical entity name (UTF-8).
+// Callers MUST call UpsertEntityRecord first — this method does not verify the
+// entity record exists, and writing a link without a corresponding entity record
+// creates an orphaned 0x20 entry.
+// Value stored is the canonical entity name (UTF-8).
 func (ps *PebbleStore) WriteEntityEngramLink(ctx context.Context, ws [8]byte, engramID ULID, entityName string) error {
 	nameHash := keys.EntityNameHash(entityName)
 	key := keys.EntityEngramLinkKey(ws, [16]byte(engramID), nameHash)
@@ -144,20 +147,15 @@ func (ps *PebbleStore) UpdateDigest(ctx context.Context, id ULID, summary string
 	return nil
 }
 
-// relTypeByteFromString maps a relationship type string to a 1-byte discriminant.
+// relTypeBytes maps relationship type strings to 1-byte discriminants for the 0x21 key.
+var relTypeBytes = map[string]uint8{
+	"manages": 0x01, "uses": 0x02, "depends_on": 0x03,
+	"implements": 0x04, "created_by": 0x05, "part_of": 0x06,
+	"causes": 0x07, "contradicts": 0x08, "supports": 0x09,
+}
+
 func relTypeByteFromString(relType string) uint8 {
-	m := map[string]uint8{
-		"manages":     0x01,
-		"uses":        0x02,
-		"depends_on":  0x03,
-		"implements":  0x04,
-		"created_by":  0x05,
-		"part_of":     0x06,
-		"causes":      0x07,
-		"contradicts": 0x08,
-		"supports":    0x09,
-	}
-	if b, ok := m[relType]; ok {
+	if b, ok := relTypeBytes[relType]; ok {
 		return b
 	}
 	return 0xFF

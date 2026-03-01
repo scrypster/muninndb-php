@@ -45,6 +45,9 @@ func TestKeyPrefixesAreUnique(t *testing.T) {
 		{"EmbeddingKey", EmbeddingKey(ws, id)},
 		{"TransitionKey", TransitionKey(ws, id, id)},
 		{"OrdinalKey", OrdinalKey(ws, id, id)},
+		{"EntityKey", EntityKey([8]byte{})},
+		{"EntityEngramLinkKey", EntityEngramLinkKey([8]byte{}, [16]byte{}, [8]byte{})},
+		{"RelationshipKey", RelationshipKey([8]byte{}, [16]byte{}, [8]byte{}, 0x01, [8]byte{})},
 	}
 
 	seen := make(map[byte]string)
@@ -215,4 +218,21 @@ func TestEntityNameHash_Normalizes(t *testing.T) {
 	hA := EntityNameHash("Alice")
 	hB := EntityNameHash("Bob")
 	require.NotEqual(t, hA, hB)
+}
+
+func TestEntityKeyLayout(t *testing.T) {
+	k := EntityKey([8]byte{1, 2, 3, 4, 5, 6, 7, 8})
+	require.Equal(t, byte(0x1F), k[0], "EntityKey must start with 0x1F")
+	require.Len(t, k, 9, "EntityKey must be 9 bytes")
+
+	ws := [8]byte{0xAA}
+	engramID := [16]byte{0xBB}
+	nameHash := [8]byte{0xCC}
+	lk := EntityEngramLinkKey(ws, engramID, nameHash)
+	require.Equal(t, byte(0x20), lk[0], "EntityEngramLinkKey must start with 0x20")
+	require.Len(t, lk, 33, "EntityEngramLinkKey must be 33 bytes")
+
+	rk := RelationshipKey(ws, engramID, nameHash, 0x01, [8]byte{0xDD})
+	require.Equal(t, byte(0x21), rk[0], "RelationshipKey must start with 0x21")
+	require.Len(t, rk, 42, "RelationshipKey must be 42 bytes")
 }

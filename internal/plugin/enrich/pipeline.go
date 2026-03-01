@@ -121,13 +121,12 @@ func (p *EnrichmentPipeline) Run(ctx context.Context, eng *storage.Engram) (resu
 	return result, nil
 }
 
-// engramHasEntities returns true if the caller explicitly provided key points as a proxy
-// for pre-extracted entities on this engram. This is only used for inline enrichment skipping;
-// the retroactive processor uses GetDigestFlags instead.
-// NOTE: This check is a temporary heuristic — Task 2 will wire DigestEntities flag properly.
+// engramHasEntities returns true if the engram already has caller-provided entities,
+// used as a skip-if-present guard in pipeline.Run for inline enrichment only.
+// The retroactive processor uses GetDigestFlags (DigestEntities flag) instead of this check.
+// This heuristic: only skip if both KeyPoints AND Summary are present, indicating the
+// caller provided a fully pre-enriched engram.
 func engramHasEntities(eng *storage.Engram) bool {
-	// For now, only skip if both KeyPoints AND Summary are present (caller provided full enrichment).
-	// This is conservative: better to re-extract than to silently skip.
 	return len(eng.KeyPoints) > 0 && eng.Summary != ""
 }
 

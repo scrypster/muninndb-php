@@ -581,7 +581,7 @@ func (e *Engine) Write(ctx context.Context, req *mbp.WriteRequest) (*mbp.WriteRe
 	// If we should skip background enrichment, set the DigestEnrich flag now
 	// so the retroactive processor skips this engram.
 	if skipBackgroundEnrich {
-		if flagErr := e.store.SetDigestFlag(ctx, id, 0x04); flagErr != nil {
+		if flagErr := e.store.SetDigestFlag(ctx, id, plugin.DigestEnrich); flagErr != nil {
 			slog.Warn("engine: failed to set enrich digest flag for inline enrichment", "id", id.String(), "error", flagErr)
 		}
 	}
@@ -904,7 +904,7 @@ func (e *Engine) WriteBatch(ctx context.Context, reqs []*mbp.WriteRequest) ([]*m
 		}
 
 		if p.skipBackgroundEnrich {
-			_ = e.store.SetDigestFlag(ctx, id, 0x04)
+			_ = e.store.SetDigestFlag(ctx, id, plugin.DigestEnrich)
 		}
 
 		_ = e.store.WriteVaultName(p.wsPrefix, p.vaultName)
