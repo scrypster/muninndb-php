@@ -210,15 +210,15 @@ type ActivationItem struct {
 
 // ScoreComponents breaks down the activation score.
 type ScoreComponents struct {
-	SemanticSimilarity float32 `msgpack:"semantic_similarity"`
-	FullTextRelevance  float32 `msgpack:"full_text_relevance"`
-	DecayFactor        float32 `msgpack:"decay_factor"`
-	HebbianBoost       float32 `msgpack:"hebbian_boost"`
-	TransitionBoost    float32 `msgpack:"transition_boost,omitempty"`
-	AccessFrequency    float32 `msgpack:"access_frequency"`
-	Recency            float32 `msgpack:"recency"`
-	Raw                float32 `msgpack:"raw"`
-	Final              float32 `msgpack:"final"`
+	SemanticSimilarity float32 `msgpack:"semantic_similarity"           json:"semantic_similarity"`
+	FullTextRelevance  float32 `msgpack:"full_text_relevance"           json:"full_text_relevance"`
+	DecayFactor        float32 `msgpack:"decay_factor"                  json:"decay_factor"`
+	HebbianBoost       float32 `msgpack:"hebbian_boost"                 json:"hebbian_boost"`
+	TransitionBoost    float32 `msgpack:"transition_boost,omitempty"    json:"transition_boost,omitempty"`
+	AccessFrequency    float32 `msgpack:"access_frequency"              json:"access_frequency"`
+	Recency            float32 `msgpack:"recency"                       json:"recency"`
+	Raw                float32 `msgpack:"raw"                           json:"raw"`
+	Final              float32 `msgpack:"final"                         json:"final"`
 }
 
 // SubscribeRequest registers a context subscription.
@@ -269,7 +269,7 @@ type LinkRequest struct {
 
 // LinkResponse confirms association.
 type LinkResponse struct {
-	OK bool `msgpack:"ok"`
+	OK bool `msgpack:"ok" json:"ok"`
 }
 
 // ForgetRequest soft-deletes an engram.
@@ -281,7 +281,7 @@ type ForgetRequest struct {
 
 // ForgetResponse confirms deletion.
 type ForgetResponse struct {
-	OK bool `msgpack:"ok"`
+	OK bool `msgpack:"ok" json:"ok"`
 }
 
 // StatRequest queries database statistics.
@@ -301,10 +301,10 @@ type CoherenceResult struct {
 
 // StatResponse returns database stats.
 type StatResponse struct {
-	EngramCount     int64                      `msgpack:"engram_count"    json:"engramCount"`
-	VaultCount      int                        `msgpack:"vault_count"     json:"vaultCount"`
-	IndexSize       int64                      `msgpack:"index_size"      json:"indexSize"`
-	StorageBytes    int64                      `msgpack:"storage_bytes"   json:"storageBytes"`
+	EngramCount     int64                      `msgpack:"engram_count"        json:"engram_count"`
+	VaultCount      int                        `msgpack:"vault_count"         json:"vault_count"`
+	IndexSize       int64                      `msgpack:"index_size"          json:"index_size"`
+	StorageBytes    int64                      `msgpack:"storage_bytes"       json:"storage_bytes"`
 	CoherenceScores map[string]CoherenceResult `msgpack:"coherence,omitempty" json:"coherence,omitempty"`
 }
 

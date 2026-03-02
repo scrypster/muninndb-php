@@ -825,8 +825,8 @@ func TestDeleteEngram(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if ok, _ := resp["OK"].(bool); !ok {
-		t.Error("expected OK:true in response")
+	if ok, _ := resp["ok"].(bool); !ok {
+		t.Error("expected ok:true in response")
 	}
 }
 

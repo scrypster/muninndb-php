@@ -236,9 +236,10 @@ jobs:
           ./muninndb-server --daemon --data /tmp/muninn-ci-data &
           echo "SERVER_PID=$!" >> $GITHUB_ENV
 
-          # Wait up to 15s for the MCP health endpoint (public, no auth required).
+          # Wait up to 15s for both listeners: MCP (8750) and REST API (8476).
           for i in $(seq 1 15); do
-            if curl -sf http://localhost:8750/mcp/health > /dev/null 2>&1; then
+            if curl -sf http://localhost:8750/mcp/health > /dev/null 2>&1 && \
+               curl -sf http://localhost:8476/api/health > /dev/null 2>&1; then
               echo "MuninnDB ready after ${i}s"
               break
             fi
@@ -246,6 +247,7 @@ jobs:
           done
 
           curl -sf http://localhost:8750/mcp/health
+          curl -sf http://localhost:8476/api/health
 
       - uses: actions/setup-python@v5
         with:
