@@ -257,7 +257,7 @@ jobs:
         run: pip install -r sdk/python/requirements.txt
 
       - name: Install dev dependencies (pytest)
-        run: pip install pytest pytest-asyncio
+        run: pip install pytest pytest-asyncio pytest-timeout
 
       - name: Run SDK smoke test (write + activate)
         working-directory: sdk/python
