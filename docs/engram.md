@@ -173,3 +173,7 @@ CRC-32 (Castagnoli) checksum over the entire record. Computed on write, verified
 - Engram with 256 associations and embedding: ~11KB
 
 The format is designed for the actual workload. Cognitive scores are small, frequently accessed, and fixed in position. Content is large, infrequently accessed by the workers, and compressed. The format matches the access pattern.
+
+---
+
+**See also:** [Cognitive Primitives](cognitive-primitives.md) · [Retrieval Design](retrieval-design.md) · [Feature Reference](feature-reference.md) · [Hierarchical Memory](hierarchical-memory.md)

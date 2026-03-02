@@ -547,7 +547,7 @@ Built-in admin web UI served at the REST port root. Provides visual management o
 
 ---
 
-## MCP Tool Summary (19 tools)
+## MCP Tool Summary (35 tools)
 
 For quick reference, these are the MCP tools available to AI agents:
 
@@ -570,3 +570,19 @@ For quick reference, these are the MCP tools available to AI agents:
 17. `muninn_state` — change lifecycle state
 18. `muninn_list_deleted` — list recoverable deletions
 19. `muninn_retry_enrich` — re-queue for plugin enrichment
+20. `muninn_remember_tree` — write an entire nested hierarchy as linked engrams; returns root_id and node_map. See [docs/hierarchical-memory.md](hierarchical-memory.md)
+21. `muninn_recall_tree` — retrieve the complete, ordered hierarchy rooted at a given engram ID. See [docs/hierarchical-memory.md](hierarchical-memory.md)
+22. `muninn_add_child` — append or insert a single child node into an existing tree without resending the whole structure. See [docs/hierarchical-memory.md](hierarchical-memory.md)
+23. `muninn_entities` — list all entities in a vault sorted by mention count; optional state filter (active, deprecated, merged, resolved). See [docs/entity-graph.md](entity-graph.md)
+24. `muninn_entity` — full aggregate view of one named entity: metadata, engrams mentioning it, relationships, and co-occurring entities. See [docs/entity-graph.md](entity-graph.md)
+25. `muninn_entity_clusters` — co-occurrence cluster discovery; returns entity pairs that frequently appear together, sorted by count. See [docs/entity-graph.md](entity-graph.md)
+26. `muninn_entity_state` — set the lifecycle state of a named entity (active, deprecated, merged, resolved); use merged_into when state=merged. See [docs/entity-graph.md](entity-graph.md)
+27. `muninn_entity_timeline` — chronological view of an entity's evolution: all engrams mentioning it sorted oldest-first. See [docs/entity-graph.md](entity-graph.md)
+28. `muninn_find_by_entity` — fast reverse-index lookup returning all memories that mention a given entity; O(matches). See [docs/entity-graph.md](entity-graph.md)
+29. `muninn_similar_entities` — trigram duplicate detection; returns pairs of entity names above a similarity threshold (default 0.85). See [docs/entity-graph.md](entity-graph.md)
+30. `muninn_merge_entity` — merge entity_a into canonical entity_b: relinks all engrams, marks entity_a as merged; supports dry_run. See [docs/entity-graph.md](entity-graph.md)
+31. `muninn_export_graph` — export the entity relationship graph as JSON-LD (default) or GraphML for visualisation or external analysis. See [docs/entity-graph.md](entity-graph.md)
+32. `muninn_feedback` — SGD scoring weight update; pass `useful` (bool) to signal whether a retrieved engram was helpful. Note: `useful` is the external parameter — `direction` is an internal variable in scoring/weights.go and is never exposed.
+33. `muninn_provenance` — full audit trail for an engram: who wrote it, what changed, and why. Implementation: internal/provenance/
+34. `muninn_replay_enrichment` — re-run the enrichment pipeline delta on one or more engrams that are missing specific stages (entities, relationships, classification, summary); supports dry_run
+35. `muninn_where_left_off` — most recently accessed memories for session context; uses the 0x22 LastAccess index for O(limit) performance regardless of vault size

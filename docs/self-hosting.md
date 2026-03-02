@@ -485,3 +485,7 @@ curl http://localhost:8750/mcp/health
 ```
 
 Returns `{"status":"ok"}` when the server is ready to accept requests.
+
+---
+
+**See also:** [Auth](auth.md) · [Cluster Operations](cluster-operations.md) · [Quickstart](quickstart.md)

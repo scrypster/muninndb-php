@@ -94,3 +94,7 @@ No other durability behavior is configurable. The WAL sync interval (10ms) is a 
 **Shutdown sequence.** A clean shutdown performs a final WAL sync. If the process is terminated with `SIGKILL`, the final sync does not run — treat this as a crash scenario with the ≤10ms window.
 
 **Quota accuracy.** The vault engram count (0x15) is Sync-tier specifically because quota enforcement must survive crashes. If a crash occurs mid-delete, the count may be slightly higher than the actual number of engrams (conservative direction). It self-corrects on the next write or explicit recount.
+
+---
+
+**See also:** [Key-Space Schema](key-space-schema.md) · [Cluster Operations](cluster-operations.md)

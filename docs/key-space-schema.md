@@ -156,3 +156,7 @@ The entity relationship prefix (0x21) encodes the relationship type as a single 
 7. **Write a migration if needed.** If existing databases need to be backfilled, add a numbered migration in the `migrations` package and bump the migration version. The migration must be idempotent.
 
 8. **Test the key layout.** Write a test that round-trips key construction and extraction. Verify sort order if the key encodes ordered fields (weights, timestamps, bucket values).
+
+---
+
+**See also:** [Durability Guarantees](durability-guarantees.md) · [Architecture](architecture.md) · [Entity Graph](entity-graph.md)

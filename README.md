@@ -168,7 +168,7 @@ Add to `.vscode/mcp.json` in your workspace:
 ```
 </details>
 
-MuninnDB exposes **19 MCP tools** — store, activate, search, batch insert, get usage guidance, manage vaults, and more. On first connect, call `muninn_guide` for vault-aware instructions. No token required against the default vault. [Full MCP reference →](https://muninndb.com/docs)
+MuninnDB exposes **35 MCP tools** — store, activate, search, batch insert, get usage guidance, manage vaults, and more. On first connect, call `muninn_guide` for vault-aware instructions. No token required against the default vault. [Full MCP reference →](https://muninndb.com/docs)
 
 ---
 
@@ -353,15 +353,25 @@ docker run -d \
 
 ## Documentation
 
+For an intent-organized reading guide, see [docs/index.md](docs/index.md).
+
 | | |
 |---|---|
 | [Quickstart](docs/quickstart.md) | Detailed install, Docker, embedder setup, first vault |
 | [How Memory Works](docs/how-memory-works.md) | The neuroscience behind why this works |
 | [Architecture](docs/architecture.md) | ERF format, 6-phase engine, wire protocols, cognitive workers |
+| [Capabilities](docs/capabilities.md) | Technical capability statement with code references for every feature |
+| [Cluster Operations](docs/cluster-operations.md) | Multi-node clustering, replication, and leader election |
 | [Cognitive Primitives](docs/cognitive-primitives.md) | Temporal scoring, Hebbian learning, Bayesian confidence, PAS |
+| [Engram](docs/engram.md) | Core data structure: fields, lifecycle states, and key-space layout |
+| [Entity Graph](docs/entity-graph.md) | Named entity extraction, relationships, and cross-vault entity index |
 | [Semantic Triggers](docs/semantic-triggers.md) | Push-based memory — how and why |
 | [Auth & Vaults](docs/auth.md) | Two-layer model, API keys, full vs. observe mode |
+| [Hierarchical Memory](docs/hierarchical-memory.md) | Tree-structured memory for outlines, plans, and task hierarchies |
+| [Index](docs/index.md) | Intent-organized reading guide |
 | [Plugins](docs/plugins.md) | Embed + enrich — retroactive enrichment without code changes |
+| [Retrieval Design](docs/retrieval-design.md) | The 6-phase ACTIVATE pipeline: how recall queries are processed |
+| [Self-Hosting](docs/self-hosting.md) | Deployment options, environment variables, and data directory setup |
 | [Feature Reference](docs/feature-reference.md) | Complete list of every feature, operation, and config option |
 | [vs. Other Databases](docs/vs-other-databases.md) | Full comparison with vector, graph, relational, document |
 

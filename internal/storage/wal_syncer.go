@@ -25,18 +25,18 @@ const walSyncInterval = 10 * time.Millisecond
 //	pebble.Sync (immediate fsync, zero data loss on crash):
 //	  • WriteEngram (0x01 + 0x02 keys) — primary write path; default behavior
 //	  • WriteAssociation — association forward/reverse keys (0x03/0x04)
-//	  • WriteOrdinal — tree ordinal keys (0x1E)
 //	  • scoring/Store.Save — vault weight persistence (0x18 key)
 //	  • provenance/Store.Append — audit trail entries
 //	  • auth writes — vault config, API keys
 //	  • migration writes — schema version keys
 //
 //	pebble.NoSync + walSyncer group-commit (≤10ms data loss window):
+//	  • WriteOrdinal / DeleteOrdinal — tree ordinal keys (0x1E)
 //	  • UpdateMetadata — access count, last-access, state transitions
 //	  • UpdateRelevance — relevance/stability score updates
 //	  • SoftDelete / DeleteEngram — lifecycle transitions
 //	  • WriteEntityEngramLink — entity forward/reverse index (0x20/0x23)
-//	  • UpsertEntityRecord — global entity records (0x22 prefix)
+//	  • UpsertEntityRecord — global entity records (0x1F prefix)
 //	  • UpsertRelationshipRecord — entity relationships (0x21)
 //	  • IncrementEntityCoOccurrence — co-occurrence counts (0x24)
 //	  • WriteLastAccessEntry / DeleteLastAccessEntry — 0x22 last-access index

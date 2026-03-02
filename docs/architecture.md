@@ -386,3 +386,7 @@ Disk estimates assume ~1.7KB average with embedding, ~400 bytes without. Actual 
 **Vault sharding:** Memory is personal. Each vault is an isolated namespace with its own indexes, its own HNSW graph, and its own cognitive worker state. Horizontal scaling is natural: shard by vault. A sharded cluster routes ACTIVATE requests to the correct vault shard and federates results when multi-vault activation is requested.
 
 The single-binary deployment tier is intentional. MuninnDB should be trivially deployable for personal or small team use without infrastructure overhead. The same binary that runs as a personal memory store for one user can be the node in a sharded cluster serving 100 million engrams across an enterprise.
+
+---
+
+**See also:** [Retrieval Design](retrieval-design.md) · [Key-Space Schema](key-space-schema.md) · [Durability Guarantees](durability-guarantees.md) · [Entity Graph](entity-graph.md)

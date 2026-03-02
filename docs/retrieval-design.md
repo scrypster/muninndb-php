@@ -135,3 +135,7 @@ Mode: "deep"      // semantic + all tiers, k=10 default
 
 This allows the model to adapt retrieval strategy to the question type without needing
 to understand the weight system.
+
+---
+
+**See also:** [Architecture](architecture.md) · [Cognitive Primitives](cognitive-primitives.md) · [Feature Reference](feature-reference.md)

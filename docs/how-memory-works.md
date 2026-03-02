@@ -47,7 +47,7 @@ MuninnDB implements this directly. Every engram stores its access count and last
 
 One design choice deserves attention: activation never makes a memory completely invisible. Nothing is ever truly deleted — engrams become dormant. They can be reactivated. This matches biological reality: you don't permanently lose consolidated memories, you lose access pathways to them.
 
-ACT-R is one of the most validated cognitive architectures in psychology, used in hundreds of published studies modeling human memory retrieval. MuninnDB uses it because it captures something true about how memory works: relevance is not permanent, it is earned through use.
+ACT-R is one of the most validated cognitive architectures in psychology, used in hundreds of published studies modeling human memory retrieval. MuninnDB uses it because it captures something true about how memory works: relevance is not permanent, it is earned through use. For a full treatment of the retrieval pipeline, see [Retrieval Design](retrieval-design.md).
 
 ---
 
@@ -142,3 +142,7 @@ MuninnDB gives AI agents the same memory model that evolution spent hundreds of 
 That last part is new. Every database before MuninnDB was passive. You query it and it responds. MuninnDB has a native push mechanism: subscribe to a context, and the database will deliver relevant engrams to you when relevance changes. Not when you ask. When it matters.
 
 This is the architecture that Anderson (ACT-R), Hebb, and Bayes were pointing toward. They described how biological memory actually works. MuninnDB is the implementation.
+
+---
+
+**See also:** [Retrieval Design](retrieval-design.md) · [Cognitive Primitives](cognitive-primitives.md)

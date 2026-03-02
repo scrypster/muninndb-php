@@ -269,3 +269,7 @@ Existing vaults default to `public: true`. Nothing breaks. You add auth incremen
 5. Update your integrations to include `Authorization: Bearer mk_...`
 
 You can lock vaults one at a time while rolling out keys to your services.
+
+---
+
+**See also:** [Self-Hosting](self-hosting.md) · [Quickstart](quickstart.md)

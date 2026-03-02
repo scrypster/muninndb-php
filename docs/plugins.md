@@ -234,3 +234,7 @@ When you enable Tier 2 or Tier 3 on a running MuninnDB deployment:
 Plugins are checked at startup by reading environment variables. If a plugin is configured (e.g., `MUNINN_ENRICH_URL` is set), the MuninnDB server initializes it and registers it for use. If the environment variable is not set, the system operates without that plugin's functionality. To enable or change a plugin, update the environment variables and restart the MuninnDB server. The client API is identical across all three tiers.
 
 This is the architectural consequence of the zero-blocking guarantee. Because all plugin work is async and all retrieval streams are optional fusions, the core system is never dependent on plugin state. Plugins enhance. They do not change the contract.
+
+---
+
+**See also:** [Semantic Triggers](semantic-triggers.md) · [Feature Reference](feature-reference.md)

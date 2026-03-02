@@ -335,3 +335,7 @@ When a contradicting write arrives, the contradiction worker fires. Both engrams
 The database is continuously reorganizing itself around what is used, what is trusted, what is reinforced, and what is contradicted. The cognitive state of the vault reflects the history of how it has been used.
 
 This is what separates a cognitive database from a storage layer with search bolted on.
+
+---
+
+**See also:** [Retrieval Design](retrieval-design.md) · [Engram](engram.md) · [How Memory Works](how-memory-works.md)
