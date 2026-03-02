@@ -2384,16 +2384,16 @@ Authorization = "Bearer &lt;token from ~/.muninn/mcp.token&gt;"</pre>
   </main>
 
   <!-- ── Vault Picker Modal ───────────────────────────────────────── -->
-  <div x-show="vaultModalOpen" x-cloak class="modal-backdrop vault-modal-backdrop" @click.self="vaultModalOpen=false; vaultPickerSearch=''" @keydown.escape.window="vaultModalOpen=false; vaultPickerSearch=''">
-    <div class="vault-modal-box">
-      <div class="vault-modal-search">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0;opacity:0.5;"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+  <div x-show="vaultModalOpen" x-cloak class="modal-backdrop" @click.self="vaultModalOpen=false; vaultPickerSearch=''" @keydown.escape.window="vaultModalOpen=false; vaultPickerSearch=''">
+    <div class="modal-box" style="max-width:420px;padding:0;overflow:hidden;">
+      <div style="display:flex;align-items:center;gap:0.625rem;padding:0.75rem 1rem;border-bottom:1px solid var(--border);">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0;opacity:0.45;"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
         <input type="text" class="vault-modal-input" placeholder="Search vaults…" x-model="vaultPickerSearch" x-effect="if(vaultModalOpen) $nextTick(()=>$el.focus())" @keydown.escape="vaultModalOpen=false; vaultPickerSearch=''">
-        <button class="btn-ghost" style="padding:0.2rem 0.4rem;font-size:0.875rem;opacity:0.6;" @click="vaultModalOpen=false; vaultPickerSearch=''">Esc</button>
+        <span style="font-size:0.75rem;color:var(--text-muted);opacity:0.5;flex-shrink:0;user-select:none;">esc</span>
       </div>
-      <div class="vault-modal-list">
+      <div style="max-height:360px;overflow-y:auto;">
         <template x-for="v in vaults.filter(v => v.toLowerCase().includes(vaultPickerSearch.toLowerCase()))" :key="v">
-          <button class="vault-modal-item" :class="{'is-active': v===vault}" @click="pickVault(v)" x-text="v"></button>
+          <div class="vault-modal-item" :class="{'is-active': v===vault}" @click="pickVault(v)" x-text="v"></div>
         </template>
         <div x-show="vaults.filter(v => v.toLowerCase().includes(vaultPickerSearch.toLowerCase())).length===0" style="padding:1rem;text-align:center;color:var(--text-muted);font-size:0.875rem;">No vaults found</div>
       </div>
