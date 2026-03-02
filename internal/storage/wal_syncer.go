@@ -18,6 +18,40 @@ const walSyncInterval = 10 * time.Millisecond
 // This is the same trade-off as MySQL innodb_flush_log_at_trx_commit=2 or
 // PostgreSQL synchronous_commit=off, and is safe because Pebble's own WAL
 // provides crash recovery — the LogData sync covers all preceding NoSync writes.
+//
+// Durability contract — which paths use Sync vs NoSync:
+//
+//	pebble.Sync (immediate fsync, zero data loss on crash):
+//	  • WriteEngram (0x01 + 0x02 keys) — primary write path; default behavior
+//	  • WriteAssociation — association forward/reverse keys (0x03/0x04)
+//	  • WriteOrdinal — tree ordinal keys (0x1E)
+//	  • scoring/Store.Save — vault weight persistence (0x18 key)
+//	  • provenance/Store.Append — audit trail entries
+//	  • auth writes — vault config, API keys
+//	  • migration writes — schema version keys
+//
+//	pebble.NoSync + walSyncer group-commit (≤10ms data loss window):
+//	  • UpdateMetadata — access count, last-access, state transitions
+//	  • UpdateRelevance — relevance/stability score updates
+//	  • SoftDelete / DeleteEngram — lifecycle transitions
+//	  • WriteEntityEngramLink — entity forward/reverse index (0x20/0x23)
+//	  • UpsertEntityRecord — global entity records (0x22 prefix)
+//	  • UpsertRelationshipRecord — entity relationships (0x21)
+//	  • IncrementEntityCoOccurrence — co-occurrence counts (0x24)
+//	  • WriteLastAccessEntry / DeleteLastAccessEntry — 0x22 last-access index
+//	  • WriteIdempotency — op_id receipts
+//	  • WriteVaultName — vault name forward index
+//	  • episodic/Store — all episode and frame writes
+//	  • FTS index updates — keyword search (eventual consistency)
+//
+//	Design rationale:
+//	  The Sync paths cover "primary records" — writes that the caller expects
+//	  to be durable when WriteEngram/WriteAssociation return. The NoSync paths
+//	  cover "derived state" — metadata, indexes, and scores that can be
+//	  reconstructed or tolerate a 10ms rollback without user-visible data loss.
+//	  The walSyncer guarantees that all NoSync writes are durably flushed within
+//	  walSyncInterval (10ms) via LogData(nil, pebble.Sync), providing a bounded
+//	  durability window equivalent to MySQL innodb_flush_log_at_trx_commit=2.
 type walSyncer struct {
 	db   *pebble.DB
 	stop chan struct{}
