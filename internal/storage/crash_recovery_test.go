@@ -2,8 +2,11 @@ package storage
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"testing"
+
+	"github.com/cockroachdb/pebble"
 )
 
 // TestPebbleCrashRecovery verifies that data committed with pebble.Sync
@@ -121,6 +124,78 @@ func TestPebbleNoSyncCrashRecovery(t *testing.T) {
 	}
 	if eng.Concept != "nosync memory" {
 		t.Errorf("expected Concept=%q, got %q", "nosync memory", eng.Concept)
+	}
+}
+
+// TestWALSyncer_GroupCommitCrashRecovery validates the walSyncer group-commit
+// durability model: NoSync writes followed by a walSyncer-style LogData(nil, Sync)
+// flush must all be recoverable after a simulated crash (abrupt close + reopen).
+//
+// This test directly exercises the correctness assumption of the walSyncer:
+// that db.LogData(nil, pebble.Sync) flushes all preceding NoSync writes durably.
+func TestWALSyncer_GroupCommitCrashRecovery(t *testing.T) {
+	dir, err := os.MkdirTemp("", "muninndb-walsyncer-crash-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
+	db, err := OpenPebble(dir, DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewPebbleStore(db, PebbleStoreConfig{
+		CacheSize:     0,
+		NoSyncEngrams: true,
+	})
+	ws := store.VaultPrefix("walsyncer-test")
+	ctx := context.Background()
+
+	// Write N engrams using NoSync (simulating walSyncer path).
+	const N = 20
+	ids := make([]ULID, N)
+	for i := 0; i < N; i++ {
+		id, err := store.WriteEngram(ctx, ws, &Engram{
+			Concept: fmt.Sprintf("walsyncer engram %d", i),
+			Content: fmt.Sprintf("content %d", i),
+		})
+		if err != nil {
+			t.Fatalf("WriteEngram[%d]: %v", i, err)
+		}
+		ids[i] = id
+	}
+
+	// Simulate walSyncer group-commit flush: one Sync call covers all preceding NoSync writes.
+	if err := db.LogData(nil, pebble.Sync); err != nil {
+		t.Fatalf("LogData sync: %v", err)
+	}
+
+	// Abrupt close (simulating crash — no graceful shutdown).
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// Reopen — Pebble replays its WAL.
+	db2, err := OpenPebble(dir, DefaultOptions())
+	if err != nil {
+		t.Fatalf("Reopen after crash: %v", err)
+	}
+	defer db2.Close()
+
+	store2 := NewPebbleStore(db2, PebbleStoreConfig{CacheSize: 0})
+	ws2 := store2.VaultPrefix("walsyncer-test")
+
+	// All N engrams must be recoverable after WAL replay.
+	for i, id := range ids {
+		eng, err := store2.GetEngram(ctx, ws2, id)
+		if err != nil {
+			t.Fatalf("GetEngram[%d] after WAL recovery: %v", i, err)
+		}
+		expected := fmt.Sprintf("walsyncer engram %d", i)
+		if eng.Concept != expected {
+			t.Errorf("engram[%d]: got Concept=%q, want %q", i, eng.Concept, expected)
+		}
 	}
 }
 
