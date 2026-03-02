@@ -117,21 +117,10 @@
     <!-- Footer controls -->
     <div class="sidebar-footer">
       <!-- Vault switcher (expanded only) -->
-      <div class="sidebar-vault-picker" @click.outside="sidebarVaultOpen=false">
-        <button class="sidebar-vault-btn" @click="sidebarVaultOpen=!sidebarVaultOpen">
-          <span x-text="vault" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left;"></span>
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="flex-shrink:0;opacity:0.6;"><path d="M6 9l6 6 6-6"/></svg>
-        </button>
-        <div x-show="sidebarVaultOpen" x-transition.opacity.duration.100ms class="vault-picker-dropdown vault-picker-dropdown--sidebar">
-          <input type="text" class="vault-picker-search" placeholder="Search vaults…" x-model="vaultPickerSearch" @keydown.escape="sidebarVaultOpen=false">
-          <div class="vault-picker-list">
-            <template x-for="v in vaults.filter(v => v.toLowerCase().includes(vaultPickerSearch.toLowerCase()))" :key="v">
-              <button class="vault-picker-item" :class="{'is-active': v===vault}" @click="pickVault(v)" x-text="v"></button>
-            </template>
-            <div x-show="vaults.filter(v => v.toLowerCase().includes(vaultPickerSearch.toLowerCase())).length===0" class="vault-picker-empty">No vaults found</div>
-          </div>
-        </div>
-      </div>
+      <button class="sidebar-vault-btn" @click="vaultModalOpen=true" title="Switch vault">
+        <span x-text="vault" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left;"></span>
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="flex-shrink:0;opacity:0.6;"><path d="M6 9l6 6 6-6"/></svg>
+      </button>
       <!-- New Vault button (expanded only) -->
       <button class="btn-ghost" style="font-size:0.75rem;padding:0.25rem 0.5rem;margin-top:0.25rem;width:100%;text-align:left;"
         @click="createVault()" title="Create a new vault">+ New Vault</button>
@@ -183,18 +172,9 @@
       <!-- Dashboard header -->
       <div style="display:flex;align-items:baseline;gap:0.875rem;margin-bottom:1.5rem;flex-wrap:wrap;">
         <h2 style="margin:0;">Dashboard</h2>
-        <div class="vault-chip vault-chip--picker" @click.outside="vaultPickerOpen=false">
+        <div class="vault-chip" @click="vaultModalOpen=true" style="cursor:pointer;">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0;opacity:0.7;"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0018 0V5"/><path d="M3 12a9 3 0 0018 0"/></svg>
-          <button class="vault-chip-btn" @click="vaultPickerOpen=!vaultPickerOpen" x-text="vault"></button>
-          <div x-show="vaultPickerOpen" x-transition.opacity.duration.100ms class="vault-picker-dropdown vault-picker-dropdown--chip">
-            <input type="text" class="vault-picker-search" placeholder="Search vaults…" x-model="vaultPickerSearch" @keydown.escape="vaultPickerOpen=false">
-            <div class="vault-picker-list">
-              <template x-for="v in vaults.filter(v => v.toLowerCase().includes(vaultPickerSearch.toLowerCase()))" :key="v">
-                <button class="vault-picker-item" :class="{'is-active': v===vault}" @click="pickVault(v)" x-text="v"></button>
-              </template>
-              <div x-show="vaults.filter(v => v.toLowerCase().includes(vaultPickerSearch.toLowerCase())).length===0" class="vault-picker-empty">No vaults found</div>
-            </div>
-          </div>
+          <span class="vault-chip-btn" x-text="vault"></span>
         </div>
       </div>
 
@@ -274,18 +254,9 @@
       <!-- Memories header -->
       <div style="display:flex;align-items:baseline;gap:0.875rem;margin-bottom:1.5rem;flex-wrap:wrap;">
         <h2 style="margin:0;">Memories</h2>
-        <div class="vault-chip vault-chip--picker" @click.outside="vaultPickerOpen=false">
+        <div class="vault-chip" @click="vaultModalOpen=true" style="cursor:pointer;">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0;opacity:0.7;"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0018 0V5"/><path d="M3 12a9 3 0 0018 0"/></svg>
-          <button class="vault-chip-btn" @click="vaultPickerOpen=!vaultPickerOpen" x-text="vault"></button>
-          <div x-show="vaultPickerOpen" x-transition.opacity.duration.100ms class="vault-picker-dropdown vault-picker-dropdown--chip">
-            <input type="text" class="vault-picker-search" placeholder="Search vaults…" x-model="vaultPickerSearch" @keydown.escape="vaultPickerOpen=false">
-            <div class="vault-picker-list">
-              <template x-for="v in vaults.filter(v => v.toLowerCase().includes(vaultPickerSearch.toLowerCase()))" :key="v">
-                <button class="vault-picker-item" :class="{'is-active': v===vault}" @click="pickVault(v)" x-text="v"></button>
-              </template>
-              <div x-show="vaults.filter(v => v.toLowerCase().includes(vaultPickerSearch.toLowerCase())).length===0" class="vault-picker-empty">No vaults found</div>
-            </div>
-          </div>
+          <span class="vault-chip-btn" x-text="vault"></span>
         </div>
       </div>
 
@@ -2410,6 +2381,28 @@ Authorization = "Bearer &lt;token from ~/.muninn/mcp.token&gt;"</pre>
     </div>
 
   </main>
+
+  <!-- ── Vault Picker Modal ───────────────────────────────────────── -->
+  <div x-show="vaultModalOpen" x-cloak class="modal-backdrop" @click.self="vaultModalOpen=false; vaultPickerSearch=''" @keydown.escape.window="vaultModalOpen=false; vaultPickerSearch=''">
+    <div class="vault-modal-box">
+      <div class="vault-modal-header">
+        <span style="font-weight:600;font-size:0.9375rem;">Switch Vault</span>
+        <button class="btn-ghost" style="padding:0.25rem 0.5rem;font-size:1rem;line-height:1;" @click="vaultModalOpen=false; vaultPickerSearch=''">✕</button>
+      </div>
+      <div class="vault-modal-search">
+        <input type="text" class="vault-modal-input" placeholder="Search vaults…" x-model="vaultPickerSearch" x-effect="if(vaultModalOpen) $nextTick(()=>$el.focus())">
+      </div>
+      <div class="vault-modal-list">
+        <template x-for="v in vaults.filter(v => v.toLowerCase().includes(vaultPickerSearch.toLowerCase()))" :key="v">
+          <button class="vault-modal-item" :class="{'is-active': v===vault}" @click="pickVault(v)">
+            <span x-text="v"></span>
+            <svg x-show="v===vault" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6L9 17l-5-5"/></svg>
+          </button>
+        </template>
+        <div x-show="vaults.filter(v => v.toLowerCase().includes(vaultPickerSearch.toLowerCase())).length===0" style="padding:1rem;text-align:center;color:var(--text-muted);font-size:0.875rem;">No vaults found</div>
+      </div>
+    </div>
+  </div>
 
   <!-- ── New Memory Modal ─────────────────────────────────────────── -->
   <div x-show="showNewMemoryModal" class="modal-backdrop" @click.self="showNewMemoryModal=false">

@@ -8,8 +8,7 @@ document.addEventListener('alpine:init', () => {
     currentView: 'dashboard',
     vault: localStorage.getItem('muninnVault') || 'default',
     vaults: ['default'],
-    vaultPickerOpen: false,
-    sidebarVaultOpen: false,
+    vaultModalOpen: false,
     vaultPickerSearch: '',
     isDarkMode: localStorage.getItem('muninnTheme') !== 'light',
     liveConnected: false,
@@ -440,8 +439,7 @@ document.addEventListener('alpine:init', () => {
 
     pickVault(v) {
       this.vault = v;
-      this.vaultPickerOpen = false;
-      this.sidebarVaultOpen = false;
+      this.vaultModalOpen = false;
       this.vaultPickerSearch = '';
       this.onVaultChange();
     },
