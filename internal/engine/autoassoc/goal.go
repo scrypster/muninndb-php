@@ -17,6 +17,7 @@ const (
 	goalMinSim      = float32(0.6)
 	goalAssocWeight = float32(0.4)
 	goalJobTimeout  = 5 * time.Second
+	maxGoalLinks    = 20
 )
 
 // GoalJob is a pending goal→neighbor linking task.
@@ -82,6 +83,11 @@ func (w *GoalLinkWorker) run() {
 }
 
 func (w *GoalLinkWorker) process(job GoalJob) {
+	if w.hnsw == nil {
+		slog.Warn("goal_link: hnsw index not initialized, skipping", "id", storage.ULID(job.ID).String())
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), goalJobTimeout)
 	defer cancel()
 
@@ -92,7 +98,11 @@ func (w *GoalLinkWorker) process(job GoalJob) {
 	}
 
 	srcID := storage.ULID(job.ID)
+	linked := 0
 	for _, n := range neighbors {
+		if linked >= maxGoalLinks {
+			break
+		}
 		if float32(n.Score) < goalMinSim {
 			continue
 		}
@@ -109,6 +119,8 @@ func (w *GoalLinkWorker) process(job GoalJob) {
 		}
 		if err := w.store.WriteAssociation(ctx, job.WS, srcID, dstID, assoc); err != nil {
 			slog.Warn("goal_link: write assoc failed", "src", srcID.String(), "dst", dstID.String(), "err", err)
+		} else {
+			linked++
 		}
 	}
 }

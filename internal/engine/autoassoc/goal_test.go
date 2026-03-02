@@ -61,6 +61,36 @@ func TestGoalLinkWorker_DropsSelfLink(t *testing.T) {
 	}
 }
 
+func TestGoalLinkWorker_NilHNSW(t *testing.T) {
+	store := &fakeGoalStore{}
+	// Pass nil HNSW — process() must not panic
+	w := NewGoalLinkWorker(store, nil)
+	var id [16]byte
+	id[0] = 7
+	w.EnqueueGoalJob(GoalJob{WS: [8]byte{}, ID: id, Embedding: []float32{0.1}})
+	w.Stop()
+	if store.written != 0 {
+		t.Fatalf("nil hnsw: expected 0 writes, got %d", store.written)
+	}
+}
+
+func TestGoalLinkWorker_CapsAtMaxGoalLinks(t *testing.T) {
+	store := &fakeGoalStore{}
+	// Return more neighbors than maxGoalLinks (all above threshold, none self)
+	results := make([]hnsw.ScoredID, maxGoalLinks+5)
+	for i := range results {
+		results[i] = hnsw.ScoredID{ID: [16]byte{byte(i + 1)}, Score: 0.9}
+	}
+	hnswIdx := &fakeGoalHNSW{results: results}
+	w := NewGoalLinkWorker(store, hnswIdx)
+	var id [16]byte // zero ID — distinct from all result IDs (which start at 1)
+	w.EnqueueGoalJob(GoalJob{WS: [8]byte{}, ID: id, Embedding: []float32{0.1}})
+	w.Stop()
+	if store.written != maxGoalLinks {
+		t.Fatalf("expected %d writes (capped), got %d", maxGoalLinks, store.written)
+	}
+}
+
 func TestGoalLinkWorker_Stop(t *testing.T) {
 	w := NewGoalLinkWorker(&fakeGoalStore{}, &fakeGoalHNSW{})
 	done := make(chan struct{})

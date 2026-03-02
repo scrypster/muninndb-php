@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -49,5 +50,21 @@ func TestHandleProvenance_MissingID(t *testing.T) {
 	json.NewDecoder(w.Body).Decode(&resp)
 	if resp.Error == nil {
 		t.Fatal("expected error for missing id")
+	}
+}
+
+type provenanceErrEngine struct{ fakeEngine }
+
+func (e *provenanceErrEngine) GetProvenance(_ context.Context, _, _ string) ([]ProvenanceEntry, error) {
+	return nil, fmt.Errorf("engram not found")
+}
+
+func TestHandleProvenance_EngineError(t *testing.T) {
+	srv := New(":0", &provenanceErrEngine{}, "", nil)
+	w := postRPC(t, srv, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"muninn_provenance","arguments":{"vault":"default","id":"01HXYZ"}}}`)
+	var resp JSONRPCResponse
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp.Error == nil {
+		t.Fatal("expected error for engine failure")
 	}
 }
