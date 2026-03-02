@@ -149,6 +149,7 @@ func (ps *PebbleStore) GetEngrams(ctx context.Context, wsPrefix [8]byte, ids []U
 // GetMetadata reads only the metadata fields for a batch of engrams.
 // Uses a two-level cache: metaCache (metadata-only) → L1 engram cache → Pebble.
 // Hot engrams (repeatedly activated) are served entirely from in-memory caches.
+// Missing engrams (deleted or dangling) are returned as nil; callers must check.
 func (ps *PebbleStore) GetMetadata(ctx context.Context, wsPrefix [8]byte, ids []ULID) ([]*EngramMeta, error) {
 	result := make([]*EngramMeta, len(ids))
 	for i, id := range ids {
@@ -183,14 +184,18 @@ func (ps *PebbleStore) GetMetadata(ctx context.Context, wsPrefix [8]byte, ids []
 		key := keys.MetaKey(wsPrefix, [16]byte(id))
 		val, err := getFromReader(ps.pebbleReader(ctx), key)
 		if err != nil {
+			// Unexpected storage error — return it.
 			return nil, fmt.Errorf("get metadata: %w", err)
 		}
 		if val == nil {
-			return nil, fmt.Errorf("metadata not found")
+			// Engram not found — append nil and continue (matching GetEngrams pattern).
+			result[i] = nil
+			continue
 		}
 
 		erfMeta, err := erf.DecodeMeta(val)
 		if err != nil {
+			// Decode error is unexpected — return it (not a missing entry).
 			return nil, fmt.Errorf("decode metadata: %w", err)
 		}
 
@@ -224,7 +229,7 @@ func (ps *PebbleStore) UpdateMetadata(ctx context.Context, wsPrefix [8]byte, id 
 	if err != nil {
 		return err
 	}
-	if len(oldMetas) == 0 {
+	if len(oldMetas) == 0 || oldMetas[0] == nil {
 		return fmt.Errorf("engram not found")
 	}
 	oldState := oldMetas[0].State
@@ -306,7 +311,7 @@ func (ps *PebbleStore) UpdateRelevance(ctx context.Context, wsPrefix [8]byte, id
 	if err != nil {
 		return err
 	}
-	if len(metas) == 0 {
+	if len(metas) == 0 || metas[0] == nil {
 		return fmt.Errorf("engram not found")
 	}
 	oldRelevance := metas[0].Relevance

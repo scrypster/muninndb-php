@@ -105,15 +105,18 @@ func (ps *PebbleStore) GetAssociations(ctx context.Context, wsPrefix [8]byte, id
 
 	// Phase 1: serve all cache-warm IDs without touching Pebble.
 	// expirable.LRU handles TTL expiry automatically on Get.
+	// Return copies of cached slices to prevent callers from mutating the cache.
 	var uncached []ULID
 	for _, id := range ids {
 		ck := assocCacheKey(wsPrefix, id)
 		if entry, ok := ps.assocCache.Get(ck); ok {
-			if maxPerNode <= 0 || len(entry.assocs) <= maxPerNode {
-				result[id] = entry.assocs
-			} else {
-				result[id] = entry.assocs[:maxPerNode]
+			// Determine slice length
+			n := len(entry.assocs)
+			if maxPerNode > 0 && n > maxPerNode {
+				n = maxPerNode
 			}
+			// Return a copy of the slice
+			result[id] = append([]Association(nil), entry.assocs[:n]...)
 			continue
 		}
 		uncached = append(uncached, id)
@@ -184,15 +187,18 @@ func (ps *PebbleStore) GetAssociations(ctx context.Context, wsPrefix [8]byte, id
 // Checks the in-memory assocCache first; falls back to Pebble on miss.
 // Extracted to ensure iter.Close() is deferred at function scope, not inside
 // the calling loop (which would defer until the outer function returned).
+// Returns a copy of cached slices to prevent callers from mutating the cache.
 func (ps *PebbleStore) associationsForOne(wsPrefix [8]byte, id ULID, maxPerNode int) ([]Association, error) {
 	// Fast path: check in-memory cache.
 	// expirable.LRU handles TTL expiry automatically on Get.
+	// Return a copy to prevent caller mutation.
 	ck := assocCacheKey(wsPrefix, id)
 	if entry, ok := ps.assocCache.Get(ck); ok {
-		if maxPerNode <= 0 || len(entry.assocs) <= maxPerNode {
-			return entry.assocs, nil
+		n := len(entry.assocs)
+		if maxPerNode > 0 && n > maxPerNode {
+			n = maxPerNode
 		}
-		return entry.assocs[:maxPerNode], nil
+		return append([]Association(nil), entry.assocs[:n]...), nil
 	}
 
 	// Build prefix: 0x03 | wsPrefix | id
