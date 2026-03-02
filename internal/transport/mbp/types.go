@@ -97,8 +97,8 @@ type WriteRequest struct {
 
 // WriteResponse confirms a write and returns the assigned ULID.
 type WriteResponse struct {
-	ID        string `msgpack:"id"`
-	CreatedAt int64  `msgpack:"created_at"`
+	ID        string `msgpack:"id"         json:"id"`
+	CreatedAt int64  `msgpack:"created_at" json:"created_at"`
 }
 
 // ReadRequest retrieves an engram by ID.
@@ -109,23 +109,23 @@ type ReadRequest struct {
 
 // ReadResponse returns the full engram data.
 type ReadResponse struct {
-	ID             string   `msgpack:"id"`
-	Concept        string   `msgpack:"concept"`
-	Content        string   `msgpack:"content"`
-	Confidence     float32  `msgpack:"confidence"`
-	Relevance      float32  `msgpack:"relevance"`
-	Stability      float32  `msgpack:"stability"`
-	AccessCount    uint32   `msgpack:"access_count"`
-	Tags           []string `msgpack:"tags,omitempty"`
-	State          uint8    `msgpack:"state"`
-	CreatedAt      int64    `msgpack:"created_at"`
-	UpdatedAt      int64    `msgpack:"updated_at"`
-	LastAccess     int64    `msgpack:"last_access"`
-	Summary        string   `msgpack:"summary,omitempty"`
-	KeyPoints      []string `msgpack:"key_points,omitempty"`
-	MemoryType     uint8    `msgpack:"memory_type,omitempty"`
-	TypeLabel      string   `msgpack:"type_label,omitempty"`
-	Classification uint16   `msgpack:"classification,omitempty"`
+	ID             string   `msgpack:"id"                    json:"id"`
+	Concept        string   `msgpack:"concept"               json:"concept"`
+	Content        string   `msgpack:"content"               json:"content"`
+	Confidence     float32  `msgpack:"confidence"            json:"confidence"`
+	Relevance      float32  `msgpack:"relevance"             json:"relevance"`
+	Stability      float32  `msgpack:"stability"             json:"stability"`
+	AccessCount    uint32   `msgpack:"access_count"          json:"access_count"`
+	Tags           []string `msgpack:"tags,omitempty"        json:"tags"`
+	State          uint8    `msgpack:"state"                 json:"state"`
+	CreatedAt      int64    `msgpack:"created_at"            json:"created_at"`
+	UpdatedAt      int64    `msgpack:"updated_at"            json:"updated_at"`
+	LastAccess     int64    `msgpack:"last_access"           json:"last_access"`
+	Summary        string   `msgpack:"summary,omitempty"     json:"summary,omitempty"`
+	KeyPoints      []string `msgpack:"key_points,omitempty"  json:"key_points,omitempty"`
+	MemoryType     uint8    `msgpack:"memory_type,omitempty" json:"memory_type,omitempty"`
+	TypeLabel      string   `msgpack:"type_label,omitempty"  json:"type_label,omitempty"`
+	Classification uint16   `msgpack:"classification,omitempty" json:"classification,omitempty"`
 	// EmbedDim is the stored embedding dimensionality code (0 = no embedding).
 	// 1 = 384-dim, 2 = 768-dim, 3 = 1536-dim.
 	EmbedDim uint8 `msgpack:"embed_dim,omitempty" json:"embed_dim,omitempty"`
@@ -186,26 +186,26 @@ type BriefSentence struct {
 
 // ActivateResponse returns activation results (may be multi-frame).
 type ActivateResponse struct {
-	QueryID     string           `msgpack:"query_id"`
-	TotalFound  int              `msgpack:"total_found"`
-	Activations []ActivationItem `msgpack:"activations"`
-	LatencyMs   float64          `msgpack:"latency_ms,omitempty"`
-	Frame       int              `msgpack:"frame,omitempty"`
-	TotalFrames int              `msgpack:"total_frames,omitempty"`
-	Brief       []BriefSentence  `msgpack:"brief,omitempty" json:"brief,omitempty"` // extractive activation brief
+	QueryID     string           `msgpack:"query_id"               json:"query_id"`
+	TotalFound  int              `msgpack:"total_found"            json:"total_found"`
+	Activations []ActivationItem `msgpack:"activations"            json:"activations"`
+	LatencyMs   float64          `msgpack:"latency_ms,omitempty"   json:"latency_ms,omitempty"`
+	Frame       int              `msgpack:"frame,omitempty"        json:"frame,omitempty"`
+	TotalFrames int              `msgpack:"total_frames,omitempty" json:"total_frames,omitempty"`
+	Brief       []BriefSentence  `msgpack:"brief,omitempty"        json:"brief,omitempty"` // extractive activation brief
 }
 
 // ActivationItem is a single activated engram.
 type ActivationItem struct {
-	ID              string          `msgpack:"id"`
-	Concept         string          `msgpack:"concept"`
-	Content         string          `msgpack:"content"`
-	Score           float32         `msgpack:"score"`
-	Confidence      float32         `msgpack:"confidence"`
-	ScoreComponents ScoreComponents `msgpack:"score_components,omitempty"`
-	Why             string          `msgpack:"why,omitempty"`
-	HopPath         []string        `msgpack:"hop_path,omitempty"`
-	Dormant         bool            `msgpack:"dormant,omitempty"`
+	ID              string          `msgpack:"id"                          json:"id"`
+	Concept         string          `msgpack:"concept"                     json:"concept"`
+	Content         string          `msgpack:"content"                     json:"content"`
+	Score           float32         `msgpack:"score"                       json:"score"`
+	Confidence      float32         `msgpack:"confidence"                  json:"confidence"`
+	ScoreComponents ScoreComponents `msgpack:"score_components,omitempty"  json:"score_components,omitempty"`
+	Why             string          `msgpack:"why,omitempty"               json:"why,omitempty"`
+	HopPath         []string        `msgpack:"hop_path,omitempty"          json:"hop_path,omitempty"`
+	Dormant         bool            `msgpack:"dormant,omitempty"           json:"dormant,omitempty"`
 }
 
 // ScoreComponents breaks down the activation score.

@@ -747,12 +747,11 @@ func TestCreateEngram(t *testing.T) {
 	if w.Code != http.StatusCreated {
 		t.Errorf("expected 201, got %d: %s", w.Code, w.Body.String())
 	}
-	// Verify response has ID field (struct field names, not msgpack tags)
 	var resp map[string]interface{}
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if resp["ID"] == "" || resp["ID"] == nil {
+	if resp["id"] == "" || resp["id"] == nil {
 		t.Error("expected non-empty ID in response")
 	}
 }
@@ -790,8 +789,8 @@ func TestActivate(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if resp["Activations"] == nil {
-		t.Error("expected Activations field in response")
+	if resp["activations"] == nil {
+		t.Error("expected activations field in response")
 	}
 }
 
@@ -868,8 +867,8 @@ func TestActivate_EmptyContext(t *testing.T) {
 		t.Fatalf("decode response: %v", err)
 	}
 	// Should have Activations field (may be empty list)
-	if resp["Activations"] == nil {
-		t.Error("expected Activations field in response")
+	if resp["activations"] == nil {
+		t.Error("expected activations field in response")
 	}
 }
 
