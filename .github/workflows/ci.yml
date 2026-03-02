@@ -256,6 +256,9 @@ jobs:
       - name: Install Python dependencies
         run: pip install -r sdk/python/requirements.txt
 
+      - name: Install dev dependencies (pytest)
+        run: pip install pytest pytest-asyncio
+
       - name: Run SDK smoke test (write + activate)
         working-directory: sdk/python
         run: PYTHONPATH=. python examples/write_activate.py
@@ -263,6 +266,13 @@ jobs:
       - name: Run LangChain integration demo
         working-directory: sdk/python
         run: PYTHONPATH=. python examples/langchain_demo.py
+
+      - name: Run SDK assertion tests
+        working-directory: sdk/python
+        env:
+          MUNINNDB_URL: http://localhost:8750
+          MUNINNDB_TOKEN: ""
+        run: PYTHONPATH=. pytest tests/test_sdk_smoke.py -v --timeout=30
 
       - name: Stop server
         if: always()
