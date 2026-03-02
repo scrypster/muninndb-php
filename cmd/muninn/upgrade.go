@@ -1,10 +1,14 @@
 package main
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -184,4 +188,57 @@ func releaseAssetURL(version, goos, goarch string) string {
 		"https://github.com/scrypster/muninndb/releases/download/%s/muninn_%s_%s_%s.%s",
 		version, version, goos, goarch, ext,
 	)
+}
+
+// downloadAndExtractBinary downloads a tar.gz from url, extracts the file named
+// binaryName, writes it to a temp file next to the current executable, and
+// returns the temp file path. Caller is responsible for removing on error or after use.
+func downloadAndExtractBinary(url, binaryName string) (string, error) {
+	client := &http.Client{Timeout: 5 * time.Minute}
+	resp, err := client.Get(url)
+	if err != nil {
+		return "", fmt.Errorf("download failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("download failed: HTTP %d", resp.StatusCode)
+	}
+
+	gr, err := gzip.NewReader(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("gzip open: %w", err)
+	}
+	defer gr.Close()
+
+	tr := tar.NewReader(gr)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return "", fmt.Errorf("tar read: %w", err)
+		}
+		// Match bare filename — archive may have a directory prefix
+		if filepath.Base(hdr.Name) != binaryName {
+			continue
+		}
+		// Write to temp file next to the current executable for same-filesystem rename
+		exe, err := os.Executable()
+		if err != nil {
+			return "", fmt.Errorf("cannot determine executable path: %w", err)
+		}
+		tmp, err := os.CreateTemp(filepath.Dir(exe), ".muninn-upgrade-*")
+		if err != nil {
+			return "", fmt.Errorf("temp file: %w", err)
+		}
+		if _, err := io.Copy(tmp, tr); err != nil {
+			tmp.Close()
+			os.Remove(tmp.Name())
+			return "", fmt.Errorf("write temp: %w", err)
+		}
+		tmp.Close()
+		return tmp.Name(), nil
+	}
+	return "", fmt.Errorf("binary %q not found in archive", binaryName)
 }

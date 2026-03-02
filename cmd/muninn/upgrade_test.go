@@ -1,6 +1,15 @@
 package main
 
-import "testing"
+import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"testing"
+)
 
 func TestNewerVersionAvailable(t *testing.T) {
 	cases := []struct {
@@ -61,5 +70,46 @@ func TestReleaseAssetURL(t *testing.T) {
 	want = "https://github.com/scrypster/muninndb/releases/download/v1.2.3/muninn_v1.2.3_windows_amd64.zip"
 	if url != want {
 		t.Errorf("got %q, want %q", url, want)
+	}
+}
+
+func TestDownloadAndExtractBinary(t *testing.T) {
+	// Build a minimal tar.gz containing a fake "muninn" binary
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gw)
+	content := []byte("#!/bin/sh\necho fake-binary")
+	hdr := &tar.Header{
+		Name: "muninn",
+		Mode: 0755,
+		Size: int64(len(content)),
+	}
+	if err := tw.WriteHeader(hdr); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(content); err != nil {
+		t.Fatal(err)
+	}
+	tw.Close()
+	gw.Close()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", buf.Len()))
+		w.Write(buf.Bytes())
+	}))
+	defer srv.Close()
+
+	dest, err := downloadAndExtractBinary(srv.URL, "muninn")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer os.Remove(dest)
+
+	data, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("cannot read extracted file: %v", err)
+	}
+	if string(data) != string(content) {
+		t.Errorf("content mismatch: got %q, want %q", data, content)
 	}
 }
