@@ -1,5 +1,58 @@
 package storage
 
+// Entity Graph Key Space Design
+//
+// MuninnDB maintains a two-layer entity graph: a global entity registry and a
+// vault-scoped relationship graph. Both are stored in Pebble using the following
+// key prefixes. All writes in this file use pebble.NoSync + walSyncer group-commit
+// (≤10ms durability window). See storage/wal_syncer.go for the durability contract.
+//
+// ┌─────────────────────────────────────────────────────────────────────────────┐
+// │ Prefix │ Scope  │ Key Layout                              │ Value           │
+// ├────────┼────────┼─────────────────────────────────────────┼─────────────────┤
+// │ 0x1F   │ Global │ 0x1F | nameHash(8)                      │ msgpack(Entity) │
+// │ 0x20   │ Vault  │ 0x20 | ws(8) | engramID(16) | hash(8)  │ entityName(str) │
+// │ 0x21   │ Vault  │ 0x21 | ws(8) | engramID(16) | fromH(8) │                 │
+// │        │        │        | relTypeByte(1) | toH(8)        │ msgpack(Rel)    │
+// │ 0x23   │ Cross  │ 0x23 | nameHash(8) | ws(8) | engramID  │ empty           │
+// │ 0x24   │ Vault  │ 0x24 | ws(8) | hashA(8) | hashB(8)     │ msgpack(CoOcc)  │
+// └─────────────────────────────────────────────────────────────────────────────┘
+//
+// Prefix 0x1F — Global Entity Registry
+//   Key:   0x1F | SipHash(NFKC-normalized entity name)(8 bytes)
+//   Value: msgpack-encoded EntityRecord (name, type, confidence, source, timestamps,
+//          mentionCount, state, mergedInto)
+//   Scope: Global (no vault isolation) — entity identity is cross-vault
+//   Mutex: Per-entity lock via getEntityLock(nameHash) prevents TOCTOU in UpsertEntityRecord
+//   Merge: Confidence-preserving: max(existing, new); other fields are last-writer-wins
+//
+// Prefix 0x20 — Engram→Entity Forward Link Index (Vault-Scoped)
+//   Key:   0x20 | ws(8) | engramID(16) | entityNameHash(8)  [33 bytes total]
+//   Value: Raw entity name string
+//   Query: "Which entities does engram X mention?" — scan prefix 0x20|ws|engramID
+//   Write: WriteEntityEngramLink — also writes the 0x23 reverse key atomically
+//
+// Prefix 0x21 — Entity Relationship Records (Vault-Scoped)
+//   Key:   0x21 | ws(8) | engramID(16) | fromHash(8) | relTypeByte(1) | toHash(8)
+//          [42 bytes total]
+//   Value: msgpack-encoded RelationshipRecord (fromEntity, toEntity, relType, weight, source)
+//   Semantics: Per-engram relationship assertion — each engram that describes a relationship
+//              writes its own 0x21 key. ExportGraph deduplicates by max-weight per triple.
+//   RelType mapping: see relTypeBytes map (0x01=supports, ..., 0x0A=co_occurs_with, 0xFF=unknown)
+//
+// Prefix 0x23 — Entity→Engram Reverse Index (Cross-Vault)
+//   Key:   0x23 | entityNameHash(8) | ws(8) | engramID(16)  [33 bytes total]
+//   Value: Empty (key encodes all data)
+//   Query: "Which engrams mention entity Y, across all vaults?" — scan prefix 0x23|nameHash
+//   Written atomically with the 0x20 forward key in WriteEntityEngramLink
+//
+// Prefix 0x24 — Entity Co-Occurrence Index (Vault-Scoped)
+//   Key:   0x24 | ws(8) | hashA(8) | hashB(8)  [25 bytes total]
+//          Canonical order: hashA ≤ hashB byte-by-byte (ensures (A,B) == (B,A))
+//   Value: msgpack-encoded coOccurrenceRecord (nameA, nameB, count uint32)
+//   Written by IncrementEntityCoOccurrence after each engram write with ≥2 entities
+//   Mutex: Per-pair lock via getCoOccurrenceLock prevents TOCTOU on increment
+
 import (
 	"context"
 	"fmt"
