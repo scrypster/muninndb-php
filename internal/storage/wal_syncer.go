@@ -3,6 +3,7 @@ package storage
 import (
 	"errors"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/cockroachdb/pebble"
@@ -70,14 +71,19 @@ func newWALSyncer(db *pebble.DB) *walSyncer {
 
 func (s *walSyncer) run() {
 	defer close(s.done)
-	// Recover from the "pebble: closed" panic that can occur if db.Close()
-	// races with an in-flight ticker sync during shutdown.  Pebble panics with
-	// pebble.ErrClosed (an error value), so we check via errors.Is.
-	// Any other unexpected panic is re-panicked so it is not silently swallowed.
+	// Recover from panics that occur if db.Close() races with an in-flight
+	// ticker sync during shutdown. Pebble can panic in two forms:
+	//   - error: pebble.ErrClosed ("pebble: closed")
+	//   - string: "pebble/record: closed LogWriter" (from the WAL writer internals)
+	// Both are expected during shutdown and are silently swallowed here.
+	// Any other panic is re-panicked so it is not silently swallowed.
 	defer func() {
 		if r := recover(); r != nil {
 			if err, ok := r.(error); ok && errors.Is(err, pebble.ErrClosed) {
 				return // expected during shutdown
+			}
+			if s, ok := r.(string); ok && strings.Contains(s, "closed") {
+				return // expected: "pebble/record: closed LogWriter"
 			}
 			panic(r) // unexpected — re-panic
 		}
