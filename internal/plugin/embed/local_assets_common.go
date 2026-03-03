@@ -1,3 +1,5 @@
+//go:build localassets
+
 package embed
 
 import _ "embed"

@@ -46,7 +46,7 @@ jobs:
         run: go build -o muninndb-server ./cmd/muninn/...
 
       - name: Run Go tests
-        run: go test ./... -timeout 300s -race -coverprofile=coverage.out -covermode=atomic
+        run: go test -tags localassets ./... -timeout 300s -race -coverprofile=coverage.out -covermode=atomic
 
       - name: Coverage summary
         run: go tool cover -func=coverage.out | tail -1
@@ -94,7 +94,7 @@ jobs:
       # TestMain builds the binary itself; we just need Go + assets present.
       # Tests exercise: help, unknown-command, init, start, stop, restart, status, MCP round-trip.
       - name: Run CLI integration tests
-        run: go test -tags integration -v -timeout 120s ./cmd/muninn/...
+        run: go test -tags localassets,integration -v -timeout 120s ./cmd/muninn/...
 
   # ── Windows: build + smoke test ───────────────────────────────────────
   windows:
@@ -148,7 +148,7 @@ jobs:
         run: go build -o muninn.exe ./cmd/muninn/...
 
       - name: Run unit tests
-        run: go test ./cmd/muninn/... -timeout 120s -count=1
+        run: go test -tags localassets ./cmd/muninn/... -timeout 120s -count=1
 
       - name: Smoke test — version and help
         run: |

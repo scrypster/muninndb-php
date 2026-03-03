@@ -27,6 +27,21 @@ go run ./cmd/muninn/... start
 
 See the [README](README.md) for full install options and configuration.
 
+## Running tests
+
+Basic unit tests (no assets required):
+
+```bash
+go test ./...
+```
+
+Tests requiring embedded ML assets (download first):
+
+```bash
+make fetch-assets
+go test -tags localassets ./...
+```
+
 ---
 
 ## Branch model (Git Flow)
