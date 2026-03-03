@@ -203,7 +203,7 @@
           <div class="stat-value" x-text="stats.vaultCount">0</div>
           <div class="stat-label">Vaults</div>
         </div>
-        <div class="stat-card" :title="'Disk space used by the \'' + vault + '\'' vault'">
+        <div class="stat-card" :title="`Disk space used by the '${vault}' vault`">
           <div class="stat-value" x-text="formatBytes(stats.storageBytes)">0 B</div>
           <div class="stat-label">Vault Storage</div>
         </div>
@@ -2404,7 +2404,7 @@ Authorization = "Bearer &lt;token from ~/.muninn/mcp.token&gt;"</pre>
           <div class="vault-modal-item" :class="{'is-active': v===vault}" @click="pickVault(v)">
             <svg class="vault-item-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0018 0V5"/><path d="M3 12a9 3 0 0018 0"/></svg>
             <span class="vault-item-name" x-text="v"></span>
-            <span class="vault-item-count" x-show="vaultStats[v] !== undefined" x-text="vaultStats[v] + ' engrams'"></span>
+            <span class="vault-item-count" x-show="vaultStats[v] !== undefined" x-text="vaultStats[v] + (vaultStats[v] === 1 ? ' engram' : ' engrams')"></span>
             <svg x-show="v===vault" class="vault-item-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
           </div>
         </template>

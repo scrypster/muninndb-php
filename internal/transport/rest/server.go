@@ -163,7 +163,7 @@ func NewServer(addr string, engine EngineAPI, authStore *auth.Store, sessionSecr
 	mux.HandleFunc("GET /api/engrams", s.withMiddleware(s.handleListEngrams))
 	mux.HandleFunc("GET /api/engrams/{id}/links", s.withMiddleware(s.handleGetEngramLinks))
 	mux.HandleFunc("GET /api/vaults", s.withMiddleware(s.handleListVaults))
-	mux.HandleFunc("GET /api/vaults/stats", s.withMiddleware(s.handleVaultStats()))
+	mux.HandleFunc("GET /api/vaults/stats", s.withAdminMiddleware(s.handleVaultStats()))
 	mux.HandleFunc("GET /api/session", s.withMiddleware(s.handleGetSession))
 	// SSE subscribe — long-lived; bypasses write timeout via ResponseController.
 	mux.HandleFunc("GET /api/subscribe", s.withMiddleware(s.handleSubscribe))
