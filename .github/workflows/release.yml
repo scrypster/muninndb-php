@@ -79,11 +79,19 @@ jobs:
             -o muninn-${{ matrix.goos }}-${{ matrix.goarch }} \
             ./cmd/muninn/...
 
+      - name: Package archive
+        run: |
+          cp muninn-${{ matrix.goos }}-${{ matrix.goarch }} muninn
+          tar czf muninn_${GITHUB_REF_NAME}_${{ matrix.goos }}_${{ matrix.goarch }}.tar.gz muninn
+          rm muninn
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: muninn-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: muninn-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            muninn-${{ matrix.goos }}-${{ matrix.goarch }}
+            muninn_*_${{ matrix.goos }}_${{ matrix.goarch }}.tar.gz
 
   # ── Build Windows binary (separate job — different asset-fetch steps) ──
   build-windows:
@@ -134,11 +142,20 @@ jobs:
           go build -ldflags "-X main.version=$env:GITHUB_REF_NAME" -o muninn-windows-amd64.exe ./cmd/muninn/...
         shell: pwsh
 
+      - name: Package archive
+        run: |
+          Copy-Item muninn-windows-amd64.exe muninn.exe
+          Compress-Archive -Path muninn.exe -DestinationPath "muninn_$($env:GITHUB_REF_NAME)_windows_amd64.zip"
+          Remove-Item muninn.exe
+        shell: pwsh
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: muninn-windows-amd64
-          path: muninn-windows-amd64.exe
+          path: |
+            muninn-windows-amd64.exe
+            muninn_*_windows_amd64.zip
 
   # ── Create GitHub Release and attach all binaries ───────────────────────
   release:
@@ -161,7 +178,11 @@ jobs:
             muninn-darwin-arm64 \
             muninn-darwin-amd64 \
             muninn-linux-amd64 \
-            muninn-windows-amd64.exe
+            muninn-windows-amd64.exe \
+            muninn_${GITHUB_REF_NAME}_darwin_arm64.tar.gz \
+            muninn_${GITHUB_REF_NAME}_darwin_amd64.tar.gz \
+            muninn_${GITHUB_REF_NAME}_linux_amd64.tar.gz \
+            muninn_${GITHUB_REF_NAME}_windows_amd64.zip
 
   # ── Update Homebrew formula with new version + SHA256s ──────────────────
   update-formula:
