@@ -1816,3 +1816,83 @@ func TestActivateCore_VaultDefaultRecallMode(t *testing.T) {
 		t.Fatal("expected non-nil response for recent vault")
 	}
 }
+
+// TestStat_CountsConfigOnlyVaults verifies that vaults created via authStore
+// (with no engrams written) are counted by Stat(). This is the core regression:
+// dashboard "Vaults" stat card must match `muninn vault list` output.
+//
+// The test adds two config-only vaults and then asserts VaultCount==2, proving
+// that config-only vaults (not just data-layer vaults) are included in the count.
+func TestStat_CountsConfigOnlyVaults(t *testing.T) {
+	eng, authStore, _, cleanup := testEnvWithAuth(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Create two config-only vaults (no engrams written — simulates `muninn vault create`).
+	for _, name := range []string{"config-only-alpha", "config-only-beta"} {
+		if err := authStore.SetVaultConfig(auth.VaultConfig{Name: name, Public: false}); err != nil {
+			t.Fatalf("SetVaultConfig(%q): %v", name, err)
+		}
+	}
+
+	// Stat() must count both config-only vaults (no data written to either).
+	resp, err := eng.Stat(ctx, &mbp.StatRequest{})
+	if err != nil {
+		t.Fatalf("Stat after SetVaultConfig: %v", err)
+	}
+	if resp.VaultCount != 2 {
+		t.Errorf("expected VaultCount=2 (two config-only vaults), got %d", resp.VaultCount)
+	}
+}
+
+// TestStat_DeduplicatesVaultCount verifies that a vault appearing in BOTH the
+// data store (has engrams) AND the auth config store is counted exactly once.
+func TestStat_DeduplicatesVaultCount(t *testing.T) {
+	eng, authStore, _, cleanup := testEnvWithAuth(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const sharedVault = "shared-vault"
+
+	// Write an engram so the vault appears in the data store.
+	if _, err := eng.Write(ctx, &mbp.WriteRequest{
+		Vault:   sharedVault,
+		Concept: "dedup test",
+		Content: "this vault exists in both stores",
+	}); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	// Also add a config entry for the same vault (mirrors real usage where
+	// vault create + write both happen).
+	if err := authStore.SetVaultConfig(auth.VaultConfig{Name: sharedVault, Public: false}); err != nil {
+		t.Fatalf("SetVaultConfig: %v", err)
+	}
+
+	resp, err := eng.Stat(ctx, &mbp.StatRequest{})
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	// sharedVault must be counted once, not twice.
+	// Total is 1 (sharedVault) — no other vaults exist.
+	if resp.VaultCount != 1 {
+		t.Errorf("expected VaultCount=1 (deduplicated), got %d", resp.VaultCount)
+	}
+}
+
+// TestStat_DefaultVaultMinimum verifies that Stat() returns VaultCount >= 1
+// even when both the data store and the auth config store are completely empty.
+// This preserves the existing "minimum 1" semantics for the dashboard.
+func TestStat_DefaultVaultMinimum(t *testing.T) {
+	eng, _, _, cleanup := testEnvWithAuth(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	resp, err := eng.Stat(ctx, &mbp.StatRequest{})
+	if err != nil {
+		t.Fatalf("Stat on empty engine: %v", err)
+	}
+	if resp.VaultCount < 1 {
+		t.Errorf("expected VaultCount >= 1 (minimum floor), got %d", resp.VaultCount)
+	}
+}

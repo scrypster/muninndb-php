@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble"
+	"github.com/scrypster/muninndb/internal/auth"
 	"github.com/scrypster/muninndb/internal/cognitive"
 	"github.com/scrypster/muninndb/internal/config"
 	"github.com/scrypster/muninndb/internal/engine"
@@ -1953,5 +1954,137 @@ func TestEntityGraphVisualization_MCPInfoEndpoint(t *testing.T) {
 	// Expected 401 because no admin session is present; URL structure verified in integration tests.
 	if w.Code != http.StatusUnauthorized && w.Code != http.StatusOK {
 		t.Logf("MCP info endpoint returned %d (expected 401 without auth)", w.Code)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// handleVaultStats tests
+// ---------------------------------------------------------------------------
+
+// vaultStatsEngine is an engine whose ListVaults and Stat return configurable values.
+type vaultStatsEngine struct {
+	MockEngine
+	vaults []string
+	counts map[string]int64 // per-vault engram count
+}
+
+func (e *vaultStatsEngine) ListVaults(_ context.Context) ([]string, error) {
+	return e.vaults, nil
+}
+
+func (e *vaultStatsEngine) Stat(_ context.Context, req *StatRequest) (*StatResponse, error) {
+	count, ok := e.counts[req.Vault]
+	if !ok {
+		return &StatResponse{}, nil
+	}
+	return &StatResponse{EngramCount: count, VaultCount: 1, StorageBytes: 0}, nil
+}
+
+// TestHandleVaultStats_ReturnsAllVaults verifies that vaults which exist only in
+// the auth store config (no engrams yet) appear in the response with engram_count 0.
+func TestHandleVaultStats_ReturnsAllVaults(t *testing.T) {
+	eng := &vaultStatsEngine{
+		vaults: []string{"default"},
+		counts: map[string]int64{"default": 5},
+	}
+	store := newTestAuthStore(t)
+	// Make "default" public so the vault-auth middleware passes without an API key.
+	if err := store.SetVaultConfig(auth.VaultConfig{Name: "default", Public: true}); err != nil {
+		t.Fatalf("SetVaultConfig default: %v", err)
+	}
+	// "config-only" vault exists in auth config but not returned by ListVaults.
+	if err := store.SetVaultConfig(auth.VaultConfig{Name: "config-only", Public: false}); err != nil {
+		t.Fatalf("SetVaultConfig: %v", err)
+	}
+
+	srv := NewServer("localhost:0", eng, store, nil, nil, EmbedInfo{}, nil, "", nil)
+	req := httptest.NewRequest("GET", "/api/vaults/stats", nil)
+	w := httptest.NewRecorder()
+	srv.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	type vaultStat struct {
+		Name        string `json:"name"`
+		EngramCount int64  `json:"engram_count"`
+	}
+	var resp []vaultStat
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	found := map[string]int64{}
+	for _, vs := range resp {
+		found[vs.Name] = vs.EngramCount
+	}
+
+	if _, ok := found["config-only"]; !ok {
+		t.Error("expected config-only vault to appear in response")
+	}
+	if found["config-only"] != 0 {
+		t.Errorf("expected engram_count 0 for config-only vault, got %d", found["config-only"])
+	}
+	if _, ok := found["default"]; !ok {
+		t.Error("expected default vault to appear in response")
+	}
+}
+
+// TestHandleVaultStats_AccurateCount verifies that each vault's engram count
+// is accurately reported from the engine's Stat response.
+func TestHandleVaultStats_AccurateCount(t *testing.T) {
+	eng := &vaultStatsEngine{
+		vaults: []string{"alpha", "beta"},
+		counts: map[string]int64{
+			"alpha": 42,
+			"beta":  7,
+		},
+	}
+	srv := NewServer("localhost:0", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	req := httptest.NewRequest("GET", "/api/vaults/stats", nil)
+	w := httptest.NewRecorder()
+	srv.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	type vaultStat struct {
+		Name        string `json:"name"`
+		EngramCount int64  `json:"engram_count"`
+	}
+	var resp []vaultStat
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	found := map[string]int64{}
+	for _, vs := range resp {
+		found[vs.Name] = vs.EngramCount
+	}
+
+	if found["alpha"] != 42 {
+		t.Errorf("expected alpha engram_count 42, got %d", found["alpha"])
+	}
+	if found["beta"] != 7 {
+		t.Errorf("expected beta engram_count 7, got %d", found["beta"])
+	}
+}
+
+func TestHandleVaultStats_RequiresAdminAuth(t *testing.T) {
+	// GET /api/vaults/stats is an admin endpoint; requests without a valid
+	// session cookie must be rejected with 401.
+	store := newTestAuthStore(t)
+	secret := []byte("test-secret")
+	srv := NewServer("localhost:0", &MockEngine{}, store, secret, nil, EmbedInfo{}, nil, "", nil)
+
+	req := httptest.NewRequest("GET", "/api/vaults/stats", nil)
+	// No session cookie — should be rejected by admin auth middleware.
+	w := httptest.NewRecorder()
+	srv.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 without auth, got %d: %s", w.Code, w.Body.String())
 	}
 }

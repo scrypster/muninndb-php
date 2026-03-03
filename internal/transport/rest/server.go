@@ -163,6 +163,7 @@ func NewServer(addr string, engine EngineAPI, authStore *auth.Store, sessionSecr
 	mux.HandleFunc("GET /api/engrams", s.withMiddleware(s.handleListEngrams))
 	mux.HandleFunc("GET /api/engrams/{id}/links", s.withMiddleware(s.handleGetEngramLinks))
 	mux.HandleFunc("GET /api/vaults", s.withMiddleware(s.handleListVaults))
+	mux.HandleFunc("GET /api/vaults/stats", s.withAdminMiddleware(s.handleVaultStats()))
 	mux.HandleFunc("GET /api/session", s.withMiddleware(s.handleGetSession))
 	// SSE subscribe — long-lived; bypasses write timeout via ResponseController.
 	mux.HandleFunc("GET /api/subscribe", s.withMiddleware(s.handleSubscribe))
@@ -1102,6 +1103,33 @@ func (s *Server) handleListVaults(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.sendJSON(w, http.StatusOK, vaults)
+}
+
+func (s *Server) handleVaultStats() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Get all vaults using the same merge pattern as handleListVaults.
+		if _, err := s.engine.ListVaults(r.Context()); err != nil {
+			s.sendError(r, w, http.StatusInternalServerError, ErrStorageError, err.Error())
+			return
+		}
+		vaultNames := s.collectVaultNames(r, s.authStore)
+
+		type vaultStat struct {
+			Name        string `json:"name"`
+			EngramCount int64  `json:"engram_count"`
+		}
+
+		result := make([]vaultStat, 0, len(vaultNames))
+		for _, name := range vaultNames {
+			req := &mbp.StatRequest{Vault: name}
+			stat, err := s.engine.Stat(r.Context(), req)
+			if err != nil {
+				stat = &mbp.StatResponse{}
+			}
+			result = append(result, vaultStat{Name: name, EngramCount: stat.EngramCount})
+		}
+		s.sendJSON(w, http.StatusOK, result)
+	}
 }
 
 func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {

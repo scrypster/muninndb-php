@@ -511,3 +511,167 @@ func TestReplicationPromote_WithCoordinator(t *testing.T) {
 		t.Error("expected triggered=true in response")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// canonicalize() tests
+// ---------------------------------------------------------------------------
+
+func TestCanonicalize(t *testing.T) {
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{"datadog-clone", "datadogclone"},
+		{"FOO_BAR", "foobar"},
+		{"my-vault-2", "myvault2"},
+		{"hello world", "helloworld"},
+		{"café", "caf"},
+		{"vault.name", "vaultname"},
+		{"123-abc", "123abc"},
+		{"", ""},
+		{"---", ""},
+		{"HELLO", "hello"},
+		{"a1b2c3", "a1b2c3"},
+	}
+	for _, tc := range cases {
+		got := canonicalize(tc.input)
+		if got != tc.want {
+			t.Errorf("canonicalize(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// handleSetVaultConfig — collision detection tests
+// ---------------------------------------------------------------------------
+
+// newCollisionTestServer builds a Server pre-seeded with existingVaultNames in the
+// auth store so that collectVaultNames detects near-duplicate names.
+func newCollisionTestServer(t *testing.T, existingVaultNames []string) (*Server, *auth.Store) {
+	t.Helper()
+	store := newTestAuthStore(t)
+	// Pre-populate the existing vault names into the auth store so
+	// collectVaultNames picks them up via ListVaultConfigs.
+	for _, name := range existingVaultNames {
+		if err := store.SetVaultConfig(auth.VaultConfig{Name: name}); err != nil {
+			t.Fatalf("seed vault %q: %v", name, err)
+		}
+	}
+	srv := newTestServer(t, store)
+	return srv, store
+}
+
+func TestHandleSetVaultConfig_DuplicateDetection(t *testing.T) {
+	// "datadog-clone" already exists; creating "datadogclone" should yield 409.
+	srv, _ := newCollisionTestServer(t, []string{"datadog-clone"})
+
+	body, _ := json.Marshal(map[string]interface{}{"name": "datadogclone"})
+	req := httptest.NewRequest("PUT", "/api/admin/vaults/config", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409 for collision, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp["code"] != "VAULT_NAME_COLLISION" {
+		t.Errorf("expected code=VAULT_NAME_COLLISION, got %q", resp["code"])
+	}
+	if resp["conflict"] != "datadog-clone" {
+		t.Errorf("expected conflict=datadog-clone, got %q", resp["conflict"])
+	}
+	if resp["normalized"] != "datadogclone" {
+		t.Errorf("expected normalized=datadogclone, got %q", resp["normalized"])
+	}
+}
+
+func TestHandleSetVaultConfig_ForceOverride(t *testing.T) {
+	// Same scenario with ?force=true — should succeed (200 OK).
+	srv, _ := newCollisionTestServer(t, []string{"datadog-clone"})
+
+	body, _ := json.Marshal(map[string]interface{}{"name": "datadogclone"})
+	req := httptest.NewRequest("PUT", "/api/admin/vaults/config?force=true", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 with force=true, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleSetVaultConfig_ForcePreservesAuth(t *testing.T) {
+	// force=true bypasses collision check but NOT auth.
+	// When the server has a session secret, unauthenticated requests return 401.
+	store := newTestAuthStore(t)
+	if err := store.SetVaultConfig(auth.VaultConfig{Name: "datadog-clone"}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	secret := []byte("test-secret")
+	srv := NewServer("localhost:0", &MockEngine{}, store, secret, nil, EmbedInfo{}, nil, "", nil)
+
+	body, _ := json.Marshal(map[string]interface{}{"name": "datadogclone"})
+	req := httptest.NewRequest("PUT", "/api/admin/vaults/config?force=true", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	// No session cookie — should be rejected by admin auth middleware.
+	w := httptest.NewRecorder()
+	srv.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 without auth (force=true must not bypass auth), got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleSetVaultConfig_ExactNameIsUpdate(t *testing.T) {
+	// Creating/updating a vault with the exact same name as an existing vault
+	// is NOT a collision — it's an update/overwrite and should return 200.
+	srv, _ := newCollisionTestServer(t, []string{"myvault"})
+
+	body, _ := json.Marshal(map[string]interface{}{"name": "myvault", "public": true})
+	req := httptest.NewRequest("PUT", "/api/admin/vaults/config", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for exact name update (not a collision), got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// handleRenameVault — collision detection test
+// ---------------------------------------------------------------------------
+
+func TestHandleRenameVault_DuplicateDetection(t *testing.T) {
+	// Vault "my-vault" exists. Rename "source" to "myvault" → canonical collision → 409.
+	store := newTestAuthStore(t)
+	// Seed "my-vault" into the auth store so collectVaultNames finds it.
+	if err := store.SetVaultConfig(auth.VaultConfig{Name: "my-vault"}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	srv := newTestServer(t, store)
+
+	body, _ := json.Marshal(map[string]string{"new_name": "myvault"})
+	req := httptest.NewRequest("POST", "/api/admin/vaults/source/rename", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409 for rename collision, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp["code"] != "VAULT_NAME_COLLISION" {
+		t.Errorf("expected code=VAULT_NAME_COLLISION, got %q", resp["code"])
+	}
+	if resp["conflict"] != "my-vault" {
+		t.Errorf("expected conflict=my-vault, got %q", resp["conflict"])
+	}
+}

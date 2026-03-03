@@ -1860,9 +1860,25 @@ func (e *Engine) Forget(ctx context.Context, req *mbp.ForgetRequest) (*mbp.Forge
 // Stat implements mbp.EngineAPI.Stat.
 func (e *Engine) Stat(ctx context.Context, req *mbp.StatRequest) (*mbp.StatResponse, error) {
 	vaultNames, _ := e.store.ListVaultNames()
-	vaultCount := len(vaultNames)
+
+	// Count all vaults: data vaults + config-only (empty) vaults, deduplicated.
+	// A vault created via `muninn vault create` only writes an auth config entry
+	// until the first engram is stored. Without this merge, the dashboard would
+	// show a lower vault count than `muninn vault list`.
+	vaultSet := make(map[string]struct{}, len(vaultNames))
+	for _, n := range vaultNames {
+		vaultSet[n] = struct{}{}
+	}
+	if e.authStore != nil {
+		if cfgs, err := e.authStore.ListVaultConfigs(); err == nil {
+			for _, cfg := range cfgs {
+				vaultSet[cfg.Name] = struct{}{}
+			}
+		}
+	}
+	vaultCount := len(vaultSet)
 	if vaultCount == 0 {
-		vaultCount = 1
+		vaultCount = 1 // preserve the existing "minimum 1" semantics
 	}
 
 	engramCount := e.engramCount.Load()

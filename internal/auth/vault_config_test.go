@@ -218,3 +218,103 @@ func TestRenameVaultConfig_SetVaultConfigError(t *testing.T) {
 // tested above. The individual Set/Delete error paths no longer exist.
 // The branch is defensive code for hypothetical storage backends where db.Set
 // can succeed but a subsequent db.Delete fails.
+
+// TestDeleteVaultConfig_DeletesExisting verifies that DeleteVaultConfig removes
+// a previously-stored vault config entry.
+func TestDeleteVaultConfig_DeletesExisting(t *testing.T) {
+	s := auth.NewStore(openTestDB(t))
+
+	// Set a config so there is something to delete.
+	if err := s.SetVaultConfig(auth.VaultConfig{Name: "to-delete", Public: true}); err != nil {
+		t.Fatalf("SetVaultConfig: %v", err)
+	}
+
+	// Confirm it was persisted.
+	cfgs, err := s.ListVaultConfigs()
+	if err != nil {
+		t.Fatalf("ListVaultConfigs before delete: %v", err)
+	}
+	found := false
+	for _, c := range cfgs {
+		if c.Name == "to-delete" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected vault config to be present before delete")
+	}
+
+	// Delete it.
+	if err := s.DeleteVaultConfig("to-delete"); err != nil {
+		t.Fatalf("DeleteVaultConfig: %v", err)
+	}
+
+	// GetVaultConfig should now return the fail-closed default (no persisted entry).
+	cfg, err := s.GetVaultConfig("to-delete")
+	if err != nil {
+		t.Fatalf("GetVaultConfig after delete: %v", err)
+	}
+	if cfg.Public {
+		t.Error("expected fail-closed default (Public=false) after delete, got Public=true")
+	}
+
+	// ListVaultConfigs should no longer include the deleted vault.
+	cfgs, err = s.ListVaultConfigs()
+	if err != nil {
+		t.Fatalf("ListVaultConfigs after delete: %v", err)
+	}
+	for _, c := range cfgs {
+		if c.Name == "to-delete" {
+			t.Error("deleted vault config still appears in ListVaultConfigs")
+		}
+	}
+}
+
+// TestDeleteVaultConfig_Idempotent verifies that calling DeleteVaultConfig on a
+// vault that has no config entry returns nil (no error).
+func TestDeleteVaultConfig_Idempotent(t *testing.T) {
+	s := auth.NewStore(openTestDB(t))
+
+	// Delete a vault that was never configured — must not error.
+	if err := s.DeleteVaultConfig("nonexistent"); err != nil {
+		t.Fatalf("DeleteVaultConfig on non-existent vault: %v", err)
+	}
+
+	// Calling again must still return nil.
+	if err := s.DeleteVaultConfig("nonexistent"); err != nil {
+		t.Fatalf("second DeleteVaultConfig on non-existent vault: %v", err)
+	}
+}
+
+// TestDeleteVaultConfig_Roundtrip verifies that after a Set → Delete cycle,
+// a subsequent SetVaultConfig on the same name works correctly.
+func TestDeleteVaultConfig_Roundtrip(t *testing.T) {
+	s := auth.NewStore(openTestDB(t))
+
+	// First write.
+	if err := s.SetVaultConfig(auth.VaultConfig{Name: "roundtrip-vault", Public: true}); err != nil {
+		t.Fatalf("first SetVaultConfig: %v", err)
+	}
+
+	// Delete.
+	if err := s.DeleteVaultConfig("roundtrip-vault"); err != nil {
+		t.Fatalf("DeleteVaultConfig: %v", err)
+	}
+
+	// Second write with different settings.
+	if err := s.SetVaultConfig(auth.VaultConfig{Name: "roundtrip-vault", Public: false}); err != nil {
+		t.Fatalf("second SetVaultConfig: %v", err)
+	}
+
+	// Verify the second write is what we read back.
+	cfg, err := s.GetVaultConfig("roundtrip-vault")
+	if err != nil {
+		t.Fatalf("GetVaultConfig after roundtrip: %v", err)
+	}
+	if cfg.Public {
+		t.Error("expected Public=false from second SetVaultConfig, got Public=true")
+	}
+	if cfg.Name != "roundtrip-vault" {
+		t.Errorf("expected Name=%q, got %q", "roundtrip-vault", cfg.Name)
+	}
+}

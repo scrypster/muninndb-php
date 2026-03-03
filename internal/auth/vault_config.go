@@ -90,6 +90,12 @@ func (s *Store) RenameVaultConfig(oldName, newName string) error {
 	return nil
 }
 
+// DeleteVaultConfig removes the vault configuration for the named vault.
+// If no config exists for the vault, this is a no-op and returns nil (idempotent).
+func (s *Store) DeleteVaultConfig(name string) error {
+	return s.db.Delete(vaultConfigKey(name), pebble.Sync)
+}
+
 // ListVaultConfigs returns all explicitly configured vaults.
 func (s *Store) ListVaultConfigs() ([]VaultConfig, error) {
 	lower := []byte{prefixVaultCfg}

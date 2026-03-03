@@ -483,6 +483,100 @@ func TestEngineRenameVault_ClosedDB(t *testing.T) {
 	}
 }
 
+// TestDeleteVault_CleansAuthStore verifies that after DeleteVault, the vault
+// name no longer appears in authStore.ListVaultConfigs. This is the primary
+// regression test for the ghost vault bug: DeleteVault must clean up both the
+// engine data store and the auth config store.
+func TestDeleteVault_CleansAuthStore(t *testing.T) {
+	eng, authStore, _, cleanup := testEnvWithAuth(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const vaultName = "auth-delete-vault"
+
+	// Register the vault by writing an engram.
+	if _, err := eng.Write(ctx, writeReq(vaultName, "concept", "content")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	time.Sleep(300 * time.Millisecond)
+
+	// Explicitly configure the vault in authStore so there is an entry to clean up.
+	if err := authStore.SetVaultConfig(auth.VaultConfig{Name: vaultName, Public: true}); err != nil {
+		t.Fatalf("SetVaultConfig: %v", err)
+	}
+
+	// Confirm the config entry exists before deletion.
+	cfgs, err := authStore.ListVaultConfigs()
+	if err != nil {
+		t.Fatalf("ListVaultConfigs before delete: %v", err)
+	}
+	found := false
+	for _, c := range cfgs {
+		if c.Name == vaultName {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected vault config to be present before DeleteVault")
+	}
+
+	// Delete the vault.
+	if err := eng.DeleteVault(ctx, vaultName); err != nil {
+		t.Fatalf("DeleteVault: %v", err)
+	}
+
+	// The auth config entry must be gone after DeleteVault.
+	cfgs, err = authStore.ListVaultConfigs()
+	if err != nil {
+		t.Fatalf("ListVaultConfigs after delete: %v", err)
+	}
+	for _, c := range cfgs {
+		if c.Name == vaultName {
+			t.Errorf("vault config still present in authStore after DeleteVault — ghost vault bug")
+		}
+	}
+}
+
+// TestDeleteVault_NotFoundAfterDelete verifies that calling DeleteVault a second
+// time on an already-deleted vault returns an error, not "vault still exists".
+// This tests the observable symptom of the ghost vault bug: if authStore cleanup
+// is missing, the vault would re-appear in ListVaults and the second delete would
+// either succeed (masking the ghost) or fail in an unexpected way.
+func TestDeleteVault_NotFoundAfterDelete(t *testing.T) {
+	eng, _, _, cleanup := testEnvWithAuth(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const vaultName = "double-delete-vault"
+
+	// Register and delete the vault.
+	if _, err := eng.Write(ctx, writeReq(vaultName, "concept", "content")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	time.Sleep(300 * time.Millisecond)
+
+	if err := eng.DeleteVault(ctx, vaultName); err != nil {
+		t.Fatalf("first DeleteVault: %v", err)
+	}
+
+	// Second delete must return an error (vault not found).
+	err := eng.DeleteVault(ctx, vaultName)
+	if err == nil {
+		t.Fatal("expected error on second DeleteVault, got nil")
+	}
+
+	// The vault must not appear in ListVaults — no ghost entry.
+	vaults, listErr := eng.ListVaults(ctx)
+	if listErr != nil {
+		t.Fatalf("ListVaults: %v", listErr)
+	}
+	for _, v := range vaults {
+		if v == vaultName {
+			t.Errorf("deleted vault still appears in ListVaults — ghost vault bug")
+		}
+	}
+}
+
 // TestEngineRenameVault_JobActive verifies that renaming a vault with an
 // active clone/merge job targeting it returns ErrVaultJobActive.
 func TestEngineRenameVault_JobActive(t *testing.T) {

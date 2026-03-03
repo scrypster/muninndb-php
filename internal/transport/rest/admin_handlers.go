@@ -7,7 +7,9 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/scrypster/muninndb/internal/auth"
 	plugincfg "github.com/scrypster/muninndb/internal/config"
@@ -44,6 +46,36 @@ func isValidVaultName(name string) bool {
 		}
 	}
 	return true
+}
+
+// canonicalize returns a lowercase alphanumeric-only string for collision detection.
+// Used to detect near-duplicate vault names (e.g. "datadog-clone" == "datadogclone").
+func canonicalize(name string) string {
+	return strings.Map(func(r rune) rune {
+		lower := unicode.ToLower(r)
+		if lower >= 'a' && lower <= 'z' || lower >= '0' && lower <= '9' {
+			return lower
+		}
+		return -1
+	}, name)
+}
+
+// vaultNameCollision checks if newName canonically collides with any of the
+// provided existing vault names. It returns the first conflicting name found,
+// or empty string if there is no collision. An exact name match is not a
+// collision (it represents an update/overwrite of an existing vault).
+func vaultNameCollision(existingNames []string, newName string) string {
+	canon := canonicalize(newName)
+	for _, existing := range existingNames {
+		if existing == newName {
+			// Exact match is an update, not a collision.
+			continue
+		}
+		if canonicalize(existing) == canon {
+			return existing
+		}
+	}
+	return ""
 }
 
 func (s *Server) handleCreateAPIKey(authStore *auth.Store) http.HandlerFunc {
@@ -212,12 +244,60 @@ func (s *Server) handleSetVaultConfig(authStore *auth.Store) http.HandlerFunc {
 			s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "invalid vault name")
 			return
 		}
+
+		// Collision check: detect near-duplicate vault names unless ?force=true.
+		if r.URL.Query().Get("force") != "true" {
+			existingNames := s.collectVaultNames(r, authStore)
+			if conflict := vaultNameCollision(existingNames, cfg.Name); conflict != "" {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusConflict)
+				json.NewEncoder(w).Encode(map[string]string{
+					"error":      "vault name collision detected",
+					"code":       "VAULT_NAME_COLLISION",
+					"conflict":   conflict,
+					"normalized": canonicalize(cfg.Name),
+				})
+				return
+			}
+		}
+
 		if err := authStore.SetVaultConfig(cfg); err != nil {
 			s.sendError(r, w, http.StatusInternalServerError, ErrStorageError, err.Error())
 			return
 		}
 		s.sendJSON(w, http.StatusOK, cfg)
 	}
+}
+
+// collectVaultNames merges vault names from the engine and the auth store into
+// a deduplicated slice. Used for canonicalize-based collision detection.
+func (s *Server) collectVaultNames(r *http.Request, authStore *auth.Store) []string {
+	seen := make(map[string]struct{})
+	var names []string
+
+	if s.engine != nil {
+		if engineVaults, err := s.engine.ListVaults(r.Context()); err == nil {
+			for _, n := range engineVaults {
+				if _, ok := seen[n]; !ok {
+					seen[n] = struct{}{}
+					names = append(names, n)
+				}
+			}
+		}
+	}
+
+	if authStore != nil {
+		if cfgs, err := authStore.ListVaultConfigs(); err == nil {
+			for _, cfg := range cfgs {
+				if _, ok := seen[cfg.Name]; !ok {
+					seen[cfg.Name] = struct{}{}
+					names = append(names, cfg.Name)
+				}
+			}
+		}
+	}
+
+	return names
 }
 
 // handleGetVaultPlasticity returns the raw PlasticityConfig (may be nil) and
@@ -485,6 +565,31 @@ func (s *Server) handleRenameVault(w http.ResponseWriter, r *http.Request) {
 		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "new_name must differ from current name")
 		return
 	}
+
+	// Collision check: detect near-duplicate target name unless ?force=true.
+	// Exclude the vault being renamed so it doesn't collide with itself.
+	if r.URL.Query().Get("force") != "true" {
+		existingNames := s.collectVaultNames(r, s.authStore)
+		// Remove the current vault name so renaming doesn't self-collide.
+		filtered := make([]string, 0, len(existingNames))
+		for _, n := range existingNames {
+			if n != name {
+				filtered = append(filtered, n)
+			}
+		}
+		if conflict := vaultNameCollision(filtered, req.NewName); conflict != "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			json.NewEncoder(w).Encode(map[string]string{
+				"error":      "vault name collision detected",
+				"code":       "VAULT_NAME_COLLISION",
+				"conflict":   conflict,
+				"normalized": canonicalize(req.NewName),
+			})
+			return
+		}
+	}
+
 	if err := s.engine.RenameVault(r.Context(), name, req.NewName); err != nil {
 		if errors.Is(err, engine.ErrVaultNotFound) {
 			s.sendError(r, w, http.StatusNotFound, ErrVaultNotFound, err.Error())

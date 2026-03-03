@@ -135,6 +135,14 @@ func (e *Engine) DeleteVault(ctx context.Context, vaultName string) error {
 			"vault", vaultName, "err", err)
 		return fmt.Errorf("delete vault (name cleanup): %w", err)
 	}
+
+	// Auth config: remove config entry if present.
+	if e.authStore != nil {
+		if err := e.authStore.DeleteVaultConfig(vaultName); err != nil {
+			slog.Warn("delete vault: auth config cleanup failed", "vault", vaultName, "err", err)
+		}
+	}
+
 	return nil
 }
 

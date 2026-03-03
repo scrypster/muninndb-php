@@ -203,9 +203,9 @@
           <div class="stat-value" x-text="stats.vaultCount">0</div>
           <div class="stat-label">Vaults</div>
         </div>
-        <div class="stat-card" title="Disk space used by the memory database">
+        <div class="stat-card" :title="`Disk space used by the '${vault}' vault`">
           <div class="stat-value" x-text="formatBytes(stats.storageBytes)">0 B</div>
-          <div class="stat-label">Storage</div>
+          <div class="stat-label">Vault Storage</div>
         </div>
         <div class="stat-card" title="Disk space used by the semantic similarity index (HNSW vector index)">
           <div class="stat-value" x-text="formatBytes(stats.indexSize)">0 B</div>
@@ -2404,6 +2404,7 @@ Authorization = "Bearer &lt;token from ~/.muninn/mcp.token&gt;"</pre>
           <div class="vault-modal-item" :class="{'is-active': v===vault}" @click="pickVault(v)">
             <svg class="vault-item-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0018 0V5"/><path d="M3 12a9 3 0 0018 0"/></svg>
             <span class="vault-item-name" x-text="v"></span>
+            <span class="vault-item-count" x-show="vaultStats[v] !== undefined" x-text="vaultStats[v] + (vaultStats[v] === 1 ? ' engram' : ' engrams')"></span>
             <svg x-show="v===vault" class="vault-item-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
           </div>
         </template>
@@ -2419,12 +2420,21 @@ Authorization = "Bearer &lt;token from ~/.muninn/mcp.token&gt;"</pre>
         <h2 style="margin:0;font-size:1.125rem;">New Vault</h2>
         <button class="btn-ghost" style="padding:0.25rem 0.375rem;line-height:1;" @click="newVaultModal.show=false">✕</button>
       </div>
-      <form @submit.prevent="submitNewVault()">
+      <form @submit.prevent="submitNewVault(false)">
         <div class="form-group" style="margin-bottom:1rem;">
           <label>Vault name</label>
-          <input class="input-field" style="margin-top:0.375rem;" type="text" placeholder="my-vault" x-model="newVaultModal.name" x-effect="if(newVaultModal.show) $nextTick(()=>$el.focus())" @input="newVaultModal.error=''" autocomplete="off" spellcheck="false">
+          <input class="input-field" style="margin-top:0.375rem;" type="text" placeholder="my-vault" x-model="newVaultModal.name" x-effect="if(newVaultModal.show) $nextTick(()=>$el.focus())" @input="newVaultModal.error='';newVaultModal.collision=null" autocomplete="off" spellcheck="false">
           <span x-show="newVaultModal.error" x-text="newVaultModal.error" style="font-size:0.8125rem;color:var(--danger);margin-top:0.375rem;"></span>
           <span style="font-size:0.75rem;color:var(--text-muted);margin-top:0.375rem;">Lowercase letters, digits, hyphens, underscores · 1–64 chars</span>
+        </div>
+        <!-- Collision warning banner — shown only when backend returns VAULT_NAME_COLLISION -->
+        <div x-show="newVaultModal.collision" style="background:var(--warning-bg,#fffbeb);border:1px solid var(--warning-border,#f59e0b);border-radius:0.375rem;padding:0.75rem;margin-bottom:1rem;font-size:0.875rem;">
+          <div style="font-weight:600;margin-bottom:0.25rem;">Similar vault name detected</div>
+          <div>A vault named <strong x-text="newVaultModal.collision && newVaultModal.collision.conflict"></strong> already exists with a similar name. Create anyway?</div>
+          <div style="display:flex;gap:0.5rem;margin-top:0.75rem;">
+            <button type="button" class="btn-secondary" style="font-size:0.8125rem;padding:0.25rem 0.625rem;" @click="newVaultModal.collision=null">Cancel</button>
+            <button type="button" class="btn-primary" style="font-size:0.8125rem;padding:0.25rem 0.625rem;" @click="submitNewVault(true)">Create anyway</button>
+          </div>
         </div>
         <div style="display:flex;gap:0.75rem;justify-content:flex-end;">
           <button type="button" class="btn-secondary" @click="newVaultModal.show=false">Cancel</button>

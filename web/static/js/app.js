@@ -8,9 +8,10 @@ document.addEventListener('alpine:init', () => {
     currentView: 'dashboard',
     vault: localStorage.getItem('muninnVault') || 'default',
     vaults: ['default'],
+    vaultStats: {},
     vaultModalOpen: false,
     vaultPickerSearch: '',
-    newVaultModal: { show: false, name: '', error: '', loading: false },
+    newVaultModal: { show: false, name: '', error: '', loading: false, collision: null },
     isDarkMode: localStorage.getItem('muninnTheme') !== 'light',
     liveConnected: false,
     appVersion: '',
@@ -296,6 +297,11 @@ document.addEventListener('alpine:init', () => {
 
       // Load initial data (gated on auth check)
       await this.checkAuth();
+
+      // Fetch vault engram counts whenever the vault picker modal opens.
+      this.$watch('vaultModalOpen', (open) => {
+        if (open) this.loadVaultStats();
+      });
     },
 
     // ── Auth ───────────────────────────────────────────────────────────────
@@ -588,6 +594,19 @@ document.addEventListener('alpine:init', () => {
         }
       } catch (_) {
         this.vaults = ['default'];
+      }
+    },
+
+    async loadVaultStats() {
+      try {
+        const data = await this.apiCall('/api/vaults/stats');
+        if (Array.isArray(data)) {
+          const map = {};
+          data.forEach(s => { map[s.name] = s.engram_count; });
+          this.vaultStats = map;
+        }
+      } catch (_) {
+        // Non-critical — swallow silently
       }
     },
 
@@ -1004,10 +1023,10 @@ document.addEventListener('alpine:init', () => {
 
     // ── Create vault ───────────────────────────────────────────────────────
     createVault() {
-      this.newVaultModal = { show: true, name: '', error: '', loading: false };
+      this.newVaultModal = { show: true, name: '', error: '', loading: false, collision: null };
     },
 
-    async submitNewVault() {
+    async submitNewVault(force) {
       const name = this.newVaultModal.name.trim();
       if (!name) return;
       const valid = /^[a-z0-9_-]{1,64}$/.test(name);
@@ -1017,12 +1036,24 @@ document.addEventListener('alpine:init', () => {
       }
       this.newVaultModal.loading = true;
       this.newVaultModal.error = '';
+      this.newVaultModal.collision = null;
       try {
-        const r = await fetch('/api/admin/vaults/config', {
+        const url = force ? '/api/admin/vaults/config?force=true' : '/api/admin/vaults/config';
+        const r = await fetch(url, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ name }),
         });
+        if (r.status === 409) {
+          const data = await r.json().catch(() => null);
+          if (data && data.code === 'VAULT_NAME_COLLISION') {
+            this.newVaultModal.collision = data;
+            this.newVaultModal.loading = false;
+            return;
+          }
+          const text = await r.text().catch(() => r.statusText);
+          throw new Error(r.status + ': ' + text);
+        }
         if (!r.ok) {
           const text = await r.text().catch(() => r.statusText);
           throw new Error(r.status + ': ' + text);
@@ -2206,16 +2237,26 @@ document.addEventListener('alpine:init', () => {
       this.renameVault(newName);
     },
 
-    async renameVault(newName) {
+    async renameVault(newName, force) {
       try {
-        const r = await fetch(
-          '/api/admin/vaults/' + encodeURIComponent(this.vault) + '/rename',
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ new_name: newName }),
+        const url = '/api/admin/vaults/' + encodeURIComponent(this.vault) + '/rename' + (force ? '?force=true' : '');
+        const r = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ new_name: newName }),
+        });
+        if (r.status === 409) {
+          const data = await r.json().catch(() => null);
+          if (data && data.code === 'VAULT_NAME_COLLISION') {
+            const proceed = confirm(
+              'A vault named "' + data.conflict + '" already exists with a similar name.\n\nCreate "' + newName + '" anyway?'
+            );
+            if (proceed) {
+              this.renameVault(newName, true);
+            }
+            return;
           }
-        );
+        }
         if (!r.ok) {
           const err = await r.json().catch(() => null);
           const msg = err && err.error && err.error.message ? err.error.message : 'HTTP ' + r.status;
