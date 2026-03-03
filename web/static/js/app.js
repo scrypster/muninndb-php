@@ -8,6 +8,7 @@ document.addEventListener('alpine:init', () => {
     currentView: 'dashboard',
     vault: localStorage.getItem('muninnVault') || 'default',
     vaults: ['default'],
+    vaultStats: {},
     vaultModalOpen: false,
     vaultPickerSearch: '',
     newVaultModal: { show: false, name: '', error: '', loading: false, collision: null },
@@ -296,6 +297,11 @@ document.addEventListener('alpine:init', () => {
 
       // Load initial data (gated on auth check)
       await this.checkAuth();
+
+      // Fetch vault engram counts whenever the vault picker modal opens.
+      this.$watch('vaultModalOpen', (open) => {
+        if (open) this.loadVaultStats();
+      });
     },
 
     // ── Auth ───────────────────────────────────────────────────────────────
@@ -588,6 +594,19 @@ document.addEventListener('alpine:init', () => {
         }
       } catch (_) {
         this.vaults = ['default'];
+      }
+    },
+
+    async loadVaultStats() {
+      try {
+        const data = await this.apiCall('/api/vaults/stats');
+        if (Array.isArray(data)) {
+          const map = {};
+          data.forEach(s => { map[s.name] = s.engram_count; });
+          this.vaultStats = map;
+        }
+      } catch (_) {
+        // Non-critical — swallow silently
       }
     },
 
