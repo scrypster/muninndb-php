@@ -18,58 +18,58 @@ func allToolDefinitions() []ToolDefinition {
 					"tags":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Optional topic tags."},
 					"confidence": map[string]any{"type": "number", "description": "Confidence score 0.0-1.0 (default 1.0)."},
 					"created_at": map[string]any{"type": "string", "description": "ISO 8601 timestamp for when this memory was created. Defaults to now. Use to seed memories at past or future times."},
-				"type": map[string]any{"type": "string", "description": "Memory type — either a built-in name (fact, decision, observation, preference, issue, task, procedure, event, goal, constraint, identity, reference) or a free-form label (e.g. 'architectural_decision', 'coding_pattern'). Built-in names set the enum; free-form labels are stored as type_label with enum defaulting to 'fact'."},
-				"type_label": map[string]any{"type": "string", "description": "Explicit free-form type label (e.g. 'architectural_decision'). Overrides the label inferred from 'type'."},
-				"summary": map[string]any{"type": "string", "description": "One-line summary of what this memory captures. Providing this skips background summarization."},
-				"entities": map[string]any{
-					"type":        "array",
-					"description": "Entities mentioned in this memory. Providing these skips background entity extraction.",
-					"items": map[string]any{
-						"type": "object",
-						"properties": map[string]any{
-							"name": map[string]any{"type": "string", "description": "Entity name (e.g. 'PostgreSQL', 'Auth Service')."},
-							"type": map[string]any{"type": "string", "description": "Entity type (e.g. 'database', 'service', 'person', 'project')."},
+					"type":       map[string]any{"type": "string", "description": "Memory type — either a built-in name (fact, decision, observation, preference, issue, task, procedure, event, goal, constraint, identity, reference) or a free-form label (e.g. 'architectural_decision', 'coding_pattern'). Built-in names set the enum; free-form labels are stored as type_label with enum defaulting to 'fact'."},
+					"type_label": map[string]any{"type": "string", "description": "Explicit free-form type label (e.g. 'architectural_decision'). Overrides the label inferred from 'type'."},
+					"summary":    map[string]any{"type": "string", "description": "One-line summary of what this memory captures. Providing this skips background summarization."},
+					"entities": map[string]any{
+						"type":        "array",
+						"description": "Entities mentioned in this memory. Providing these skips background entity extraction.",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"name": map[string]any{"type": "string", "description": "Entity name (e.g. 'PostgreSQL', 'Auth Service')."},
+								"type": map[string]any{"type": "string", "description": "Entity type (e.g. 'database', 'service', 'person', 'project')."},
+							},
+							"required": []string{"name", "type"},
 						},
-						"required": []string{"name", "type"},
+					},
+					"relationships": map[string]any{
+						"type":        "array",
+						"description": "Relationships to existing memories. Creates associations at write time.",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"target_id": map[string]any{"type": "string", "description": "ID of the target memory (ULID)."},
+								"relation":  map[string]any{"type": "string", "description": "Relationship type (e.g. 'depends_on', 'supports', 'contradicts')."},
+								"weight":    map[string]any{"type": "number", "description": "Association weight 0.0-1.0 (default 0.9)."},
+							},
+							"required": []string{"target_id", "relation"},
+						},
+					},
+					"entity_relationships": map[string]any{
+						"type":        "array",
+						"description": "Typed semantic relationships between named entities in this memory. Populates the entity knowledge graph directly — no LLM enrichment required. Example: [{\"from_entity\":\"PostgreSQL\",\"to_entity\":\"Redis\",\"rel_type\":\"caches_with\",\"weight\":0.9}]. Common rel_types: uses, depends_on, caches_with, manages, owns, contradicts, supports, extends, implements, belongs_to.",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"from_entity": map[string]any{"type": "string", "description": "Source entity name (must match an entity in 'entities' or already known to the vault)."},
+								"to_entity":   map[string]any{"type": "string", "description": "Target entity name."},
+								"rel_type":    map[string]any{"type": "string", "description": "Relationship type (e.g. uses, depends_on, caches_with, manages, contradicts)."},
+								"weight":      map[string]any{"type": "number", "description": "Confidence 0.0-1.0 (default 0.9)."},
+							},
+							"required": []string{"from_entity", "to_entity", "rel_type"},
+						},
+					},
+					"op_id": map[string]any{
+						"type":        "string",
+						"description": "Optional idempotency key. If set and a receipt exists for this key, the cached engram ID is returned without re-creating.",
 					},
 				},
-				"relationships": map[string]any{
-					"type":        "array",
-					"description": "Relationships to existing memories. Creates associations at write time.",
-					"items": map[string]any{
-						"type": "object",
-						"properties": map[string]any{
-							"target_id": map[string]any{"type": "string", "description": "ID of the target memory (ULID)."},
-							"relation":  map[string]any{"type": "string", "description": "Relationship type (e.g. 'depends_on', 'supports', 'contradicts')."},
-							"weight":    map[string]any{"type": "number", "description": "Association weight 0.0-1.0 (default 0.9)."},
-						},
-						"required": []string{"target_id", "relation"},
-					},
-				},
-				"entity_relationships": map[string]any{
-					"type":        "array",
-					"description": "Typed semantic relationships between named entities in this memory. Populates the entity knowledge graph directly — no LLM enrichment required. Example: [{\"from_entity\":\"PostgreSQL\",\"to_entity\":\"Redis\",\"rel_type\":\"caches_with\",\"weight\":0.9}]. Common rel_types: uses, depends_on, caches_with, manages, owns, contradicts, supports, extends, implements, belongs_to.",
-					"items": map[string]any{
-						"type": "object",
-						"properties": map[string]any{
-							"from_entity": map[string]any{"type": "string", "description": "Source entity name (must match an entity in 'entities' or already known to the vault)."},
-							"to_entity":   map[string]any{"type": "string", "description": "Target entity name."},
-							"rel_type":    map[string]any{"type": "string", "description": "Relationship type (e.g. uses, depends_on, caches_with, manages, contradicts)."},
-							"weight":      map[string]any{"type": "number", "description": "Confidence 0.0-1.0 (default 0.9)."},
-						},
-						"required": []string{"from_entity", "to_entity", "rel_type"},
-					},
-				},
-				"op_id": map[string]any{
-					"type":        "string",
-					"description": "Optional idempotency key. If set and a receipt exists for this key, the cached engram ID is returned without re-creating.",
-				},
+				"required": []string{"content"},
 			},
-			"required": []string{"content"},
 		},
-	},
-	{
-		Name:        "muninn_remember_batch",
+		{
+			Name:        "muninn_remember_batch",
 			Description: "Store multiple memories at once. More efficient than calling muninn_remember repeatedly. Maximum 50 per batch. Best practice: break complex topics into individual atomic memories — one concept, decision, or fact each. This produces sharper embeddings, better associations, and more accurate retrieval.",
 			InputSchema: map[string]any{
 				"type": "object",
@@ -81,54 +81,54 @@ func allToolDefinitions() []ToolDefinition {
 						"items": map[string]any{
 							"type": "object",
 							"properties": map[string]any{
-							"content":    map[string]any{"type": "string", "description": "The information to remember."},
-							"concept":    map[string]any{"type": "string", "description": "Short label for this memory."},
-							"tags":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Optional topic tags."},
-							"confidence": map[string]any{"type": "number", "description": "Confidence score 0.0-1.0 (default 1.0)."},
-							"created_at": map[string]any{"type": "string", "description": "ISO 8601 timestamp. Defaults to now."},
-							"type":       map[string]any{"type": "string", "description": "Memory type — built-in name or free-form label."},
-							"type_label": map[string]any{"type": "string", "description": "Explicit free-form type label."},
-							"summary":    map[string]any{"type": "string", "description": "One-line summary. Skips background summarization."},
-							"entities": map[string]any{
-								"type": "array",
-								"items": map[string]any{
-									"type": "object",
-									"properties": map[string]any{
-										"name": map[string]any{"type": "string"},
-										"type": map[string]any{"type": "string"},
+								"content":    map[string]any{"type": "string", "description": "The information to remember."},
+								"concept":    map[string]any{"type": "string", "description": "Short label for this memory."},
+								"tags":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Optional topic tags."},
+								"confidence": map[string]any{"type": "number", "description": "Confidence score 0.0-1.0 (default 1.0)."},
+								"created_at": map[string]any{"type": "string", "description": "ISO 8601 timestamp. Defaults to now."},
+								"type":       map[string]any{"type": "string", "description": "Memory type — built-in name or free-form label."},
+								"type_label": map[string]any{"type": "string", "description": "Explicit free-form type label."},
+								"summary":    map[string]any{"type": "string", "description": "One-line summary. Skips background summarization."},
+								"entities": map[string]any{
+									"type": "array",
+									"items": map[string]any{
+										"type": "object",
+										"properties": map[string]any{
+											"name": map[string]any{"type": "string"},
+											"type": map[string]any{"type": "string"},
+										},
+										"required": []string{"name", "type"},
 									},
-									"required": []string{"name", "type"},
+									"description": "Entities mentioned in this memory.",
 								},
-								"description": "Entities mentioned in this memory.",
-							},
-							"relationships": map[string]any{
-								"type": "array",
-								"items": map[string]any{
-									"type": "object",
-									"properties": map[string]any{
-										"target_id": map[string]any{"type": "string"},
-										"relation":  map[string]any{"type": "string"},
-										"weight":    map[string]any{"type": "number"},
+								"relationships": map[string]any{
+									"type": "array",
+									"items": map[string]any{
+										"type": "object",
+										"properties": map[string]any{
+											"target_id": map[string]any{"type": "string"},
+											"relation":  map[string]any{"type": "string"},
+											"weight":    map[string]any{"type": "number"},
+										},
+										"required": []string{"target_id", "relation"},
 									},
-									"required": []string{"target_id", "relation"},
+									"description": "Relationships to existing memories.",
 								},
-								"description": "Relationships to existing memories.",
-							},
-							"entity_relationships": map[string]any{
-								"type": "array",
-								"items": map[string]any{
-									"type": "object",
-									"properties": map[string]any{
-										"from_entity": map[string]any{"type": "string"},
-										"to_entity":   map[string]any{"type": "string"},
-										"rel_type":    map[string]any{"type": "string"},
-										"weight":      map[string]any{"type": "number"},
+								"entity_relationships": map[string]any{
+									"type": "array",
+									"items": map[string]any{
+										"type": "object",
+										"properties": map[string]any{
+											"from_entity": map[string]any{"type": "string"},
+											"to_entity":   map[string]any{"type": "string"},
+											"rel_type":    map[string]any{"type": "string"},
+											"weight":      map[string]any{"type": "number"},
+										},
+										"required": []string{"from_entity", "to_entity", "rel_type"},
 									},
-									"required": []string{"from_entity", "to_entity", "rel_type"},
+									"description": "Typed entity-to-entity relationships for this memory.",
 								},
-								"description": "Typed entity-to-entity relationships for this memory.",
 							},
-						},
 							"required": []string{"content"},
 						},
 					},
@@ -432,11 +432,57 @@ func allToolDefinitions() []ToolDefinition {
 						"type":        "object",
 						"description": "The root node of the tree. Each node may have a 'children' array for nesting.",
 						"properties": map[string]any{
-							"concept":  map[string]any{"type": "string", "description": "Short label for this node."},
-							"content":  map[string]any{"type": "string", "description": "Content for this node."},
-							"type":     map[string]any{"type": "string", "description": "Memory type (goal, task, etc.)."},
-							"tags":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-							"children": map[string]any{"type": "array", "description": "Child nodes (same schema, recursive)."},
+							"concept": map[string]any{"type": "string", "description": "Short label for this node."},
+							"content": map[string]any{"type": "string", "description": "Content for this node."},
+							"type":    map[string]any{"type": "string", "description": "Memory type (goal, task, etc.)."},
+							"tags":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+							"children": map[string]any{
+								"type":        "array",
+								"description": "Child nodes (same schema, recursive).",
+								"items": map[string]any{
+									"type": "object",
+									"properties": map[string]any{
+										"concept": map[string]any{"type": "string", "description": "Short label for this node."},
+										"content": map[string]any{"type": "string", "description": "Content for this node."},
+										"type":    map[string]any{"type": "string", "description": "Memory type (goal, task, etc.)."},
+										"tags":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+										"children": map[string]any{
+											"type":        "array",
+											"description": "Child nodes (recursive).",
+											"items": map[string]any{
+												"type":        "object",
+												"description": "Nested child node.",
+												"properties": map[string]any{
+													"concept": map[string]any{"type": "string", "description": "Short label."},
+													"content": map[string]any{"type": "string", "description": "Content."},
+													"type":    map[string]any{"type": "string", "description": "Memory type."},
+													"tags":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+													"children": map[string]any{
+														"type":        "array",
+														"description": "Further nested children.",
+														"items": map[string]any{
+															"type":        "object",
+															"description": "Deeply nested child node.",
+															"properties": map[string]any{
+																"concept": map[string]any{"type": "string"},
+																"content": map[string]any{"type": "string"},
+																"type":    map[string]any{"type": "string"},
+																"tags":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+																"children": map[string]any{
+																	"type":        "array",
+																	"description": "Deeper nesting - allows arbitrary depth.",
+																	"items":       map[string]any{},
+																},
+															},
+														},
+													},
+												},
+											},
+										},
+									},
+									"required": []string{"concept", "content"},
+								},
+							},
 						},
 						"required": []string{"concept", "content"},
 					},
@@ -480,8 +526,8 @@ func allToolDefinitions() []ToolDefinition {
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"vault":  vaultProp,
-					"format": map[string]any{"type": "string", "enum": []string{"json-ld", "graphml"}, "description": "Output format: 'json-ld' (default) or 'graphml'."},
+					"vault":           vaultProp,
+					"format":          map[string]any{"type": "string", "enum": []string{"json-ld", "graphml"}, "description": "Output format: 'json-ld' (default) or 'graphml'."},
 					"include_engrams": map[string]any{"type": "boolean", "description": "When true, entity types are enriched from the entity record table (default false)."},
 				},
 				"required": []string{},
@@ -584,48 +630,46 @@ func allToolDefinitions() []ToolDefinition {
 				"required": []string{"entity_name"},
 			},
 		},
-	// SGD learning loop feedback
-	{
-		Name:        "muninn_feedback",
-		Description: "Record explicit feedback on an engram. Use useful=false when a retrieved engram was not helpful. Updates the vault's learned scoring weights via SGD.",
-		InputSchema: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"vault":     vaultProp,
-				"engram_id": map[string]any{"type": "string", "description": "Engram ID that was retrieved"},
-				"useful":    map[string]any{"type": "boolean", "description": "Whether the engram was helpful (default false = negative signal)"},
+		// SGD learning loop feedback
+		{
+			Name:        "muninn_feedback",
+			Description: "Record explicit feedback on an engram. Use useful=false when a retrieved engram was not helpful. Updates the vault's learned scoring weights via SGD.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"vault":     vaultProp,
+					"engram_id": map[string]any{"type": "string", "description": "Engram ID that was retrieved"},
+					"useful":    map[string]any{"type": "boolean", "description": "Whether the engram was helpful (default false = negative signal)"},
+				},
+				"required": []string{"engram_id"},
 			},
-			"required": []string{"engram_id"},
 		},
-	},
-	// Entity aggregate view
-	{
-		Name:        "muninn_entity",
-		Description: "Returns the full aggregate view for a named entity: metadata, engrams mentioning it, relationships, and co-occurring entities.",
-		InputSchema: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"vault": vaultProp,
-				"name":  map[string]any{"type": "string", "description": "Entity name (case-insensitive)"},
-				"limit": map[string]any{"type": "integer", "description": "Max engrams to include (default 20)"},
+		// Entity aggregate view
+		{
+			Name:        "muninn_entity",
+			Description: "Returns the full aggregate view for a named entity: metadata, engrams mentioning it, relationships, and co-occurring entities.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"vault": vaultProp,
+					"name":  map[string]any{"type": "string", "description": "Entity name (case-insensitive)"},
+					"limit": map[string]any{"type": "integer", "description": "Max engrams to include (default 20)"},
+				},
+				"required": []string{"name"},
 			},
-			"required": []string{"name"},
 		},
-	},
-	{
-		Name:        "muninn_entities",
-		Description: "Lists all known entities in a vault, sorted by mention count. Optionally filter by state (active, deprecated, merged, resolved).",
-		InputSchema: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"vault": vaultProp,
-				"limit": map[string]any{"type": "integer", "description": "Max results (default 50)"},
-				"state": map[string]any{"type": "string", "description": "Filter by state: active, deprecated, merged, resolved"},
+		{
+			Name:        "muninn_entities",
+			Description: "Lists all known entities in a vault, sorted by mention count. Optionally filter by state (active, deprecated, merged, resolved).",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"vault": vaultProp,
+					"limit": map[string]any{"type": "integer", "description": "Max results (default 50)"},
+					"state": map[string]any{"type": "string", "description": "Filter by state: active, deprecated, merged, resolved"},
+				},
+				"required": []string{},
 			},
-			"required": []string{},
 		},
-	},
 	}
 }
-
-

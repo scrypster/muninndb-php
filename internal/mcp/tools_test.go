@@ -331,6 +331,66 @@ func TestMuninnRememberBatchTool_HasEnrichmentFields(t *testing.T) {
 	}
 }
 
+// TestMuninnRememberTree_ChildrenHasItemsWithProperties verifies that the
+// children array in muninn_remember_tree has an items key with a properties map,
+// ensuring the JSON schema is valid and doesn't trigger "array schema missing items" errors.
+func TestMuninnRememberTree_ChildrenHasItemsWithProperties(t *testing.T) {
+	tools := allToolDefinitions()
+	var treeTool *ToolDefinition
+	for i := range tools {
+		if tools[i].Name == "muninn_remember_tree" {
+			treeTool = &tools[i]
+			break
+		}
+	}
+	if treeTool == nil {
+		t.Fatal("muninn_remember_tree not found")
+	}
+
+	schema := treeTool.InputSchema.(map[string]any)
+	props := schema["properties"].(map[string]any)
+	root := props["root"].(map[string]any)
+	rootProps := root["properties"].(map[string]any)
+	children := rootProps["children"].(map[string]any)
+
+	// Verify children is an array type
+	if children["type"] != "array" {
+		t.Fatal("children property must be type array")
+	}
+
+	// Verify children has items key
+	items, ok := children["items"].(map[string]any)
+	if !ok {
+		t.Fatal("children array missing 'items' key or items is not a map")
+	}
+
+	// Verify items has a properties map
+	itemProps, ok := items["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("children.items missing 'properties' map")
+	}
+
+	// Verify the expected properties exist on items
+	for _, field := range []string{"concept", "content", "children"} {
+		if _, ok := itemProps[field]; !ok {
+			t.Errorf("children.items.properties missing field %q", field)
+		}
+	}
+
+	// Verify nested children also has items with properties (recursive schema)
+	nestedChildren, ok := itemProps["children"].(map[string]any)
+	if !ok {
+		t.Fatal("children.items.properties.children is not a map")
+	}
+	nestedItems, ok := nestedChildren["items"].(map[string]any)
+	if !ok {
+		t.Fatal("nested children array missing 'items' key")
+	}
+	if _, ok := nestedItems["properties"].(map[string]any); !ok {
+		t.Fatal("nested children.items missing 'properties' map")
+	}
+}
+
 func TestMuninnRecallTool_ProfileHasAllFiveOptions(t *testing.T) {
 	tools := allToolDefinitions()
 	for _, tool := range tools {
