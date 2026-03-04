@@ -35,7 +35,7 @@ try {
 }
 
 $version = $release.tag_name -replace '^v', ''
-$assetName = "muninn_${version}_windows_${arch}.zip"
+$assetName = "muninn_$($release.tag_name)_windows_${arch}.zip"
 $asset = $release.assets | Where-Object { $_.name -eq $assetName }
 
 if (-not $asset) {
