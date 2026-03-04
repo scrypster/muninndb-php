@@ -105,7 +105,8 @@ type Association struct {
 	Weight        float32 // 0.0-1.0, Hebbian-adjustable
 	Confidence    float32 // 0.0-1.0
 	CreatedAt     time.Time
-	LastActivated int32 // Unix seconds (not nanoseconds; int32 is sufficient)
+	LastActivated int32   // Unix seconds (not nanoseconds; int32 is sufficient)
+	PeakWeight    float32 // historical max Weight; 0 = untracked (legacy pre-upgrade)
 }
 
 // LifecycleState is the engram state machine (uint8 on disk).

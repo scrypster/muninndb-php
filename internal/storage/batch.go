@@ -108,7 +108,12 @@ func (b *pebbleStoreBatch) WriteEngram(ctx context.Context, wsPrefix [8]byte, en
 
 	// 0x03/0x04/weight-index: association keys
 	for _, assoc := range eng.Associations {
-		av := encodeAssocValue(assoc.RelType, assoc.Confidence, assoc.CreatedAt, assoc.LastActivated)
+		// Seed PeakWeight from Weight if not set (legacy or newly created associations).
+		peak := assoc.PeakWeight
+		if peak == 0 {
+			peak = assoc.Weight
+		}
+		av := encodeAssocValue(assoc.RelType, assoc.Confidence, assoc.CreatedAt, assoc.LastActivated, peak)
 		b.batch.Set(keys.AssocFwdKey(wsPrefix, id16, assoc.Weight, [16]byte(assoc.TargetID)), av[:], nil)
 		b.batch.Set(keys.AssocRevKey(wsPrefix, [16]byte(assoc.TargetID), assoc.Weight, id16), av[:], nil)
 		var wiBuf [4]byte
@@ -143,7 +148,12 @@ func (b *pebbleStoreBatch) WriteAssociation(ctx context.Context, ws [8]byte, src
 	if b.committed {
 		return fmt.Errorf("batch already committed")
 	}
-	av := encodeAssocValue(assoc.RelType, assoc.Confidence, assoc.CreatedAt, assoc.LastActivated)
+	// Seed PeakWeight from Weight if not set (new association initial write).
+	peak := assoc.PeakWeight
+	if peak == 0 {
+		peak = assoc.Weight
+	}
+	av := encodeAssocValue(assoc.RelType, assoc.Confidence, assoc.CreatedAt, assoc.LastActivated, peak)
 	b.batch.Set(keys.AssocFwdKey(ws, [16]byte(src), assoc.Weight, [16]byte(dst)), av[:], nil)
 	b.batch.Set(keys.AssocRevKey(ws, [16]byte(dst), assoc.Weight, [16]byte(src)), av[:], nil)
 	var weightBuf [4]byte
