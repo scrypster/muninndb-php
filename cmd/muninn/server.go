@@ -443,6 +443,11 @@ func runServer() {
 	mcpAddr := flag.String("mcp-addr", defaultMCPAddr, "MCP JSON-RPC listen address")
 	grpcAddr := flag.String("grpc-addr", "127.0.0.1:8477", "gRPC listen address")
 	metricsAddr := flag.String("metrics-addr", "", "Prometheus /metrics listen address (empty = disabled)")
+	uiAddrDefault := "127.0.0.1:8476"
+	if v := os.Getenv("MUNINN_UI_ADDR"); v != "" {
+		uiAddrDefault = v
+	}
+	uiAddr := flag.String("ui-addr", uiAddrDefault, "Web UI HTTP listen address")
 	mcpToken := flag.String("mcp-token", "", "Bearer token for MCP auth (empty = no auth)")
 	dev := flag.Bool("dev", false, "serve web assets from ./web directory (development mode)")
 	backupInterval := flag.String("backup-interval", "", "Automated backup interval (e.g. 6h, 30m); empty = disabled")
@@ -530,7 +535,7 @@ func runServer() {
 
 	// Validate address flags early so misconfigurations are caught before any
 	// resources are allocated. metricsAddr is optional (empty = disabled).
-	addrsToValidate := []string{*mbpAddr, *restAddr, *mcpAddr, *grpcAddr}
+	addrsToValidate := []string{*mbpAddr, *restAddr, *mcpAddr, *grpcAddr, *uiAddr}
 	if *metricsAddr != "" {
 		addrsToValidate = append(addrsToValidate, *metricsAddr)
 	}
@@ -967,7 +972,7 @@ func runServer() {
 	}()
 
 	// Start UI server
-	uiSrv, err := ui.NewServer(webFS, restWrapper, restServer.Handler(), authStore, sessionSecret, ring, clientTLS)
+	uiSrv, err := ui.NewServer(webFS, restWrapper, restServer.Handler(), authStore, sessionSecret, ring, clientTLS, corsOrigins)
 	if err != nil {
 		slog.Error("create ui server", "err", err)
 		os.Exit(1)
@@ -983,11 +988,11 @@ func runServer() {
 		})
 		uiSrv.Broadcast(data)
 	})
-	if err := uiSrv.Start(ctx, "127.0.0.1:8476"); err != nil {
+	if err := uiSrv.Start(ctx, *uiAddr); err != nil {
 		slog.Error("start ui server", "err", err)
 		os.Exit(1)
 	}
-	slog.Info("UI server listening", "addr", "127.0.0.1:8476")
+	slog.Info("UI server listening", "addr", *uiAddr)
 
 	slog.Info("vault fail-closed: unconfigured vaults require an API key; use muninn api-key create to grant access")
 
