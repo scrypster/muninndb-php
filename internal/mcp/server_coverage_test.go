@@ -63,12 +63,12 @@ func TestHandleRPC_ToolsList(t *testing.T) {
 }
 
 func TestHandleRPC_Notifications(t *testing.T) {
-	// notifications/ prefix should return 200 with no body error.
+	// MCP Streamable HTTP: notifications/ must return 202 Accepted with no body.
 	srv := newTestServer()
 	body := `{"jsonrpc":"2.0","method":"notifications/initialized","id":1}`
 	w := postRPC(t, srv, body)
-	if w.Code != http.StatusOK {
-		t.Errorf("notifications should return 200, got %d", w.Code)
+	if w.Code != http.StatusAccepted {
+		t.Errorf("notifications should return 202, got %d", w.Code)
 	}
 }
 

@@ -159,7 +159,9 @@ func (s *MCPServer) handleRPC(w http.ResponseWriter, r *http.Request) {
 	case req.Method == "initialize":
 		s.handleInitialize(w, &req)
 	case strings.HasPrefix(req.Method, "notifications/"):
-		w.WriteHeader(http.StatusOK)
+		// MCP Streamable HTTP spec: notifications are fire-and-forget; respond
+		// with 202 Accepted and no body.  200 OK breaks strict clients (e.g. Codex).
+		w.WriteHeader(http.StatusAccepted)
 	case req.Method == "ping":
 		sendResult(w, req.ID, map[string]any{})
 	case req.Method == "tools/list":
