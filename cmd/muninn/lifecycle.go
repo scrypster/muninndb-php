@@ -83,7 +83,7 @@ func runStart(webEnabled bool) {
 	}
 
 	// Wait for health check (up to 5s)
-	mcpHealthURL := "http://" + defaultMCPAddr + "/mcp/health"
+	mcpHealthURL := "http://127.0.0.1:" + defaultMCPPort + "/mcp/health"
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		time.Sleep(200 * time.Millisecond)

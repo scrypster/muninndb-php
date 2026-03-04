@@ -48,7 +48,7 @@ import (
 	webui "github.com/scrypster/muninndb/web"
 )
 
-const defaultMCPAddr = "127.0.0.1:8750"
+const defaultMCPPort = "8750"
 
 const vaultUpgradeWarning = `
 ================================================================
@@ -432,18 +432,48 @@ func validateServerFlags(addrs ...string) error {
 	return nil
 }
 
+// parseListenHost extracts the --listen-host value from args, falling back to
+// envVal and then "127.0.0.1". It is a pure function so it can be tested
+// without parsing the real flag set.
+func parseListenHost(args []string, envVal string) string {
+	host := "127.0.0.1"
+	if envVal != "" {
+		host = envVal
+	}
+	for i, arg := range args {
+		if (arg == "--listen-host" || arg == "-listen-host") && i+1 < len(args) {
+			host = args[i+1]
+			break
+		}
+		if after, ok := strings.CutPrefix(arg, "--listen-host="); ok {
+			host = after
+			break
+		}
+		if after, ok := strings.CutPrefix(arg, "-listen-host="); ok {
+			host = after
+			break
+		}
+	}
+	return host
+}
+
 func runServer() {
 	// Apply memory limits before any significant allocations.
 	applyMemoryLimits()
 
+	// Pre-scan os.Args for --listen-host so we can use it as the default host
+	// for all --*-addr flags. Explicit --*-addr flags will still override it.
+	listenHost := parseListenHost(os.Args[1:], os.Getenv("MUNINN_LISTEN_HOST"))
+
 	// Flags
 	dataDir := flag.String("data", "./muninn-data", "data directory")
-	mbpAddr := flag.String("mbp-addr", "127.0.0.1:8474", "MBP TCP listen address")
-	restAddr := flag.String("rest-addr", "127.0.0.1:8475", "REST HTTP listen address")
-	mcpAddr := flag.String("mcp-addr", defaultMCPAddr, "MCP JSON-RPC listen address")
-	grpcAddr := flag.String("grpc-addr", "127.0.0.1:8477", "gRPC listen address")
+	_ = flag.String("listen-host", listenHost, `host to bind all servers to (default "127.0.0.1"; use 0.0.0.0 for LAN/remote access)`)
+	mbpAddr := flag.String("mbp-addr", listenHost+":8474", "MBP TCP listen address")
+	restAddr := flag.String("rest-addr", listenHost+":8475", "REST HTTP listen address")
+	mcpAddr := flag.String("mcp-addr", listenHost+":"+defaultMCPPort, "MCP JSON-RPC listen address")
+	grpcAddr := flag.String("grpc-addr", listenHost+":8477", "gRPC listen address")
 	metricsAddr := flag.String("metrics-addr", "", "Prometheus /metrics listen address (empty = disabled)")
-	uiAddrDefault := "127.0.0.1:8476"
+	uiAddrDefault := listenHost + ":8476"
 	if v := os.Getenv("MUNINN_UI_ADDR"); v != "" {
 		uiAddrDefault = v
 	}
@@ -455,6 +485,8 @@ func runServer() {
 	backupRetain := flag.Int("backup-retain", 5, "Number of automated backups to keep")
 	tlsCert := flag.String("tls-cert", "", "Path to TLS certificate file (PEM)")
 	tlsKey  := flag.String("tls-key",  "", "Path to TLS private key file (PEM)")
+	corsOriginsDefault := os.Getenv("MUNINN_CORS_ORIGINS")
+	corsOriginsFlag := flag.String("cors-origins", corsOriginsDefault, "Comma-separated allowed CORS origins for browser clients (e.g. http://myapp.local:3000); overrides MUNINN_CORS_ORIGINS")
 	var logLevelStr string
 	flag.StringVar(&logLevelStr, "log-level", "info", "Log level: debug, info, warn, error")
 	flag.Usage = func() {
@@ -811,7 +843,7 @@ func runServer() {
 
 	// Build transport servers
 	mbpServer := mbp.NewServer(*mbpAddr, eng, authStore, clientTLS)
-	corsOrigins := parseCORSOrigins(os.Getenv("MUNINN_CORS_ORIGINS"))
+	corsOrigins := parseCORSOrigins(*corsOriginsFlag)
 	restServer := rest.NewServer(*restAddr, restWrapper, authStore, sessionSecret, corsOrigins, embedInfo, pluginRegistry, *dataDir, clientTLS, rest.MCPInfo{
 		Addr:     *mcpAddr,
 		HasToken: *mcpToken != "",

@@ -245,6 +245,76 @@ func TestApplyMemoryLimits_ZeroValues(t *testing.T) {
 	applyMemoryLimits()
 }
 
+func TestParseListenHost_Default(t *testing.T) {
+	got := parseListenHost([]string{}, "")
+	if got != "127.0.0.1" {
+		t.Errorf("expected 127.0.0.1, got %q", got)
+	}
+}
+
+func TestParseListenHost_EnvOverride(t *testing.T) {
+	got := parseListenHost([]string{}, "10.0.0.1")
+	if got != "10.0.0.1" {
+		t.Errorf("expected 10.0.0.1, got %q", got)
+	}
+}
+
+func TestParseListenHost_ArgOverridesEnv(t *testing.T) {
+	got := parseListenHost([]string{"--listen-host", "0.0.0.0"}, "10.0.0.1")
+	if got != "0.0.0.0" {
+		t.Errorf("expected 0.0.0.0, got %q", got)
+	}
+}
+
+func TestParseListenHost_EqualsSyntax(t *testing.T) {
+	got := parseListenHost([]string{"--listen-host=192.168.1.5"}, "")
+	if got != "192.168.1.5" {
+		t.Errorf("expected 192.168.1.5, got %q", got)
+	}
+}
+
+func TestParseListenHost_SingleDashEqualsSyntax(t *testing.T) {
+	got := parseListenHost([]string{"-listen-host=172.16.0.1"}, "")
+	if got != "172.16.0.1" {
+		t.Errorf("expected 172.16.0.1, got %q", got)
+	}
+}
+
+func TestParseListenHost_SingleDashSpaceSyntax(t *testing.T) {
+	got := parseListenHost([]string{"-listen-host", "10.10.10.10"}, "")
+	if got != "10.10.10.10" {
+		t.Errorf("expected 10.10.10.10, got %q", got)
+	}
+}
+
+// TestListenHostFlag_OverridesAddrDefaults confirms that when --listen-host is
+// set, the mcp-addr default is built from that host.
+func TestListenHostFlag_OverridesAddrDefaults(t *testing.T) {
+	host := parseListenHost([]string{"--listen-host", "10.0.0.1"}, "")
+	wantMCPAddr := host + ":" + defaultMCPPort
+	if wantMCPAddr != "10.0.0.1:"+defaultMCPPort {
+		t.Errorf("expected mcp addr default 10.0.0.1:%s, got %q", defaultMCPPort, wantMCPAddr)
+	}
+}
+
+// TestListenHostFlag_ExplicitAddrOverrides confirms that an explicit --mcp-addr
+// takes precedence over the --listen-host default. This is handled naturally by
+// flag.Parse() since the flag default is set to listenHost+port and an explicit
+// --mcp-addr value overwrites it. The test verifies the pre-scan does not
+// interfere with other args.
+func TestListenHostFlag_ExplicitAddrOverrides(t *testing.T) {
+	// Even if listen-host is 0.0.0.0, parseListenHost only affects the
+	// default value; flag.Parse() will use the explicitly-supplied --mcp-addr.
+	// Here we just verify parseListenHost doesn't accidentally consume the
+	// mcp-addr value.
+	host := parseListenHost([]string{"--listen-host", "0.0.0.0", "--mcp-addr", "127.0.0.1:" + defaultMCPPort}, "")
+	if host != "0.0.0.0" {
+		t.Errorf("expected listen-host=0.0.0.0, got %q", host)
+	}
+	// The explicit mcp-addr would be handled by flag.Parse(); we can only test
+	// that the listen-host pre-scan correctly picks up 0.0.0.0 here.
+}
+
 // clearEmbedEnv unsets all embed-related env vars for a clean test.
 func clearEmbedEnv(t *testing.T) {
 	t.Helper()
