@@ -1643,6 +1643,7 @@ func (e *Engine) activateCore(ctx context.Context, req *mbp.ActivateRequest, str
 
 	// Forward collected Lobe side effects to the Cortex asynchronously.
 	// Only fires when workers are nil (Lobe mode) and coordinator is wired.
+	// TODO(archiving): forward ArchivedEdges/RestoredEdges via CognitiveForwarder when archive/restore writes are lifted to the engine layer
 	if e.coordinator != nil && len(lobeCoActivations) > 0 {
 		effect := mbp.CognitiveSideEffect{
 			QueryID:       e.fastQueryID(),
