@@ -151,3 +151,34 @@ func (ps *PebbleStore) RestoreArchivedEdges(ctx context.Context, ws [8]byte, src
 
 	return restoredDsts, nil
 }
+
+// RestoreArchivedEdgesTransitive restores archived edges for src (top-N),
+// then for each directly restored neighbor, restores their top-M archived edges
+// (depth-2 lazy transitive restore).
+func (ps *PebbleStore) RestoreArchivedEdgesTransitive(ctx context.Context, wsPrefix [8]byte, src ULID, maxDirect int, maxTransitive int) ([]ULID, error) {
+	directRestored, err := ps.RestoreArchivedEdges(ctx, wsPrefix, src, maxDirect)
+	if err != nil {
+		return nil, err
+	}
+
+	var allRestored []ULID
+	for _, dst := range directRestored {
+		allRestored = append(allRestored, ULID(dst))
+	}
+
+	// Depth-2: for each directly restored neighbor, restore their top-M.
+	for _, neighbor := range directRestored {
+		if !ps.archiveBloom.MayContain(neighbor) {
+			continue
+		}
+		transitiveRestored, err := ps.RestoreArchivedEdges(ctx, wsPrefix, neighbor, maxTransitive)
+		if err != nil {
+			continue // best-effort for transitive restore
+		}
+		for _, dst := range transitiveRestored {
+			allRestored = append(allRestored, ULID(dst))
+		}
+	}
+
+	return allRestored, nil
+}

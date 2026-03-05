@@ -61,3 +61,46 @@ func TestRestoreArchivedEdges_RestoresTopN(t *testing.T) {
 		t.Error("archive key should be deleted after restore")
 	}
 }
+
+func TestRestoreArchivedEdges_Transitive(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	ws := store.VaultPrefix("restore-transitive")
+
+	src := NewULID()
+	neighbor := NewULID()
+	deepNeighbor := NewULID()
+
+	now := time.Now()
+	lastAct := int32(now.Add(-24 * time.Hour).Unix())
+
+	// Archive src -> neighbor
+	arc1 := encodeArchiveValue(RelSupports, 0.9, now.Add(-72*time.Hour), lastAct, 0.9, 10, 0)
+	store.db.Set(keys.ArchiveAssocKey(ws, [16]byte(src), [16]byte(neighbor)), arc1[:], nil)
+
+	// Archive neighbor -> deepNeighbor
+	arc2 := encodeArchiveValue(RelRelatesTo, 0.7, now.Add(-72*time.Hour), lastAct, 0.7, 5, 0)
+	store.db.Set(keys.ArchiveAssocKey(ws, [16]byte(neighbor), [16]byte(deepNeighbor)), arc2[:], nil)
+
+	store.archiveBloom.Add(src)
+	store.archiveBloom.Add(neighbor)
+
+	restored, err := store.RestoreArchivedEdgesTransitive(ctx, ws, src, 10, 5)
+	if err != nil {
+		t.Fatalf("RestoreArchivedEdgesTransitive: %v", err)
+	}
+
+	// src->neighbor should be restored.
+	w1, _ := store.GetAssocWeight(ctx, ws, src, neighbor)
+	if w1 == 0 {
+		t.Error("src->neighbor should be restored")
+	}
+
+	// neighbor->deepNeighbor should also be restored (transitive).
+	w2, _ := store.GetAssocWeight(ctx, ws, neighbor, deepNeighbor)
+	if w2 == 0 {
+		t.Error("neighbor->deepNeighbor should be restored (transitive)")
+	}
+
+	_ = restored
+}
