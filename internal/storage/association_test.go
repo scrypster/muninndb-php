@@ -331,6 +331,53 @@ func TestGetChildrenByParent_IsPartOf(t *testing.T) {
 	}
 }
 
+func TestEncodeArchiveValue_RoundTrip(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	relType := RelSupports
+	confidence := float32(0.85)
+	createdAt := now.Add(-24 * time.Hour)
+	lastActivated := int32(now.Unix())
+	peakWeight := float32(0.92)
+	coActivationCount := uint32(42)
+	restoredAt := int32(now.Unix())
+
+	val := encodeArchiveValue(relType, confidence, createdAt, lastActivated, peakWeight, coActivationCount, restoredAt)
+	if len(val) != 30 {
+		t.Fatalf("expected 30 bytes, got %d", len(val))
+	}
+
+	gotRelType, gotConf, gotCreated, gotLastAct, gotPeak, gotCoAct, gotRestored := decodeAssocValue(val[:])
+	if gotRelType != relType {
+		t.Errorf("relType: got %v, want %v", gotRelType, relType)
+	}
+	if gotConf < 0.84 || gotConf > 0.86 {
+		t.Errorf("confidence: got %v, want ~0.85", gotConf)
+	}
+	if gotCreated.Unix() != createdAt.Unix() {
+		t.Errorf("createdAt: got %v, want %v", gotCreated, createdAt)
+	}
+	if gotLastAct != lastActivated {
+		t.Errorf("lastActivated: got %v, want %v", gotLastAct, lastActivated)
+	}
+	if gotPeak < 0.91 || gotPeak > 0.93 {
+		t.Errorf("peakWeight: got %v, want ~0.92", gotPeak)
+	}
+	if gotCoAct != coActivationCount {
+		t.Errorf("coActivationCount: got %v, want %v", gotCoAct, coActivationCount)
+	}
+	if gotRestored != restoredAt {
+		t.Errorf("restoredAt: got %v, want %v", gotRestored, restoredAt)
+	}
+}
+
+func TestDecodeAssocValue_26Bytes_RestoredAtZero(t *testing.T) {
+	val := encodeAssocValue(RelSupports, 0.9, time.Now(), 100, 0.8, 5)
+	_, _, _, _, _, _, restoredAt := decodeAssocValue(val[:])
+	if restoredAt != 0 {
+		t.Errorf("restoredAt from 26-byte value: got %v, want 0", restoredAt)
+	}
+}
+
 // newTestStore creates a PebbleStore backed by a temp dir.
 // openTestPebble already registers Cleanup for the DB; we just wrap it in a store.
 func newTestStore(t *testing.T) *PebbleStore {
