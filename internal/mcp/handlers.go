@@ -115,6 +115,7 @@ func (s *MCPServer) handleRememberBatch(ctx context.Context, w http.ResponseWrit
 	}
 
 	reqs := make([]*mbp.WriteRequest, 0, len(memoriesAny))
+	malformedCounts := make([]int, 0, len(memoriesAny))
 	for i, mAny := range memoriesAny {
 		m, ok := mAny.(map[string]any)
 		if !ok {
@@ -160,8 +161,9 @@ func (s *MCPServer) handleRememberBatch(ctx context.Context, w http.ResponseWrit
 			req.CreatedAt = &t
 		}
 		applyTypeArgs(m, req)
-		_ = applyEnrichmentArgs(m, req)
+		malformed := applyEnrichmentArgs(m, req)
 		reqs = append(reqs, req)
+		malformedCounts = append(malformedCounts, malformed)
 	}
 
 	responses, errs := s.engine.WriteBatch(ctx, reqs)
@@ -171,6 +173,7 @@ func (s *MCPServer) handleRememberBatch(ctx context.Context, w http.ResponseWrit
 		ID     string `json:"id,omitempty"`
 		Status string `json:"status"`
 		Error  string `json:"error,omitempty"`
+		Hint   string `json:"hint,omitempty"`
 	}
 	results := make([]batchItemResult, len(reqs))
 	for i := range reqs {
@@ -178,6 +181,9 @@ func (s *MCPServer) handleRememberBatch(ctx context.Context, w http.ResponseWrit
 			results[i] = batchItemResult{Index: i, Status: "error", Error: errs[i].Error()}
 		} else {
 			results[i] = batchItemResult{Index: i, ID: responses[i].ID, Status: "ok"}
+		}
+		if malformedCounts[i] > 0 {
+			results[i].Hint = fmt.Sprintf("%d entity item(s) were malformed (expected {\"name\":\"...\",\"type\":\"...\"} objects) and were skipped.", malformedCounts[i])
 		}
 	}
 	sendResult(w, id, textContent(mustJSON(map[string]any{
