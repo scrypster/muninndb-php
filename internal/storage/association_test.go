@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/scrypster/muninndb/internal/storage/keys"
 )
 
 // ---------------------------------------------------------------------------
@@ -525,7 +527,7 @@ func TestDecayAssocWeightsReducesBelowThreshold(t *testing.T) {
 
 	// Decay by 50% with minWeight=0.3.
 	// Dynamic floor: edges below minWeight are clamped, NOT deleted — removed=0.
-	removed, err := store.DecayAssocWeights(ctx, ws, 0.5, 0.3)
+	removed, err := store.DecayAssocWeights(ctx, ws, 0.5, 0.3, 0.0)
 	if err != nil {
 		t.Fatalf("DecayAssocWeights: %v", err)
 	}
@@ -651,5 +653,52 @@ func TestGetAssociations_ReturnsCopy(t *testing.T) {
 	}
 	if !seen[dst1] || !seen[dst2] {
 		t.Error("original associations missing in fresh call")
+	}
+}
+
+// TestDecayAssocWeights_ArchivesStrongEdge verifies that an edge whose
+// consolidation score exceeds archiveThreshold is moved to the 0x25 archive
+// namespace instead of being clamped to the dynamic floor.
+func TestDecayAssocWeights_ArchivesStrongEdge(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	ws := store.VaultPrefix("decay-archive")
+
+	src := NewULID()
+	dst := NewULID()
+
+	// Write edge: weight=0.8, will get peakWeight=0.8, coActivationCount=1 seeded.
+	// consolidation score = peakWeight(0.8) * coActivationCount(1) / max(daysSince,1)
+	// Set lastActivated to 2 days ago so daysSince=2: score = 0.8*1/2 = 0.4 > 0.05 => archive.
+	if err := store.WriteAssociation(ctx, ws, src, dst, &Association{
+		TargetID:      dst,
+		Weight:        0.8,
+		RelType:       RelSupports,
+		LastActivated: int32(time.Now().Add(-48 * time.Hour).Unix()),
+	}); err != nil {
+		t.Fatalf("WriteAssociation: %v", err)
+	}
+
+	// Decay aggressively to force below minWeight, archiveThreshold=0.05.
+	_, err := store.DecayAssocWeights(ctx, ws, 0.01, 0.3, 0.05)
+	if err != nil {
+		t.Fatalf("DecayAssocWeights: %v", err)
+	}
+
+	// Edge should be gone from live weight index.
+	w, _ := store.GetAssocWeight(ctx, ws, src, dst)
+	if w > 0 {
+		t.Errorf("live weight should be 0 after archive, got %v", w)
+	}
+
+	// Edge should exist in archive (0x25).
+	archiveKey := keys.ArchiveAssocKey(ws, [16]byte(src), [16]byte(dst))
+	val, closer, err := store.db.Get(archiveKey)
+	if err != nil {
+		t.Fatalf("archived edge not found in 0x25 namespace: %v", err)
+	}
+	defer closer.Close()
+	if len(val) != 30 {
+		t.Fatalf("archive value should be 30 bytes, got %d", len(val))
 	}
 }

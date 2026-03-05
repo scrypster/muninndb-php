@@ -442,10 +442,15 @@ const assocDecayGraceWindow = 5 * time.Minute
 // DecayAssocWeights multiplies all association weights for wsPrefix by decayFactor,
 // deleting entries that fall below minWeight. Returns count of deleted entries.
 //
+// When archiveThreshold > 0 and an edge hits the dynamic floor AND its
+// consolidation score (peakWeight * coActivationCount / daysSinceLastActivated)
+// exceeds archiveThreshold, the edge is moved to the 0x25 archive namespace
+// instead of being clamped.
+//
 // Processes in chunks of assocDecayChunkSize to bound memory usage.
 // The Pebble iterator sees a consistent snapshot (created before any mutations),
 // so chunked commits are safe: each original key is visited exactly once.
-func (ps *PebbleStore) DecayAssocWeights(ctx context.Context, wsPrefix [8]byte, decayFactor float64, minWeight float32) (int, error) {
+func (ps *PebbleStore) DecayAssocWeights(ctx context.Context, wsPrefix [8]byte, decayFactor float64, minWeight float32, archiveThreshold float64) (int, error) {
 	// Build scan prefix: 0x03 | wsPrefix (9 bytes).
 	scanPrefix := make([]byte, 9)
 	scanPrefix[0] = 0x03
@@ -464,7 +469,8 @@ func (ps *PebbleStore) DecayAssocWeights(ctx context.Context, wsPrefix [8]byte, 
 		dst    [16]byte
 		oldW   float32
 		newW   float32
-		remove bool
+		remove  bool
+		archive bool
 		// Preserved from existing Pebble value:
 		relType           RelType
 		confidence        float32
@@ -486,7 +492,13 @@ func (ps *PebbleStore) DecayAssocWeights(ctx context.Context, wsPrefix [8]byte, 
 		for _, e := range chunk {
 			_ = batch.Delete(keys.AssocFwdKey(wsPrefix, e.src, e.oldW, e.dst), nil)
 			_ = batch.Delete(keys.AssocRevKey(wsPrefix, e.dst, e.oldW, e.src), nil)
-			if !e.remove {
+			if e.archive {
+				// Move to 0x25 archive namespace. Write archive value, delete live
+				// weight index; fwd/rev keys already deleted above.
+				archVal := encodeArchiveValue(e.relType, e.confidence, e.createdAt, e.lastActivated, e.peakWeight, e.coActivationCount, 0)
+				_ = batch.Set(keys.ArchiveAssocKey(wsPrefix, e.src, e.dst), archVal[:], nil)
+				_ = batch.Delete(keys.AssocWeightIndexKey(wsPrefix, e.src, e.dst), nil)
+			} else if !e.remove {
 				// Preserve existing metadata. Do NOT update lastActivated here —
 				// decay is a background process, not a user activation.
 				// Keep peak up to date (shouldn't change during decay, but guard).
@@ -553,7 +565,21 @@ func (ps *PebbleStore) DecayAssocWeights(ctx context.Context, wsPrefix [8]byte, 
 		}
 		if newW < minWeight {
 			dynamicFloor := peakWeight * 0.05
-			if dynamicFloor > 0 {
+			if dynamicFloor > 0 && archiveThreshold > 0 {
+				// Compute consolidation score to decide archive vs clamp.
+				daysSince := time.Since(time.Unix(int64(lastActivated), 0)).Hours() / 24.0
+				if daysSince < 1.0 {
+					daysSince = 1.0
+				}
+				consolidationScore := (float64(peakWeight) * float64(coActivationCount)) / daysSince
+				if consolidationScore > archiveThreshold {
+					// Strong historical association: archive instead of clamp.
+					e.archive = true
+				} else {
+					// Earned association: clamp to floor instead of deleting.
+					e.newW = dynamicFloor
+				}
+			} else if dynamicFloor > 0 {
 				// Earned association: clamp to floor instead of deleting.
 				e.newW = dynamicFloor
 				// e.remove stays false

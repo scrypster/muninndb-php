@@ -2533,7 +2533,7 @@ func (e *Engine) runPruneWorker() {
 				if resolved.HebbianEnabled && resolved.AssocDecayFactor > 0 {
 					ws := e.store.ResolveVaultPrefix(vaultName)
 					removed, err := e.store.DecayAssocWeights(e.stopCtx, ws,
-						float64(resolved.AssocDecayFactor), resolved.AssocMinWeight)
+						float64(resolved.AssocDecayFactor), resolved.AssocMinWeight, resolved.ArchiveThreshold)
 					if err != nil {
 						slog.Debug("assoc decay failed", "vault", vaultName, "err", err)
 					} else if removed > 0 {
