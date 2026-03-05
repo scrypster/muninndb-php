@@ -1169,7 +1169,7 @@ func TestPhase4_75_ArchiveRestoreRunsDuringActivation(t *testing.T) {
 	}}
 	eng := activation.New(pstore, ftsStub, &emptyHNSW{}, &stubEmbedder{})
 
-	_, err = eng.Run(ctx, &activation.ActivateRequest{
+	result, err := eng.Run(ctx, &activation.ActivateRequest{
 		VaultPrefix: ws,
 		Context:     []string{"seed engram"},
 		Threshold:   0.0,
@@ -1191,5 +1191,12 @@ func TestPhase4_75_ArchiveRestoreRunsDuringActivation(t *testing.T) {
 	} else {
 		t.Logf("Phase 4.75 restored A→B edge: weight = %.4f (expected ~%.4f = peakWeight*0.25)",
 			wRestored, 0.5*0.25)
+	}
+
+	// Assert that RestoredEdges is populated on the result so the Cortex can be notified.
+	if len(result.RestoredEdges) == 0 {
+		t.Error("expected result.RestoredEdges to be non-empty after Phase 4.75 restore, got none")
+	} else {
+		t.Logf("Phase 4.75 populated %d RestoredEdges in ActivateResult", len(result.RestoredEdges))
 	}
 }

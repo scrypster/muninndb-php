@@ -15,6 +15,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/scrypster/muninndb/internal/storage"
+	"github.com/scrypster/muninndb/internal/transport/mbp"
 )
 
 // DefaultWeights for composite scoring.
@@ -154,11 +155,12 @@ type ActivateRequest struct {
 
 // ActivateResult is what the transport layer serializes and returns.
 type ActivateResult struct {
-	QueryID     string
-	Activations []ScoredEngram
-	TotalFound  int
-	LatencyMs   float64
-	ProfileUsed string // resolved traversal profile name (e.g. "default", "causal")
+	QueryID       string
+	Activations   []ScoredEngram
+	TotalFound    int
+	LatencyMs     float64
+	ProfileUsed   string      // resolved traversal profile name (e.g. "default", "causal")
+	RestoredEdges []mbp.EdgeRef // edges lazily restored from archive during Phase 4.75
 }
 
 // ActivateResponseFrame is one streaming frame of results.
@@ -382,7 +384,7 @@ func (e *ActivationEngine) Run(ctx context.Context, req *ActivateRequest) (*Acti
 	}
 
 	// Phase 4.75: Lazy archive restore — check Bloom filter, restore dormant edges.
-	e.phase4_75ArchiveRestore(ctx, ws, fused)
+	restoredEdges := e.phase4_75ArchiveRestore(ctx, ws, fused)
 
 	// Resolve traversal profile for Phase 5 and for audit logging.
 	// Always resolved so ProfileUsed is set on every activation, regardless of HopDepth.
@@ -409,6 +411,7 @@ func (e *ActivationEngine) Run(ctx context.Context, req *ActivateRequest) (*Acti
 
 	result.LatencyMs = float64(time.Since(start).Microseconds()) / 1000.0
 	result.ProfileUsed = profileName
+	result.RestoredEdges = restoredEdges
 
 	slog.Info("activation complete", "profile", profileName, "results", len(result.Activations), "elapsed_ms", result.LatencyMs)
 
@@ -862,14 +865,27 @@ func resolveProfile(req *ActivateRequest) (string, *TraversalProfile) {
 // False positives from the Bloom filter trigger a cheap storage scan that
 // returns immediately when no archive keys are found; false negatives are
 // impossible, so no archived edges are silently skipped.
-func (e *ActivationEngine) phase4_75ArchiveRestore(ctx context.Context, ws [8]byte, candidates []fusedCandidate) {
+// Returns the set of edges that were restored (src→dst pairs) for forwarding
+// to the Cortex via CognitiveForwarder.
+func (e *ActivationEngine) phase4_75ArchiveRestore(ctx context.Context, ws [8]byte, candidates []fusedCandidate) []mbp.EdgeRef {
+	var restoredEdges []mbp.EdgeRef
 	for _, c := range candidates {
 		if !e.store.ArchiveBloomMayContain([16]byte(c.id)) {
 			continue
 		}
 		// Restore top-10 direct + top-5 transitive neighbors.
-		_, _ = e.store.RestoreArchivedEdgesTransitive(ctx, ws, c.id, 10, 5)
+		restored, err := e.store.RestoreArchivedEdgesTransitive(ctx, ws, c.id, 10, 5)
+		if err != nil || len(restored) == 0 {
+			continue
+		}
+		for _, dst := range restored {
+			restoredEdges = append(restoredEdges, mbp.EdgeRef{
+				Src: [16]byte(c.id),
+				Dst: [16]byte(dst),
+			})
+		}
 	}
+	return restoredEdges
 }
 
 // phase5Traverse explores the association graph via level-by-level BFS from top candidates.

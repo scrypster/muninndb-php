@@ -1641,15 +1641,17 @@ func (e *Engine) activateCore(ctx context.Context, req *mbp.ActivateRequest, str
 	// of their actual reliability. Only user_confirmed/rejected and
 	// contradiction_detected drive Bayesian confidence updates.
 
-	// Forward collected Lobe side effects to the Cortex asynchronously.
-	// Only fires when workers are nil (Lobe mode) and coordinator is wired.
-	// TODO(archiving): forward ArchivedEdges/RestoredEdges via CognitiveForwarder when archive/restore writes are lifted to the engine layer
-	if e.coordinator != nil && len(lobeCoActivations) > 0 {
+	// Forward Lobe side effects to Cortex: co-activations and any edges restored
+	// from archive during Phase 4.75. ArchivedEdges are not forwarded — the Cortex
+	// runs its own decay pass and archives edges independently.
+	restoredEdges := result.RestoredEdges
+	if e.coordinator != nil && (len(lobeCoActivations) > 0 || len(restoredEdges) > 0) {
 		effect := mbp.CognitiveSideEffect{
 			QueryID:       e.fastQueryID(),
 			OriginNodeID:  e.coordinatorID,
 			Timestamp:     time.Now().UnixNano(),
 			CoActivations: lobeCoActivations,
+			RestoredEdges: restoredEdges,
 		}
 		e.coordinator.ForwardCognitiveEffects(effect)
 	}
