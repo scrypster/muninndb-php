@@ -106,7 +106,7 @@ func TestPutVaultPlasticity_EmptyVaultName(t *testing.T) {
 
 func TestHandleRenameVault_EmptyName(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	body := bytes.NewReader([]byte(`{"new_name":"new-vault"}`))
 	req := httptest.NewRequest("POST", "/api/admin/vaults//rename", body)
@@ -126,7 +126,7 @@ func TestHandleRenameVault_EmptyName(t *testing.T) {
 
 func TestHandleReindexFTSVault_EmptyName_Boost(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("POST", "/api/admin/vaults//reindex-fts", nil)
 	req.SetPathValue("name", "")
@@ -144,7 +144,7 @@ func TestHandleReindexFTSVault_EmptyName_Boost(t *testing.T) {
 
 func TestHandleDeleteVault_NotFoundVault(t *testing.T) {
 	eng := &deleteVaultNotFoundEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("DELETE", "/api/admin/vaults/nonexistent-vault", nil)
 	req.Header.Set("X-Allow-Default", "true")
@@ -168,7 +168,7 @@ func (e *deleteVaultNotFoundEngine) DeleteVault(_ context.Context, _ string) err
 
 func TestHandleExportVault_WithResetMetadata(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("GET", "/api/admin/vaults/test-vault/export?reset_metadata=true", nil)
 	w := httptest.NewRecorder()

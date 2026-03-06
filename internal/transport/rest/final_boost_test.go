@@ -40,7 +40,7 @@ func TestListAPIKeys_InvalidVaultName_Boost(t *testing.T) {
 
 func TestHandleDeleteVault_JobActive(t *testing.T) {
 	eng := &deleteVaultJobActiveEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("DELETE", "/api/admin/vaults/busy-vault", nil)
 	req.Header.Set("X-Allow-Default", "true")
@@ -64,7 +64,7 @@ func (e *deleteVaultJobActiveEngine) DeleteVault(_ context.Context, _ string) er
 
 func TestHandleObservability_EngineError(t *testing.T) {
 	eng := &observabilityErrorEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("GET", "/api/admin/observability", nil)
 	w := httptest.NewRecorder()
@@ -87,7 +87,7 @@ func (e *observabilityErrorEngine) Observability(_ context.Context, _ string, _ 
 
 func TestHandleGetEngramLinks_EmptyID(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("GET", "/api/engrams//links", nil)
 	req.SetPathValue("id", "")
@@ -105,7 +105,7 @@ func TestHandleGetEngramLinks_EmptyID(t *testing.T) {
 
 func TestHandleRestore_EmptyID(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("POST", "/api/engrams//restore", nil)
 	req.SetPathValue("id", "")
@@ -123,7 +123,7 @@ func TestHandleRestore_EmptyID(t *testing.T) {
 
 func TestHandleRetryEnrich_EmptyID(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("POST", "/api/engrams//retry-enrich", nil)
 	req.SetPathValue("id", "")
@@ -141,7 +141,7 @@ func TestHandleRetryEnrich_EmptyID(t *testing.T) {
 
 func TestHandleBackup_EmptyBody(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	// Send empty/invalid JSON body.
 	req := httptest.NewRequest("POST", "/api/admin/backup", strings.NewReader("{bad"))
@@ -156,7 +156,7 @@ func TestHandleBackup_EmptyBody(t *testing.T) {
 
 func TestHandleBackup_MissingOutputDir(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("POST", "/api/admin/backup", strings.NewReader(`{}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -170,7 +170,7 @@ func TestHandleBackup_MissingOutputDir(t *testing.T) {
 
 func TestHandleBackup_OutputDirAlreadyExists(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	// Create the output dir before issuing the request.
 	existingDir := filepath.Join(t.TempDir(), "already-exists")
@@ -201,7 +201,7 @@ func TestHandlePlugins_WithEnrichPlugin(t *testing.T) {
 	}
 
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, registry, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, registry, "", nil)
 
 	req := httptest.NewRequest("GET", "/api/admin/plugins", nil)
 	w := httptest.NewRecorder()
@@ -231,7 +231,7 @@ func (p *testEnrichPlugin) Enrich(_ context.Context, _ *plugin.Engram) (*plugin.
 
 func TestHandleClearVault_NotFound_Boost(t *testing.T) {
 	eng := &clearVaultNotFoundEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("DELETE", "/api/admin/vaults/nonexistent/entries", nil)
 	req.Header.Set("X-Allow-Default", "true")

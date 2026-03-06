@@ -26,7 +26,7 @@ import (
 
 func TestHandleReindexFTSVault_VaultNotFound(t *testing.T) {
 	eng := &reindexNotFoundEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("POST", "/api/admin/vaults/missing-vault/reindex-fts", nil)
 	w := httptest.NewRecorder()
@@ -39,7 +39,7 @@ func TestHandleReindexFTSVault_VaultNotFound(t *testing.T) {
 
 func TestHandleReindexFTSVault_GenericError(t *testing.T) {
 	eng := &reindexErrorEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("POST", "/api/admin/vaults/some-vault/reindex-fts", nil)
 	w := httptest.NewRecorder()
@@ -69,7 +69,7 @@ func (e *reindexErrorEngine) ReindexFTSVault(_ context.Context, _ string) (int64
 
 func TestHandleReembedVault_InvalidVaultName(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("POST", "/api/admin/vaults/INVALID!NAME/reembed", nil)
 	w := httptest.NewRecorder()
@@ -82,7 +82,7 @@ func TestHandleReembedVault_InvalidVaultName(t *testing.T) {
 
 func TestHandleReembedVault_VaultNotFound(t *testing.T) {
 	eng := &reembedNotFoundEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("POST", "/api/admin/vaults/missing-vault/reembed", nil)
 	w := httptest.NewRecorder()
@@ -95,7 +95,7 @@ func TestHandleReembedVault_VaultNotFound(t *testing.T) {
 
 func TestHandleReembedVault_GenericError(t *testing.T) {
 	eng := &reembedErrorEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("POST", "/api/admin/vaults/some-vault/reembed", nil)
 	w := httptest.NewRecorder()
@@ -108,7 +108,7 @@ func TestHandleReembedVault_GenericError(t *testing.T) {
 
 func TestHandleReembedVault_WithModelOverride(t *testing.T) {
 	eng := &reembedCapturingEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	body := `{"model":"bge-small-en-v1.5"}`
 	req := httptest.NewRequest("POST", "/api/admin/vaults/test-vault/reembed", strings.NewReader(body))
@@ -153,7 +153,7 @@ func (e *reembedCapturingEngine) StartReembedVault(_ context.Context, _, model s
 
 func TestHandleExportVault_VaultNotFound(t *testing.T) {
 	eng := &exportNotFoundEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("GET", "/api/admin/vaults/missing-vault/export", nil)
 	w := httptest.NewRecorder()
@@ -166,7 +166,7 @@ func TestHandleExportVault_VaultNotFound(t *testing.T) {
 
 func TestHandleExportVault_PreStreamError(t *testing.T) {
 	eng := &exportPreStreamErrorEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("GET", "/api/admin/vaults/some-vault/export", nil)
 	w := httptest.NewRecorder()
@@ -196,7 +196,7 @@ func (e *exportPreStreamErrorEngine) ExportVault(_ context.Context, _, _ string,
 
 func TestHandleImportVault_VaultNotFound(t *testing.T) {
 	eng := &importNotFoundEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("POST", "/api/admin/vaults/import?vault=missing-vault", strings.NewReader("data"))
 	w := httptest.NewRecorder()
@@ -209,7 +209,7 @@ func TestHandleImportVault_VaultNotFound(t *testing.T) {
 
 func TestHandleImportVault_Collision(t *testing.T) {
 	eng := &importCollisionEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("POST", "/api/admin/vaults/import?vault=existing-vault", strings.NewReader("data"))
 	w := httptest.NewRecorder()
@@ -222,7 +222,7 @@ func TestHandleImportVault_Collision(t *testing.T) {
 
 func TestHandleImportVault_GenericError(t *testing.T) {
 	eng := &importErrorEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("POST", "/api/admin/vaults/import?vault=some-vault", strings.NewReader("data"))
 	w := httptest.NewRecorder()
@@ -259,7 +259,7 @@ func (e *importErrorEngine) StartImport(_ context.Context, _, _ string, _ int, _
 func TestHandleGetPluginConfig_NoDataDirBoost(t *testing.T) {
 	eng := &MockEngine{}
 	// No data dir → returns empty config.
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("GET", "/api/admin/plugin-config", nil)
 	w := httptest.NewRecorder()
@@ -276,7 +276,7 @@ func TestHandleGetPluginConfig_NoDataDirBoost(t *testing.T) {
 
 func TestHandleRenameVault_NameCollision(t *testing.T) {
 	eng := &renameCollisionEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	body := strings.NewReader(`{"new_name":"existing-vault"}`)
 	req := httptest.NewRequest("POST", "/api/admin/vaults/old-vault/rename", body)
@@ -291,7 +291,7 @@ func TestHandleRenameVault_NameCollision(t *testing.T) {
 
 func TestHandleRenameVault_GenericError(t *testing.T) {
 	eng := &renameGenericErrorEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	body := strings.NewReader(`{"new_name":"new-vault"}`)
 	req := httptest.NewRequest("POST", "/api/admin/vaults/old-vault/rename", body)
@@ -323,7 +323,7 @@ func (e *renameGenericErrorEngine) RenameVault(_ context.Context, _, _ string) e
 
 func TestHandleDeleteVault_StoreError(t *testing.T) {
 	eng := &deleteVaultErrorEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("DELETE", "/api/admin/vaults/problem-vault", nil)
 	req.Header.Set("X-Allow-Default", "true")
@@ -347,7 +347,7 @@ func (e *deleteVaultErrorEngine) DeleteVault(_ context.Context, _ string) error 
 
 func TestHandleClearVault_StoreError(t *testing.T) {
 	eng := &clearVaultErrorEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("POST", "/api/admin/vaults/problem-vault/clear", nil)
 	req.Header.Set("X-Allow-Default", "true")
@@ -371,7 +371,7 @@ func (e *clearVaultErrorEngine) ClearVault(_ context.Context, _ string) error {
 
 func TestHandleCloneVault_GenericError(t *testing.T) {
 	eng := &cloneGenericErrorEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	body := `{"new_name":"target-vault"}`
 	req := httptest.NewRequest("POST", "/api/admin/vaults/source-vault/clone", strings.NewReader(body))
@@ -396,7 +396,7 @@ func (e *cloneGenericErrorEngine) StartClone(_ context.Context, _, _ string) (*v
 
 func TestHandleMergeVault_GenericError(t *testing.T) {
 	eng := &mergeGenericErrorEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	body := `{"target":"target-vault"}`
 	req := httptest.NewRequest("POST", "/api/admin/vaults/source-vault/merge-into", strings.NewReader(body))
@@ -421,7 +421,7 @@ func (e *mergeGenericErrorEngine) StartMerge(_ context.Context, _, _ string, _ b
 
 func TestHandleStats_WithVault(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("GET", "/api/stats?vault=my-vault", nil)
 	w := httptest.NewRecorder()

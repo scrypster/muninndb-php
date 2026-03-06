@@ -188,6 +188,7 @@ document.addEventListener('alpine:init', () => {
       embedProvider: 'none',  // 'none' | 'ollama' | 'openai' | 'voyage'
       embedOllamaModel: 'nomic-embed-text',
       embedApiKey: '',
+      embedUrl: '',           // custom base URL for openai-compatible endpoints
       embedShowForm: false,
       embedSaved: false,
       embedError: '',
@@ -1543,6 +1544,19 @@ document.addEventListener('alpine:init', () => {
             this.plugins = [];
         }
     },
+    async loadSavedPluginConfig() {
+        try {
+            const data = await this.apiCall('/api/admin/plugin-config');
+            const embedUrl = data.embed_url || '';
+            // Only populate the Base URL field when it's an HTTP/HTTPS URL.
+            // ollama:// and other scheme URLs encode a model name, not a base URL.
+            if (embedUrl.startsWith('http://') || embedUrl.startsWith('https://')) {
+                this.pluginCfg.embedUrl = embedUrl;
+            }
+        } catch (_) {
+            // Non-critical — leave embedUrl at default
+        }
+    },
     async loadWorkers() {
         try {
             this.cogWorkerStats = await this.apiCall('/api/workers');
@@ -2148,7 +2162,7 @@ document.addEventListener('alpine:init', () => {
       // Build payload from current pluginCfg state.
       const payload = {
         embed_provider: c.embedProvider === 'none' ? '' : c.embedProvider,
-        embed_url: c.embedProvider === 'ollama' ? `ollama://localhost:11434/${c.embedOllamaModel}` : '',
+        embed_url: c.embedProvider === 'ollama' ? `ollama://localhost:11434/${c.embedOllamaModel}` : (c.embedProvider === 'openai' && c.embedUrl ? c.embedUrl : ''),
         embed_api_key: (c.embedProvider === 'openai' || c.embedProvider === 'voyage') ? c.embedApiKey : '',
         enrich_provider: c.enrichProvider === 'none' ? '' : c.enrichProvider,
         enrich_url: c.enrichProvider === 'ollama'

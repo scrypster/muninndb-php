@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -34,21 +35,22 @@ import (
 	"github.com/scrypster/muninndb/internal/mcp"
 	"github.com/scrypster/muninndb/internal/metrics"
 	"github.com/scrypster/muninndb/internal/metrics/latency"
-	"github.com/scrypster/muninndb/internal/storage/migrate"
 	"github.com/scrypster/muninndb/internal/plugin"
 	embedpkg "github.com/scrypster/muninndb/internal/plugin/embed"
 	enrichpkg "github.com/scrypster/muninndb/internal/plugin/enrich"
 	"github.com/scrypster/muninndb/internal/replication"
 	"github.com/scrypster/muninndb/internal/storage"
+	"github.com/scrypster/muninndb/internal/storage/migrate"
+	grpcpkg "github.com/scrypster/muninndb/internal/transport/grpc"
 	"github.com/scrypster/muninndb/internal/transport/mbp"
 	"github.com/scrypster/muninndb/internal/transport/rest"
-	grpcpkg "github.com/scrypster/muninndb/internal/transport/grpc"
 	"github.com/scrypster/muninndb/internal/ui"
 	"github.com/scrypster/muninndb/internal/wal"
 	webui "github.com/scrypster/muninndb/web"
 )
 
 const defaultMCPPort = "8750"
+const defaultOpenAIEmbedProviderURL = "openai://text-embedding-3-small"
 
 const vaultUpgradeWarning = `
 ================================================================
@@ -75,6 +77,14 @@ Or generate an API key:
 // active embed provider + model without side-effects (no network calls).
 // Priority: env vars → plugin_config.json → local bundled → none.
 func resolveEmbedInfo(cfg plugincfg.PluginConfig) rest.EmbedInfo {
+	openAIOverride := strings.TrimSpace(os.Getenv("MUNINN_OPENAI_URL"))
+	openAIOverrideValid := true
+	if openAIOverride != "" {
+		if _, err := resolveOpenAIEmbedProviderURL(openAIOverride); err != nil {
+			openAIOverrideValid = false
+		}
+	}
+
 	if rawURL := os.Getenv("MUNINN_OLLAMA_URL"); rawURL != "" {
 		if provCfg, err := plugin.ParseProviderURL(rawURL); err == nil {
 			return rest.EmbedInfo{Provider: "ollama", Model: provCfg.Model}
@@ -82,7 +92,16 @@ func resolveEmbedInfo(cfg plugincfg.PluginConfig) rest.EmbedInfo {
 		return rest.EmbedInfo{Provider: "ollama", Model: ""}
 	}
 	if os.Getenv("MUNINN_OPENAI_KEY") != "" {
-		return rest.EmbedInfo{Provider: "openai", Model: "text-embedding-3-small"}
+		if openAIOverrideValid {
+			if providerURL, err := resolveOpenAIEmbedProviderURL(openAIOverride); err == nil {
+				if provCfg, parseErr := plugin.ParseProviderURL(providerURL); parseErr == nil {
+					return rest.EmbedInfo{Provider: "openai", Model: provCfg.Model}
+				}
+			}
+			return rest.EmbedInfo{Provider: "openai", Model: "text-embedding-3-small"}
+		}
+		// Explicit invalid override disables OpenAI so we don't accidentally
+		// send traffic to the default OpenAI endpoint.
 	}
 	if os.Getenv("MUNINN_VOYAGE_KEY") != "" {
 		return rest.EmbedInfo{Provider: "voyage", Model: "voyage-3"}
@@ -109,7 +128,23 @@ func resolveEmbedInfo(cfg plugincfg.PluginConfig) rest.EmbedInfo {
 			return rest.EmbedInfo{Provider: "ollama", Model: ""}
 		}
 	case "openai":
-		return rest.EmbedInfo{Provider: "openai", Model: "text-embedding-3-small"}
+		if !openAIOverrideValid {
+			break
+		}
+		openaiSource := cfg.EmbedURL
+		if openAIOverride != "" {
+			openaiSource = openAIOverride
+		}
+		if providerURL, err := resolveOpenAIEmbedProviderURL(openaiSource); err == nil {
+			if provCfg, parseErr := plugin.ParseProviderURL(providerURL); parseErr == nil {
+				return rest.EmbedInfo{Provider: "openai", Model: provCfg.Model}
+			}
+			return rest.EmbedInfo{Provider: "openai", Model: "text-embedding-3-small"}
+		}
+		// Explicit invalid override in saved config disables OpenAI.
+		if strings.TrimSpace(openaiSource) == "" {
+			return rest.EmbedInfo{Provider: "openai", Model: "text-embedding-3-small"}
+		}
 	case "voyage":
 		return rest.EmbedInfo{Provider: "voyage", Model: "voyage-3"}
 	case "cohere":
@@ -130,8 +165,72 @@ func resolveEmbedInfo(cfg plugincfg.PluginConfig) rest.EmbedInfo {
 	return rest.EmbedInfo{Provider: "none", Model: ""}
 }
 
+// resolveEnrichInfo determines the LLM enrichment provider and model from
+// env variables and saved plugin config. Order: env vars → saved config.
+func resolveEnrichInfo(cfg plugincfg.PluginConfig) rest.EnrichInfo {
+	// Env var takes precedence.
+	if enrichURL := os.Getenv("MUNINN_ENRICH_URL"); enrichURL != "" {
+		if provCfg, err := plugin.ParseProviderURL(enrichURL); err == nil {
+			return rest.EnrichInfo{Provider: string(provCfg.Scheme), Model: provCfg.Model}
+		}
+		return rest.EnrichInfo{Provider: "unknown", Model: ""}
+	}
+	// Saved config fallback.
+	if cfg.EnrichProvider != "" && cfg.EnrichProvider != "none" {
+		if cfg.EnrichURL != "" {
+			if provCfg, err := plugin.ParseProviderURL(cfg.EnrichURL); err == nil {
+				return rest.EnrichInfo{Provider: string(provCfg.Scheme), Model: provCfg.Model}
+			}
+		}
+		return rest.EnrichInfo{Provider: cfg.EnrichProvider, Model: ""}
+	}
+	return rest.EnrichInfo{}
+}
+
+// resolveOpenAIEmbedProviderURL resolves an OpenAI embed URL override into a
+// provider URL that ParseProviderURL can handle. Supports both:
+//   - openai://text-embedding-3-small?base_url=http://localhost:8080
+//   - http://localhost:8080 (treated as base_url with default model)
+func resolveOpenAIEmbedProviderURL(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return defaultOpenAIEmbedProviderURL, nil
+	}
+	if strings.HasPrefix(strings.ToLower(raw), "openai://") {
+		if _, err := plugin.ParseProviderURL(raw); err != nil {
+			return "", err
+		}
+		return raw, nil
+	}
+	providerURL := defaultOpenAIEmbedProviderURL + "?base_url=" + neturl.QueryEscape(raw)
+	if _, err := plugin.ParseProviderURL(providerURL); err != nil {
+		return "", err
+	}
+	return providerURL, nil
+}
+
+func sanitizeProviderURLForLog(providerURL string) string {
+	parsed, err := neturl.Parse(providerURL)
+	if err != nil {
+		return providerURL
+	}
+	if strings.EqualFold(parsed.Scheme, "openai") {
+		parsed.RawQuery = ""
+		return parsed.String()
+	}
+	return providerURL
+}
+
+func openAIEmbedLogAttrs(providerURL string) []any {
+	provCfg, err := plugin.ParseProviderURL(providerURL)
+	if err != nil {
+		return []any{"url", sanitizeProviderURLForLog(providerURL)}
+	}
+	return []any{"model", provCfg.Model, "custom_base_url", provCfg.BaseURL != "https://api.openai.com"}
+}
+
 // buildEmbedder constructs an embedder. Priority (highest → lowest):
-//  1. Environment variables (MUNINN_OLLAMA_URL, MUNINN_OPENAI_KEY, MUNINN_VOYAGE_KEY, MUNINN_COHERE_KEY, MUNINN_GOOGLE_KEY, MUNINN_JINA_KEY, MUNINN_MISTRAL_KEY)
+//  1. Environment variables (MUNINN_OLLAMA_URL, MUNINN_OPENAI_KEY (+ optional MUNINN_OPENAI_URL), MUNINN_VOYAGE_KEY, MUNINN_COHERE_KEY, MUNINN_GOOGLE_KEY, MUNINN_JINA_KEY, MUNINN_MISTRAL_KEY)
 //  2. Saved plugin_config.json (cfg parameter)
 //  3. Bundled local ONNX model — enabled by default when the binary was built
 //     with embedded assets. Disable with MUNINN_LOCAL_EMBED=0.
@@ -143,6 +242,7 @@ func buildEmbedder(ctx context.Context, cfg plugincfg.PluginConfig, dataDir stri
 	const (
 		ollamaURL  = "MUNINN_OLLAMA_URL"
 		openaiKey  = "MUNINN_OPENAI_KEY"
+		openaiURL  = "MUNINN_OPENAI_URL"
 		voyageKey  = "MUNINN_VOYAGE_KEY"
 		cohereKey  = "MUNINN_COHERE_KEY"
 		googleKey  = "MUNINN_GOOGLE_KEY"
@@ -151,14 +251,24 @@ func buildEmbedder(ctx context.Context, cfg plugincfg.PluginConfig, dataDir stri
 		localEmbed = "MUNINN_LOCAL_EMBED"
 	)
 
+	openAIEnvOverride := strings.TrimSpace(os.Getenv(openaiURL))
+	openAIEnvOverrideInvalid := false
+	if openAIEnvOverride != "" {
+		if _, err := resolveOpenAIEmbedProviderURL(openAIEnvOverride); err != nil {
+			openAIEnvOverrideInvalid = true
+			slog.Warn("invalid OpenAI URL override detected, OpenAI embedder disabled", "env_var", openaiURL, "error", err)
+		}
+	}
+
 	tryEmbedService := func(providerURL string, pcfg plugin.PluginConfig) *embedpkg.EmbedService {
+		logURL := sanitizeProviderURLForLog(providerURL)
 		svc, err := embedpkg.NewEmbedService(providerURL)
 		if err != nil {
-			slog.Warn("embedder service creation failed", "url", providerURL, "error", err)
+			slog.Warn("embedder service creation failed", "url", logURL, "error", err)
 			return nil
 		}
 		if err := svc.Init(ctx, pcfg); err != nil {
-			slog.Warn("embedder init failed, trying next provider", "url", providerURL, "error", err)
+			slog.Warn("embedder init failed, trying next provider", "url", logURL, "error", err)
 			_ = svc.Close()
 			return nil
 		}
@@ -175,9 +285,16 @@ func buildEmbedder(ctx context.Context, cfg plugincfg.PluginConfig, dataDir stri
 
 	// 1. Env var: OpenAI
 	if key := os.Getenv(openaiKey); key != "" {
-		slog.Info("initializing OpenAI embedder")
-		if svc := tryEmbedService("openai://text-embedding-3-small", plugin.PluginConfig{APIKey: key}); svc != nil {
-			return embedpkg.NewEmbedServiceAdapter(svc), svc, nil
+		if !openAIEnvOverrideInvalid {
+			openaiProviderURL, err := resolveOpenAIEmbedProviderURL(openAIEnvOverride)
+			if err != nil {
+				slog.Warn("failed to resolve OpenAI provider URL, skipping OpenAI embedder", "error", err)
+			} else {
+				slog.Info("initializing OpenAI embedder", openAIEmbedLogAttrs(openaiProviderURL)...)
+				if svc := tryEmbedService(openaiProviderURL, plugin.PluginConfig{APIKey: key}); svc != nil {
+					return embedpkg.NewEmbedServiceAdapter(svc), svc, nil
+				}
+			}
 		}
 	}
 
@@ -232,8 +349,25 @@ func buildEmbedder(ctx context.Context, cfg plugincfg.PluginConfig, dataDir stri
 				}
 			}
 		case "openai":
-			slog.Info("initializing OpenAI embedder from saved config")
-			if svc := tryEmbedService("openai://text-embedding-3-small", plugin.PluginConfig{APIKey: cfg.EmbedAPIKey}); svc != nil {
+			if openAIEnvOverrideInvalid {
+				slog.Warn("invalid OpenAI URL override is set, skipping OpenAI embedder from saved config", "env_var", openaiURL)
+				break
+			}
+			openaiSource := cfg.EmbedURL
+			if openAIEnvOverride != "" {
+				openaiSource = openAIEnvOverride
+			}
+			openaiProviderURL, err := resolveOpenAIEmbedProviderURL(openaiSource)
+			if err != nil {
+				if strings.TrimSpace(openaiSource) != "" {
+					slog.Warn("invalid OpenAI URL in saved config, skipping OpenAI embedder", "error", err)
+				} else {
+					slog.Warn("failed to resolve OpenAI provider URL from saved config, skipping OpenAI embedder", "error", err)
+				}
+				break
+			}
+			slog.Info("initializing OpenAI embedder from saved config", openAIEmbedLogAttrs(openaiProviderURL)...)
+			if svc := tryEmbedService(openaiProviderURL, plugin.PluginConfig{APIKey: cfg.EmbedAPIKey}); svc != nil {
 				return embedpkg.NewEmbedServiceAdapter(svc), svc, nil
 			}
 		case "voyage":
@@ -279,7 +413,7 @@ func buildEmbedder(ctx context.Context, cfg plugincfg.PluginConfig, dataDir stri
 	slog.Warn("no embedder configured, semantic similarity disabled")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "  ⚠  No embedder configured — semantic search disabled.")
-	fmt.Fprintln(os.Stderr, "     To use a cloud embedder: set MUNINN_OPENAI_KEY, MUNINN_COHERE_KEY, MUNINN_GOOGLE_KEY, etc.")
+	fmt.Fprintln(os.Stderr, "     To use a cloud embedder: set MUNINN_OPENAI_KEY (optionally MUNINN_OPENAI_URL), MUNINN_COHERE_KEY, MUNINN_GOOGLE_KEY, etc.")
 	fmt.Fprintln(os.Stderr, "     To disable this warning: set MUNINN_LOCAL_EMBED=0")
 	fmt.Fprintln(os.Stderr, "")
 	return activation.NewNoopEmbedder(), nil, nil
@@ -484,7 +618,7 @@ func runServer() {
 	backupDir := flag.String("backup-dir", "", "Directory to write automated backups into")
 	backupRetain := flag.Int("backup-retain", 5, "Number of automated backups to keep")
 	tlsCert := flag.String("tls-cert", "", "Path to TLS certificate file (PEM)")
-	tlsKey  := flag.String("tls-key",  "", "Path to TLS private key file (PEM)")
+	tlsKey := flag.String("tls-key", "", "Path to TLS private key file (PEM)")
 	corsOriginsDefault := os.Getenv("MUNINN_CORS_ORIGINS")
 	corsOriginsFlag := flag.String("cors-origins", corsOriginsDefault, "Comma-separated allowed CORS origins for browser clients (e.g. http://myapp.local:3000); overrides MUNINN_CORS_ORIGINS")
 	var logLevelStr string
@@ -495,6 +629,7 @@ func runServer() {
 		fmt.Fprintf(os.Stderr, "\nEnvironment variables (primary configuration; see docs for full list):\n")
 		fmt.Fprintf(os.Stderr, "  MUNINN_OLLAMA_URL            Ollama embedder base URL (e.g. http://localhost:11434)\n")
 		fmt.Fprintf(os.Stderr, "  MUNINN_OPENAI_KEY            OpenAI embedder API key\n")
+		fmt.Fprintf(os.Stderr, "  MUNINN_OPENAI_URL            Optional OpenAI base URL or provider URL override\n")
 		fmt.Fprintf(os.Stderr, "  MUNINN_VOYAGE_KEY            Voyage embedder API key\n")
 		fmt.Fprintf(os.Stderr, "  MUNINN_COHERE_KEY            Cohere embedder API key\n")
 		fmt.Fprintf(os.Stderr, "  MUNINN_GOOGLE_KEY            Google Gemini embedder API key\n")
@@ -516,12 +651,20 @@ func runServer() {
 	flag.Parse()
 
 	// TLS env fallbacks — flags take priority; env vars are the fallback.
-	if *tlsCert == "" { *tlsCert = os.Getenv("MUNINN_TLS_CERT") }
-	if *tlsKey == "" { *tlsKey = os.Getenv("MUNINN_TLS_KEY") }
+	if *tlsCert == "" {
+		*tlsCert = os.Getenv("MUNINN_TLS_CERT")
+	}
+	if *tlsKey == "" {
+		*tlsKey = os.Getenv("MUNINN_TLS_KEY")
+	}
 
 	// Backup env fallbacks — flags take priority; env vars are the fallback.
-	if *backupInterval == "" { *backupInterval = os.Getenv("MUNINN_BACKUP_INTERVAL") }
-	if *backupDir == "" { *backupDir = os.Getenv("MUNINN_BACKUP_DIR") }
+	if *backupInterval == "" {
+		*backupInterval = os.Getenv("MUNINN_BACKUP_INTERVAL")
+	}
+	if *backupDir == "" {
+		*backupDir = os.Getenv("MUNINN_BACKUP_DIR")
+	}
 	if *backupRetain == 5 {
 		if s := os.Getenv("MUNINN_BACKUP_RETAIN"); s != "" {
 			if n, err := strconv.Atoi(s); err == nil && n > 0 {
@@ -852,7 +995,8 @@ func runServer() {
 	// Build transport servers
 	mbpServer := mbp.NewServer(*mbpAddr, eng, authStore, clientTLS)
 	corsOrigins := parseCORSOrigins(*corsOriginsFlag)
-	restServer := rest.NewServer(*restAddr, restWrapper, authStore, sessionSecret, corsOrigins, embedInfo, pluginRegistry, *dataDir, clientTLS, rest.MCPInfo{
+	enrichInfo := resolveEnrichInfo(savedPluginCfg)
+	restServer := rest.NewServer(*restAddr, restWrapper, authStore, sessionSecret, corsOrigins, embedInfo, enrichInfo, pluginRegistry, *dataDir, clientTLS, rest.MCPInfo{
 		Addr:     *mcpAddr,
 		HasToken: *mcpToken != "",
 	})

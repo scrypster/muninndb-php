@@ -292,6 +292,38 @@ func TestBFSThresholdCutsOff(t *testing.T) {
 	}
 }
 
+// TestGetAssociations_NodeIDEndsIn0xFF is a regression test for the prefix upper-bound
+// overflow bug. When a node ID's last byte is 0xFF, the naive "+1" calculation wraps to
+// 0x00, producing upperBound < lowerBound and causing the Pebble iterator to return
+// nothing. prefixSuccessor carries the increment correctly, so associations are found.
+func TestGetAssociations_NodeIDEndsIn0xFF(t *testing.T) {
+	db := newTestDB(t)
+	g := adjacency.New(db)
+	ws := testWS()
+	ctx := context.Background()
+
+	// Construct a node ID whose last byte is 0xFF to trigger the overflow.
+	var srcID [16]byte
+	for i := range srcID {
+		srcID[i] = 0xAA
+	}
+	srcID[15] = 0xFF
+
+	dstID := newID()
+	writeAssoc(t, g, ws, srcID, dstID, 0.9)
+
+	results, err := g.GetAssociations(ctx, ws, srcID, 100)
+	if err != nil {
+		t.Fatalf("GetAssociations: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 association for node with 0xFF last byte, got %d (prefix overflow bug)", len(results))
+	}
+	if results[0].TargetID != dstID {
+		t.Errorf("expected TargetID=%v, got %v", dstID, results[0].TargetID)
+	}
+}
+
 // TestGetAssociationsEmptyNode calls GetAssociations on a node with no associations
 // and verifies it returns an empty slice without error.
 func TestGetAssociationsEmptyNode(t *testing.T) {

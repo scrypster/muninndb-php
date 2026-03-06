@@ -20,7 +20,7 @@ func TestHandleEmbedStatus(t *testing.T) {
 	srv := NewServer("localhost:0", &MockEngine{}, store, nil, nil, EmbedInfo{
 		Provider: "openai",
 		Model:    "text-embedding-3-small",
-	}, nil, "", nil)
+	}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("GET", "/api/admin/embed/status", nil)
 	w := httptest.NewRecorder()
@@ -52,7 +52,7 @@ func TestHandleEmbedStatus_NoneProvider(t *testing.T) {
 	store := newTestAuthStore(t)
 	srv := NewServer("localhost:0", &MockEngine{}, store, nil, nil, EmbedInfo{
 		Provider: "none",
-	}, nil, "", nil)
+	}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("GET", "/api/admin/embed/status", nil)
 	w := httptest.NewRecorder()
@@ -71,7 +71,7 @@ func TestHandleEmbedStatus_NoneProvider(t *testing.T) {
 
 func TestHandleEmbedStatus_EmptyProvider(t *testing.T) {
 	store := newTestAuthStore(t)
-	srv := NewServer("localhost:0", &MockEngine{}, store, nil, nil, EmbedInfo{}, nil, "", nil)
+	srv := NewServer("localhost:0", &MockEngine{}, store, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("GET", "/api/admin/embed/status", nil)
 	w := httptest.NewRecorder()
@@ -91,7 +91,7 @@ func TestHandleEmbedStatus_EmptyProvider(t *testing.T) {
 
 func TestHandleGetPluginConfig_NoDataDir(t *testing.T) {
 	store := newTestAuthStore(t)
-	srv := NewServer("localhost:0", &MockEngine{}, store, nil, nil, EmbedInfo{}, nil, "", nil)
+	srv := NewServer("localhost:0", &MockEngine{}, store, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("GET", "/api/admin/plugin-config", nil)
 	w := httptest.NewRecorder()
@@ -110,7 +110,7 @@ func TestHandleGetPluginConfig_WithDataDir(t *testing.T) {
 	}
 
 	store := newTestAuthStore(t)
-	srv := NewServer("localhost:0", &MockEngine{}, store, nil, nil, EmbedInfo{}, nil, dir, nil)
+	srv := NewServer("localhost:0", &MockEngine{}, store, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, dir, nil)
 
 	req := httptest.NewRequest("GET", "/api/admin/plugin-config", nil)
 	w := httptest.NewRecorder()
@@ -129,7 +129,7 @@ func TestHandleGetPluginConfig_WithDataDir(t *testing.T) {
 
 func TestHandlePutPluginConfig_NoDataDir(t *testing.T) {
 	store := newTestAuthStore(t)
-	srv := NewServer("localhost:0", &MockEngine{}, store, nil, nil, EmbedInfo{}, nil, "", nil)
+	srv := NewServer("localhost:0", &MockEngine{}, store, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	body, _ := json.Marshal(config.PluginConfig{EmbedProvider: "openai"})
 	req := httptest.NewRequest("PUT", "/api/admin/plugin-config", bytes.NewReader(body))
@@ -145,7 +145,7 @@ func TestHandlePutPluginConfig_NoDataDir(t *testing.T) {
 func TestHandlePutPluginConfig_Success(t *testing.T) {
 	dir := t.TempDir()
 	store := newTestAuthStore(t)
-	srv := NewServer("localhost:0", &MockEngine{}, store, nil, nil, EmbedInfo{}, nil, dir, nil)
+	srv := NewServer("localhost:0", &MockEngine{}, store, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, dir, nil)
 
 	cfg := config.PluginConfig{
 		EmbedProvider: "voyage",
@@ -173,7 +173,7 @@ func TestHandlePutPluginConfig_Success(t *testing.T) {
 func TestHandlePutPluginConfig_InvalidJSON(t *testing.T) {
 	dir := t.TempDir()
 	store := newTestAuthStore(t)
-	srv := NewServer("localhost:0", &MockEngine{}, store, nil, nil, EmbedInfo{}, nil, dir, nil)
+	srv := NewServer("localhost:0", &MockEngine{}, store, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, dir, nil)
 
 	req := httptest.NewRequest("PUT", "/api/admin/plugin-config", strings.NewReader("not json"))
 	req.Header.Set("Content-Type", "application/json")
@@ -616,7 +616,7 @@ func TestChangeAdminPassword_InvalidJSON(t *testing.T) {
 
 func TestMCPInfo_HostSpecific(t *testing.T) {
 	store := newTestAuthStore(t)
-	srv := NewServer("localhost:0", &MockEngine{}, store, nil, nil, EmbedInfo{}, nil, "", nil, MCPInfo{
+	srv := NewServer("localhost:0", &MockEngine{}, store, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil, MCPInfo{
 		Addr:     "192.168.1.5:8750",
 		HasToken: true,
 	})
@@ -634,7 +634,7 @@ func TestMCPInfo_HostSpecific(t *testing.T) {
 
 func TestMCPInfo_EmptyAddr(t *testing.T) {
 	store := newTestAuthStore(t)
-	srv := NewServer("localhost:0", &MockEngine{}, store, nil, nil, EmbedInfo{}, nil, "", nil, MCPInfo{
+	srv := NewServer("localhost:0", &MockEngine{}, store, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil, MCPInfo{
 		Addr: "",
 	})
 
@@ -651,7 +651,7 @@ func TestMCPInfo_EmptyAddr(t *testing.T) {
 
 func TestMCPInfo_IPv6Wildcard(t *testing.T) {
 	store := newTestAuthStore(t)
-	srv := NewServer("localhost:0", &MockEngine{}, store, nil, nil, EmbedInfo{}, nil, "", nil, MCPInfo{
+	srv := NewServer("localhost:0", &MockEngine{}, store, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil, MCPInfo{
 		Addr: "[::]:8750",
 	})
 
@@ -669,7 +669,7 @@ func TestMCPInfo_IPv6Wildcard(t *testing.T) {
 // --- handleHello error paths ---
 
 func TestHandleHello_InvalidJSON(t *testing.T) {
-	srv := NewServer("localhost:0", &MockEngine{}, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	srv := NewServer("localhost:0", &MockEngine{}, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("POST", "/api/hello", strings.NewReader("not json"))
 	w := httptest.NewRecorder()
@@ -683,7 +683,7 @@ func TestHandleHello_InvalidJSON(t *testing.T) {
 // --- handleLink error paths ---
 
 func TestHandleLink_InvalidJSON(t *testing.T) {
-	srv := NewServer("localhost:0", &MockEngine{}, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	srv := NewServer("localhost:0", &MockEngine{}, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("POST", "/api/link", strings.NewReader("not json"))
 	req.Header.Set("Content-Type", "application/json")
@@ -698,7 +698,7 @@ func TestHandleLink_InvalidJSON(t *testing.T) {
 // --- handleBatchCreate error paths ---
 
 func TestBatchCreate_InvalidJSON(t *testing.T) {
-	srv := NewServer("localhost:0", &MockEngine{}, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	srv := NewServer("localhost:0", &MockEngine{}, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("POST", "/api/engrams/batch", strings.NewReader("not json"))
 	req.Header.Set("Content-Type", "application/json")
@@ -769,7 +769,7 @@ func TestClientIP(t *testing.T) {
 // --- Server health and ready ---
 
 func TestHealthEndpoint_Version(t *testing.T) {
-	srv := NewServer("localhost:0", &MockEngine{}, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	srv := NewServer("localhost:0", &MockEngine{}, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 	srv.SetVersion("v1.2.3")
 
 	req := httptest.NewRequest("GET", "/api/health", nil)
@@ -784,7 +784,7 @@ func TestHealthEndpoint_Version(t *testing.T) {
 }
 
 func TestReadyEndpoint_NotReady(t *testing.T) {
-	srv := NewServer("localhost:0", &MockEngine{}, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	srv := NewServer("localhost:0", &MockEngine{}, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 	srv.subsystemsReady.Store(false)
 
 	req := httptest.NewRequest("GET", "/api/ready", nil)
@@ -930,7 +930,7 @@ func TestHandleGetPluginConfig_CorruptFile(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "plugin_config.json"), []byte("not json"), 0600)
 
 	store := newTestAuthStore(t)
-	srv := NewServer("localhost:0", &MockEngine{}, store, nil, nil, EmbedInfo{}, nil, dir, nil)
+	srv := NewServer("localhost:0", &MockEngine{}, store, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, dir, nil)
 
 	req := httptest.NewRequest("GET", "/api/admin/plugin-config", nil)
 	w := httptest.NewRecorder()

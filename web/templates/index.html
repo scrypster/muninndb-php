@@ -1367,7 +1367,7 @@
                 </div>
               </template>
               <div style="display:flex;gap:0.5rem;margin-top:0.5rem;">
-                <button class="btn-secondary" style="font-size:0.8125rem;" @click="pluginCfg.embedShowForm=true;pluginCfg.embedCmd=''">Reconfigure</button>
+                <button class="btn-secondary" style="font-size:0.8125rem;" @click="pluginCfg.embedShowForm=true;pluginCfg.embedCmd='';loadSavedPluginConfig()">Reconfigure</button>
                 <button class="btn-secondary" style="font-size:0.8125rem;" @click="reembedVault()">Re-embed vault</button>
               </div>
             </div>
@@ -1441,11 +1441,16 @@
                 </template>
               </div>
 
-              <!-- OpenAI key field -->
+              <!-- OpenAI key + base URL fields -->
               <div x-show="pluginCfg.embedProvider==='openai'" style="margin-bottom:1rem;">
                 <div class="form-group">
                   <label>OpenAI API Key</label>
                   <input class="input-field" type="password" x-model="pluginCfg.embedApiKey" placeholder="sk-..." autocomplete="off" />
+                </div>
+                <div class="form-group" style="margin-top:0.75rem;">
+                  <label>Base URL <span style="font-weight:400;color:var(--text-muted);">(optional)</span></label>
+                  <input class="input-field" type="text" x-model="pluginCfg.embedUrl" placeholder="https://api.openai.com/v1" autocomplete="off" />
+                  <div style="font-size:0.75rem;color:var(--text-muted);margin-top:0.25rem;">Leave blank for standard OpenAI. Set to use LocalAI, LM Studio, Azure OpenAI, or any compatible endpoint.</div>
                 </div>
               </div>
 

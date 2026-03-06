@@ -474,8 +474,8 @@ type PluginStatusResponse struct {
 	Healthy   bool      `json:"healthy"`
 	LastCheck time.Time `json:"last_check"`
 	Error     string    `json:"error,omitempty"`
-	Provider  string    `json:"provider,omitempty"` // embed plugins only
-	Model     string    `json:"model,omitempty"`    // embed plugins only
+	Provider  string    `json:"provider,omitempty"`
+	Model     string    `json:"model,omitempty"`
 }
 
 // handlePlugins returns the list of registered plugins with runtime status.
@@ -497,6 +497,9 @@ func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 		if p.Tier == plugin.TierEmbed {
 			entry.Provider = s.embedProvider
 			entry.Model = s.embedModel
+		} else if p.Tier == plugin.TierEnrich {
+			entry.Provider = s.enrichProvider
+			entry.Model = s.enrichModel
 		}
 		out = append(out, entry)
 	}

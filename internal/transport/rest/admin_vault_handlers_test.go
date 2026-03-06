@@ -59,7 +59,7 @@ func (e *jobEngine) GetVaultJob(_ string) (*vaultjob.Job, bool) { return e.job, 
 
 // newVaultTestServer builds a Server with no session secret (admin middleware passes through).
 func newVaultTestServer(engine EngineAPI) *Server {
-	return NewServer("localhost:0", engine, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	return NewServer("localhost:0", engine, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 }
 
 // serveVault is a shorthand to dispatch a request through the mux and return the recorder.

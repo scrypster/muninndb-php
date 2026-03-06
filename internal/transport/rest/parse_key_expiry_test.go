@@ -135,7 +135,7 @@ func (e *consolidateErrEngine) Consolidate(_ context.Context, _ string, _ []stri
 // ── TestHandleSetState_EngineError ───────────────────────────────────────────
 
 func TestHandleSetState_EngineError(t *testing.T) {
-	server := NewServer("localhost:8080", &updateStateErrEngine{}, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", &updateStateErrEngine{}, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	body := `{"state":"active"}`
 	req := httptest.NewRequest(http.MethodPut, "/api/engrams/test-id/state", strings.NewReader(body))
@@ -151,7 +151,7 @@ func TestHandleSetState_EngineError(t *testing.T) {
 // ── TestHandleListDeleted_EngineError ─────────────────────────────────────────
 
 func TestHandleListDeleted_EngineError(t *testing.T) {
-	server := NewServer("localhost:8080", &listDeletedErrRESTEngine{}, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", &listDeletedErrRESTEngine{}, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/deleted?vault=default", nil)
 	w := httptest.NewRecorder()
@@ -165,7 +165,7 @@ func TestHandleListDeleted_EngineError(t *testing.T) {
 // ── TestHandleRetryEnrich_EngineError ─────────────────────────────────────────
 
 func TestHandleRetryEnrich_EngineError(t *testing.T) {
-	server := NewServer("localhost:8080", &retryEnrichErrRESTEngine{}, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", &retryEnrichErrRESTEngine{}, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/engrams/test-id/retry-enrich", nil)
 	w := httptest.NewRecorder()
@@ -179,7 +179,7 @@ func TestHandleRetryEnrich_EngineError(t *testing.T) {
 // ── TestHandleEvolve_EngineError ──────────────────────────────────────────────
 
 func TestHandleEvolve_EngineError(t *testing.T) {
-	server := NewServer("localhost:8080", &evolveErrEngine{}, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", &evolveErrEngine{}, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	body := `{"new_content":"updated content","reason":"fixing a bug"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/engrams/test-id/evolve", strings.NewReader(body))
@@ -195,7 +195,7 @@ func TestHandleEvolve_EngineError(t *testing.T) {
 // ── TestHandleConsolidate_EngineError ─────────────────────────────────────────
 
 func TestHandleConsolidate_EngineError(t *testing.T) {
-	server := NewServer("localhost:8080", &consolidateErrEngine{}, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", &consolidateErrEngine{}, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	payload := map[string]interface{}{
 		"ids":            []string{"id-1", "id-2"},

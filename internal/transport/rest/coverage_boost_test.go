@@ -134,7 +134,7 @@ func TestApplyRecallModePreset_ZeroPresetIsNoop(t *testing.T) {
 
 func TestActivate_WithSemanticMode(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	body := `{"context":["test"],"vault":"default","mode":"semantic"}`
 	req := httptest.NewRequest("POST", "/api/activate", strings.NewReader(body))
@@ -149,7 +149,7 @@ func TestActivate_WithSemanticMode(t *testing.T) {
 
 func TestActivate_WithRecentMode(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	body := `{"context":["test"],"vault":"default","mode":"recent"}`
 	req := httptest.NewRequest("POST", "/api/activate", strings.NewReader(body))
@@ -164,7 +164,7 @@ func TestActivate_WithRecentMode(t *testing.T) {
 
 func TestActivate_WithBalancedMode(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	body := `{"context":["test"],"vault":"default","mode":"balanced"}`
 	req := httptest.NewRequest("POST", "/api/activate", strings.NewReader(body))
@@ -179,7 +179,7 @@ func TestActivate_WithBalancedMode(t *testing.T) {
 
 func TestActivate_WithDeepMode(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	body := `{"context":["test"],"vault":"default","mode":"deep"}`
 	req := httptest.NewRequest("POST", "/api/activate", strings.NewReader(body))
@@ -194,7 +194,7 @@ func TestActivate_WithDeepMode(t *testing.T) {
 
 func TestActivate_InvalidMode(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	body := `{"context":["test"],"vault":"default","mode":"nonexistent"}`
 	req := httptest.NewRequest("POST", "/api/activate", strings.NewReader(body))
@@ -209,7 +209,7 @@ func TestActivate_InvalidMode(t *testing.T) {
 
 func TestActivate_EngineError(t *testing.T) {
 	eng := &activateErrorEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	body := `{"context":["test"],"vault":"default"}`
 	req := httptest.NewRequest("POST", "/api/activate", strings.NewReader(body))
@@ -235,7 +235,7 @@ func (e *activateErrorEngine) Activate(_ context.Context, _ *ActivateRequest) (*
 
 func TestGetEngram_EngineError_Boost(t *testing.T) {
 	eng := &readErrorEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("GET", "/api/engrams/some-id", nil)
 	w := httptest.NewRecorder()
@@ -259,7 +259,7 @@ func (e *readErrorEngine) Read(_ context.Context, _ *ReadRequest) (*ReadResponse
 
 func TestDeleteEngram_EngineError(t *testing.T) {
 	eng := &forgetErrorEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("DELETE", "/api/engrams/01ARZ3NDEKTSV4RRFFQ69G5FAV", nil)
 	w := httptest.NewRecorder()
@@ -283,7 +283,7 @@ func (e *forgetErrorEngine) Forget(_ context.Context, _ *ForgetRequest) (*Forget
 
 func TestHandleLink_Success(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	body := `{"source_id":"id-a","target_id":"id-b","rel_type":1,"weight":0.9,"vault":"default"}`
 	req := httptest.NewRequest("POST", "/api/link", strings.NewReader(body))
@@ -305,7 +305,7 @@ func TestHandleLink_Success(t *testing.T) {
 
 func TestHandleLink_InvalidJSON_Boost(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("POST", "/api/link", strings.NewReader("not json"))
 	req.Header.Set("Content-Type", "application/json")
@@ -319,7 +319,7 @@ func TestHandleLink_InvalidJSON_Boost(t *testing.T) {
 
 func TestHandleLink_EngramNotFound(t *testing.T) {
 	eng := &linkNotFoundEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	body := `{"source_id":"id-a","target_id":"id-b"}`
 	req := httptest.NewRequest("POST", "/api/link", strings.NewReader(body))
@@ -334,7 +334,7 @@ func TestHandleLink_EngramNotFound(t *testing.T) {
 
 func TestHandleLink_EngramSoftDeleted(t *testing.T) {
 	eng := &linkSoftDeletedEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	body := `{"source_id":"id-a","target_id":"id-b"}`
 	req := httptest.NewRequest("POST", "/api/link", strings.NewReader(body))
@@ -349,7 +349,7 @@ func TestHandleLink_EngramSoftDeleted(t *testing.T) {
 
 func TestHandleLink_GenericError(t *testing.T) {
 	eng := &linkGenericErrorEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	body := `{"source_id":"id-a","target_id":"id-b"}`
 	req := httptest.NewRequest("POST", "/api/link", strings.NewReader(body))
@@ -388,7 +388,7 @@ func (e *linkGenericErrorEngine) Link(_ context.Context, _ *mbp.LinkRequest) (*L
 
 func TestHandleStats_EngineError(t *testing.T) {
 	eng := &statErrorEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("GET", "/api/stats?vault=default", nil)
 	w := httptest.NewRecorder()
@@ -412,7 +412,7 @@ func (e *statErrorEngine) Stat(_ context.Context, _ *StatRequest) (*StatResponse
 
 func TestHandleWorkerStats(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("GET", "/api/workers", nil)
 	w := httptest.NewRecorder()
@@ -429,7 +429,7 @@ func TestHandleWorkerStats(t *testing.T) {
 
 func TestHandleHello_InvalidJSON_Boost(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("POST", "/api/hello", strings.NewReader("{bad"))
 	req.Header.Set("Content-Type", "application/json")
@@ -443,7 +443,7 @@ func TestHandleHello_InvalidJSON_Boost(t *testing.T) {
 
 func TestHandleHello_EngineError(t *testing.T) {
 	eng := &helloErrorEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	body := `{"vault":"default"}`
 	req := httptest.NewRequest("POST", "/api/hello", strings.NewReader(body))
@@ -468,7 +468,7 @@ func (e *helloErrorEngine) Hello(_ context.Context, _ *HelloRequest) (*HelloResp
 
 func TestCreateEngram_EngineError(t *testing.T) {
 	eng := &writeErrorEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	body := `{"concept":"test","content":"test content"}`
 	req := httptest.NewRequest("POST", "/api/engrams", strings.NewReader(body))
@@ -493,7 +493,7 @@ func (e *writeErrorEngine) Write(_ context.Context, _ *WriteRequest) (*WriteResp
 
 func TestEvolveEndpoint_InvalidJSON(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("POST", "/api/engrams/test-id/evolve", strings.NewReader("{bad json"))
 	req.Header.Set("Content-Type", "application/json")
@@ -507,7 +507,7 @@ func TestEvolveEndpoint_InvalidJSON(t *testing.T) {
 
 func TestEvolveEndpoint_EngineError(t *testing.T) {
 	eng := &evolveErrorEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	body := `{"new_content":"updated","reason":"fix"}`
 	req := httptest.NewRequest("POST", "/api/engrams/test-id/evolve", strings.NewReader(body))
@@ -532,7 +532,7 @@ func (e *evolveErrorEngine) Evolve(_ context.Context, _, _, _, _ string) (*Evolv
 
 func TestConsolidateEndpoint_InvalidJSON(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("POST", "/api/consolidate", strings.NewReader("{bad"))
 	req.Header.Set("Content-Type", "application/json")
@@ -546,7 +546,7 @@ func TestConsolidateEndpoint_InvalidJSON(t *testing.T) {
 
 func TestConsolidateEndpoint_TooManyIDs(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	ids := make([]string, 51)
 	for i := range ids {
@@ -568,7 +568,7 @@ func TestConsolidateEndpoint_TooManyIDs(t *testing.T) {
 
 func TestConsolidateEndpoint_MissingMergedContent(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	body := `{"ids":["id-1","id-2"]}`
 	req := httptest.NewRequest("POST", "/api/consolidate", strings.NewReader(body))
@@ -583,7 +583,7 @@ func TestConsolidateEndpoint_MissingMergedContent(t *testing.T) {
 
 func TestConsolidateEndpoint_EngineError(t *testing.T) {
 	eng := &consolidateErrorEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	body := `{"ids":["id-1","id-2"],"merged_content":"combined"}`
 	req := httptest.NewRequest("POST", "/api/consolidate", strings.NewReader(body))
@@ -608,7 +608,7 @@ func (e *consolidateErrorEngine) Consolidate(_ context.Context, _ string, _ []st
 
 func TestDecideEndpoint_InvalidJSON(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("POST", "/api/decide", strings.NewReader("{bad"))
 	req.Header.Set("Content-Type", "application/json")
@@ -622,7 +622,7 @@ func TestDecideEndpoint_InvalidJSON(t *testing.T) {
 
 func TestDecideEndpoint_EngineError(t *testing.T) {
 	eng := &decideErrorEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	body := `{"decision":"go with X","rationale":"because Y"}`
 	req := httptest.NewRequest("POST", "/api/decide", strings.NewReader(body))
@@ -647,7 +647,7 @@ func (e *decideErrorEngine) Decide(_ context.Context, _, _, _ string, _, _ []str
 
 func TestRestoreEndpoint_EngineError(t *testing.T) {
 	eng := &restoreErrorEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("POST", "/api/engrams/missing-id/restore", nil)
 	w := httptest.NewRecorder()
@@ -670,7 +670,7 @@ func (e *restoreErrorEngine) Restore(_ context.Context, _, _ string) (*RestoreRe
 
 func TestTraverseEndpoint_InvalidJSON(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("POST", "/api/traverse", strings.NewReader("{bad"))
 	req.Header.Set("Content-Type", "application/json")
@@ -684,7 +684,7 @@ func TestTraverseEndpoint_InvalidJSON(t *testing.T) {
 
 func TestTraverseEndpoint_EngineError(t *testing.T) {
 	eng := &traverseErrorEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	body := `{"start_id":"node-1"}`
 	req := httptest.NewRequest("POST", "/api/traverse", strings.NewReader(body))
@@ -699,7 +699,7 @@ func TestTraverseEndpoint_EngineError(t *testing.T) {
 
 func TestTraverseEndpoint_ClampMaxHopsAndNodes(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	// max_hops > 5 should be clamped to 5; max_nodes > 100 clamped to 100.
 	body := `{"start_id":"node-1","max_hops":99,"max_nodes":999}`
@@ -725,7 +725,7 @@ func (e *traverseErrorEngine) Traverse(_ context.Context, _ string, _ *TraverseR
 
 func TestExplainEndpoint_InvalidJSON(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("POST", "/api/explain", strings.NewReader("{bad"))
 	req.Header.Set("Content-Type", "application/json")
@@ -739,7 +739,7 @@ func TestExplainEndpoint_InvalidJSON(t *testing.T) {
 
 func TestExplainEndpoint_EngineError(t *testing.T) {
 	eng := &explainErrorEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	body := `{"engram_id":"eng-1","query":["test"]}`
 	req := httptest.NewRequest("POST", "/api/explain", strings.NewReader(body))
@@ -764,7 +764,7 @@ func (e *explainErrorEngine) Explain(_ context.Context, _ string, _ *ExplainRequ
 
 func TestSetStateEndpoint_InvalidJSON(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("PUT", "/api/engrams/test-id/state", strings.NewReader("{bad"))
 	req.Header.Set("Content-Type", "application/json")
@@ -778,7 +778,7 @@ func TestSetStateEndpoint_InvalidJSON(t *testing.T) {
 
 func TestSetStateEndpoint_EngineError(t *testing.T) {
 	eng := &setStateErrorEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	body := `{"state":"active"}`
 	req := httptest.NewRequest("PUT", "/api/engrams/test-id/state", strings.NewReader(body))
@@ -803,7 +803,7 @@ func (e *setStateErrorEngine) UpdateState(_ context.Context, _, _, _, _ string) 
 
 func TestRetryEnrichEndpoint_EngineError(t *testing.T) {
 	eng := &retryEnrichErrorEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("POST", "/api/engrams/test-id/retry-enrich", nil)
 	w := httptest.NewRecorder()
@@ -826,7 +826,7 @@ func (e *retryEnrichErrorEngine) RetryEnrich(_ context.Context, _, _ string) (*R
 
 func TestListDeletedEndpoint_LimitClamping(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("GET", "/api/deleted?vault=default&limit=9999", nil)
 	w := httptest.NewRecorder()
@@ -839,7 +839,7 @@ func TestListDeletedEndpoint_LimitClamping(t *testing.T) {
 
 func TestListDeletedEndpoint_EngineError(t *testing.T) {
 	eng := &listDeletedErrorEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("GET", "/api/deleted?vault=default", nil)
 	w := httptest.NewRecorder()
@@ -862,7 +862,7 @@ func (e *listDeletedErrorEngine) ListDeleted(_ context.Context, _ string, _ int)
 
 func TestGetEngramLinks_EngineError(t *testing.T) {
 	eng := &engramLinksErrorEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("GET", "/api/engrams/test-id/links", nil)
 	w := httptest.NewRecorder()
@@ -885,7 +885,7 @@ func (e *engramLinksErrorEngine) GetEngramLinks(_ context.Context, _ *GetEngramL
 
 func TestGetSession_EngineError(t *testing.T) {
 	eng := &sessionErrorEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("GET", "/api/session?vault=default", nil)
 	w := httptest.NewRecorder()
@@ -908,7 +908,7 @@ func (e *sessionErrorEngine) GetSession(_ context.Context, _ *GetSessionRequest)
 
 func TestRecoveryMiddleware_PanicReturns500(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	// Wrap a panicking handler in the recovery middleware and invoke it directly.
 	panickingHandler := server.recoveryMiddleware(func(w http.ResponseWriter, r *http.Request) {
@@ -970,7 +970,7 @@ func TestCtxVault_FallbackToDefault(t *testing.T) {
 
 func TestListEngrams_NegativeOffset(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("GET", "/api/engrams?vault=default&offset=-5", nil)
 	w := httptest.NewRecorder()
@@ -987,7 +987,7 @@ func TestListEngrams_NegativeOffset(t *testing.T) {
 
 func TestHandleHello_Success(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	body := `{"vault":"default"}`
 	req := httptest.NewRequest("POST", "/api/hello", strings.NewReader(body))
@@ -1013,7 +1013,7 @@ func TestHandleHello_Success(t *testing.T) {
 
 func TestHandleStats_NoVault(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("GET", "/api/stats", nil)
 	w := httptest.NewRecorder()

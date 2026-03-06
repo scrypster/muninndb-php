@@ -2,8 +2,8 @@ package rest
 
 import (
 	"context"
-	"crypto/tls"
 	"crypto/subtle"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,8 +18,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/google/uuid"
+	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/scrypster/muninndb/internal/auth"
 	"github.com/scrypster/muninndb/internal/config"
 	"github.com/scrypster/muninndb/internal/engine"
@@ -62,6 +62,10 @@ type Server struct {
 	embedProvider string // "ollama", "openai", "voyage", or "none"
 	embedModel    string // model name, or "" if none
 
+	// Enrichment info — set at construction time, static for the lifetime of the server.
+	enrichProvider string // "ollama", "openai", "anthropic", or ""
+	enrichModel    string // model name, or ""
+
 	// MCP info — set at construction time for the /api/admin/mcp-info endpoint.
 	mcpAddr     string // MCP listen address, e.g. ":8750"
 	mcpHasToken bool   // whether a bearer token is configured
@@ -81,7 +85,7 @@ type Server struct {
 
 	// Health check fields.
 	startTime       time.Time
-	version         string     // set at construction time; empty falls back to "dev"
+	version         string // set at construction time; empty falls back to "dev"
 	dbWritable      atomic.Bool
 	subsystemsReady atomic.Bool
 
@@ -97,6 +101,12 @@ type EmbedInfo struct {
 	Model    string // model name, or ""
 }
 
+// EnrichInfo carries static enrichment metadata set at server construction time.
+type EnrichInfo struct {
+	Provider string // "ollama", "openai", "anthropic", or ""
+	Model    string // model name, or ""
+}
+
 // MCPInfo carries static MCP server metadata set at server construction time.
 type MCPInfo struct {
 	Addr     string // MCP listen address, e.g. ":8750"
@@ -107,7 +117,7 @@ type MCPInfo struct {
 //
 // sessionSecret is used to validate admin session cookies on /api/admin/* routes.
 // corsOrigins is the set of allowed CORS origins; nil disables cross-origin access.
-func NewServer(addr string, engine EngineAPI, authStore *auth.Store, sessionSecret []byte, corsOrigins []string, embedInfo EmbedInfo, pluginRegistry *plugin.Registry, dataDir string, tlsConfig *tls.Config, mcpInfo ...MCPInfo) *Server {
+func NewServer(addr string, engine EngineAPI, authStore *auth.Store, sessionSecret []byte, corsOrigins []string, embedInfo EmbedInfo, enrichInfo EnrichInfo, pluginRegistry *plugin.Registry, dataDir string, tlsConfig *tls.Config, mcpInfo ...MCPInfo) *Server {
 	mux := http.NewServeMux()
 	s := &Server{
 		addr:           addr,
@@ -118,6 +128,8 @@ func NewServer(addr string, engine EngineAPI, authStore *auth.Store, sessionSecr
 		mux:            mux,
 		embedProvider:  embedInfo.Provider,
 		embedModel:     embedInfo.Model,
+		enrichProvider: enrichInfo.Provider,
+		enrichModel:    enrichInfo.Model,
 		pluginRegistry: pluginRegistry,
 		dataDir:        dataDir,
 		tlsConfig:      tlsConfig,

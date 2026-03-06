@@ -76,7 +76,7 @@ func newConsolidationTestEngine(t *testing.T) *consolidationMockEngine {
 // TestHandleConsolidate_Success posts a valid consolidation request and expects HTTP 200.
 func TestHandleConsolidate_Success(t *testing.T) {
 	eng := newConsolidationTestEngine(t)
-	srv := NewServer("localhost:0", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	srv := NewServer("localhost:0", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	handler := srv.handleConsolidate()
 
@@ -95,7 +95,7 @@ func TestHandleConsolidate_Success(t *testing.T) {
 // TestHandleConsolidate_MissingVault expects HTTP 400 when the vault path value is empty.
 func TestHandleConsolidate_MissingVault(t *testing.T) {
 	eng := newConsolidationTestEngine(t)
-	srv := NewServer("localhost:0", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	srv := NewServer("localhost:0", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	handler := srv.handleConsolidate()
 
@@ -115,7 +115,7 @@ func TestHandleConsolidate_MissingVault(t *testing.T) {
 // (the consolidation worker performs a best-effort run on any vault name).
 func TestHandleConsolidate_UnknownVault(t *testing.T) {
 	eng := newConsolidationTestEngine(t)
-	srv := NewServer("localhost:0", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	srv := NewServer("localhost:0", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	handler := srv.handleConsolidate()
 
@@ -136,7 +136,7 @@ func TestHandleConsolidate_UnknownVault(t *testing.T) {
 // TestHandleConsolidate_InvalidJSON expects HTTP 400 when the request body is not valid JSON.
 func TestHandleConsolidate_InvalidJSON(t *testing.T) {
 	eng := newConsolidationTestEngine(t)
-	srv := NewServer("localhost:0", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	srv := NewServer("localhost:0", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	handler := srv.handleConsolidate()
 

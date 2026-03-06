@@ -54,13 +54,10 @@ func (g *Graph) GetAssociations(ctx context.Context, ws [8]byte, id [16]byte, ma
 	copy(prefix[1:9], ws[:])
 	copy(prefix[9:25], id[:])
 
-	upperBound := make([]byte, len(prefix))
-	copy(upperBound, prefix)
-	upperBound[len(upperBound)-1]++
-
+	// prefixSuccessor handles 0xFF overflow correctly; nil means no upper bound.
 	iter, err := g.db.NewIter(&pebble.IterOptions{
 		LowerBound: prefix,
-		UpperBound: upperBound,
+		UpperBound: prefixSuccessor(prefix),
 	})
 	if err != nil {
 		return nil, err
@@ -218,4 +215,20 @@ func (g *Graph) Traverse(
 	}
 
 	return results, nil
+}
+
+// prefixSuccessor returns the smallest byte slice that is strictly greater than
+// any key sharing the given prefix. It finds the rightmost byte that is not 0xFF,
+// increments it, and truncates — correctly handling carry without overflow.
+// Returns nil if every byte is 0xFF (no upper bound needed).
+func prefixSuccessor(prefix []byte) []byte {
+	for i := len(prefix) - 1; i >= 0; i-- {
+		if prefix[i] < 0xFF {
+			succ := make([]byte, i+1)
+			copy(succ, prefix)
+			succ[i]++
+			return succ
+		}
+	}
+	return nil // all 0xFF — no upper bound
 }

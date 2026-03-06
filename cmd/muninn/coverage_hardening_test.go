@@ -1663,6 +1663,33 @@ func TestBuildEmbedder_SavedConfigOpenAI(t *testing.T) {
 	}
 }
 
+func TestBuildEmbedder_SavedConfigOpenAI_CustomBaseURL(t *testing.T) {
+	// Covers the path where the UI saves a custom embed_url for the openai provider
+	// (e.g. LocalAI, LM Studio, Azure OpenAI) and the server loads it from disk.
+	t.Setenv("MUNINN_OLLAMA_URL", "")
+	t.Setenv("MUNINN_OPENAI_KEY", "")
+	t.Setenv("MUNINN_OPENAI_URL", "")
+	t.Setenv("MUNINN_VOYAGE_KEY", "")
+	t.Setenv("MUNINN_COHERE_KEY", "")
+	t.Setenv("MUNINN_GOOGLE_KEY", "")
+	t.Setenv("MUNINN_JINA_KEY", "")
+	t.Setenv("MUNINN_MISTRAL_KEY", "")
+	t.Setenv("MUNINN_LOCAL_EMBED", "0")
+
+	cfg := plugincfg.PluginConfig{
+		EmbedProvider: "openai",
+		EmbedAPIKey:   "fake-key",
+		EmbedURL:      "http://127.0.0.1:1/unreachable", // custom base URL (port 1 = connection refused)
+	}
+	embedder, _, err := buildEmbedder(context.Background(), cfg, t.TempDir())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if embedder == nil {
+		t.Error("expected noop embedder fallback when custom base URL is unreachable")
+	}
+}
+
 func TestBuildEmbedder_SavedConfigVoyage(t *testing.T) {
 	t.Setenv("MUNINN_OLLAMA_URL", "")
 	t.Setenv("MUNINN_OPENAI_KEY", "")

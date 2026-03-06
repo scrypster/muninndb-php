@@ -20,7 +20,7 @@ import (
 
 func TestHandleGetEngram_EmptyID(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("GET", "/api/engrams/x", nil)
 	req.SetPathValue("id", "") // force empty
@@ -38,7 +38,7 @@ func TestHandleGetEngram_EmptyID(t *testing.T) {
 
 func TestHandleDeleteEngram_EmptyID_Direct(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("DELETE", "/api/engrams/x", nil)
 	req.SetPathValue("id", "")
@@ -56,7 +56,7 @@ func TestHandleDeleteEngram_EmptyID_Direct(t *testing.T) {
 
 func TestHandleMCPInfo_WithMalformedAddr(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 	// A malformed mcpAddr that will make net.SplitHostPort fail.
 	server.mcpAddr = "not-a-valid-addr:with:too:many:colons"
 
@@ -71,7 +71,7 @@ func TestHandleMCPInfo_WithMalformedAddr(t *testing.T) {
 
 func TestHandleMCPInfo_WithWildcardHost(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 	server.mcpAddr = "0.0.0.0:8750"
 
 	req := httptest.NewRequest("GET", "/api/admin/mcp", nil)
@@ -89,7 +89,7 @@ func TestHandleMCPInfo_WithWildcardHost(t *testing.T) {
 
 func TestHandleCloneVault_SameNameAsSource(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	body := bytes.NewReader([]byte(`{"new_name":"source-vault"}`))
 	req := httptest.NewRequest("POST", "/api/admin/vaults/source-vault/clone", body)
@@ -110,7 +110,7 @@ func TestHandleCloneVault_SameNameAsSource(t *testing.T) {
 func TestHandlePutPluginConfig_Success_Targeted(t *testing.T) {
 	eng := &MockEngine{}
 	dataDir := t.TempDir()
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, dataDir, nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, dataDir, nil)
 
 	body := bytes.NewReader([]byte(`{"embed":{"provider_url":"ollama://localhost:11434/test"}}`))
 	req := httptest.NewRequest("PUT", "/api/admin/plugins/config", body)
@@ -129,7 +129,7 @@ func TestHandlePutPluginConfig_Success_Targeted(t *testing.T) {
 
 func TestRecoveryMiddleware_AbortHandlerRepanics(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	abortHandler := server.recoveryMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		panic(http.ErrAbortHandler)
@@ -159,7 +159,7 @@ func TestHandlePlugins_WithEmbedPlugin(t *testing.T) {
 	}
 
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, registry, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, registry, "", nil)
 	server.embedProvider = "test-provider"
 	server.embedModel = "test-model"
 
@@ -192,7 +192,7 @@ func (p *testEmbedPlugin) Dimension() int { return 2 }
 
 func TestHandleReplicationStatus_Exported(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("GET", "/v1/replication/status", nil)
 	w := httptest.NewRecorder()
@@ -205,7 +205,7 @@ func TestHandleReplicationStatus_Exported(t *testing.T) {
 
 func TestHandleReplicationLag_Exported(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("GET", "/v1/replication/lag", nil)
 	w := httptest.NewRecorder()
@@ -224,7 +224,7 @@ func TestHandleReplicationLag_Exported(t *testing.T) {
 
 func TestHandleSubscribe_ContextCancelExit(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	req := httptest.NewRequest("GET", "/api/subscribe?vault=default", nil)
@@ -250,7 +250,7 @@ func TestHandleSubscribe_ContextCancelExit(t *testing.T) {
 
 func TestHandleSubscribe_WithParams(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	// Test with various query params to cover parameter parsing branches.
@@ -270,7 +270,7 @@ func TestHandleSubscribe_WithParams(t *testing.T) {
 
 func TestHandleSubscribe_InvalidParams(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	// Test with out-of-range threshold, negative ttl, and out-of-range rate.
@@ -290,7 +290,7 @@ func TestHandleSubscribe_InvalidParams(t *testing.T) {
 
 func TestHandlePromoteReplica_Exported(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("POST", "/v1/replication/promote", nil)
 	w := httptest.NewRecorder()
@@ -332,7 +332,7 @@ func TestCtxVault_WithEmptyContextValue(t *testing.T) {
 
 func TestHandleConsolidate_EmptyVault(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	handler := server.handleConsolidate()
 	req := httptest.NewRequest("POST", "/v1/vaults//consolidate", strings.NewReader(`{}`))
@@ -348,7 +348,7 @@ func TestHandleConsolidate_EmptyVault(t *testing.T) {
 
 func TestHandleConsolidate_InvalidJSON_Targeted(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	handler := server.handleConsolidate()
 	req := httptest.NewRequest("POST", "/v1/vaults/default/consolidate", strings.NewReader("{bad"))
@@ -368,7 +368,7 @@ func TestHandleConsolidate_InvalidJSON_Targeted(t *testing.T) {
 
 func TestHandleEvolve_MissingContent(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	body := bytes.NewReader([]byte(`{"new_content":"","reason":""}`))
 	req := httptest.NewRequest("PUT", "/api/engrams/some-id/evolve", body)
@@ -431,7 +431,7 @@ func TestSetVaultConfig_InvalidVaultName_Boost(t *testing.T) {
 
 func TestHandleGetSession_WithSinceParam(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("GET", "/api/session?since=2026-01-01T00:00:00Z&limit=10", nil)
 	w := httptest.NewRecorder()
@@ -499,7 +499,7 @@ func TestCreateAPIKey_InvalidMode(t *testing.T) {
 
 func TestHandleMergeVault_InvalidTargetName(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	body := bytes.NewReader([]byte(`{"target":"INVALID!"}`))
 	req := httptest.NewRequest("POST", "/api/admin/vaults/source/merge-into", body)
@@ -515,7 +515,7 @@ func TestHandleMergeVault_InvalidTargetName(t *testing.T) {
 
 func TestHandleMergeVault_SameSourceTarget_Targeted(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	body := bytes.NewReader([]byte(`{"target":"source"}`))
 	req := httptest.NewRequest("POST", "/api/admin/vaults/source/merge-into", body)

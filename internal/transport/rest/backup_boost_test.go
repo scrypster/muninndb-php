@@ -88,7 +88,7 @@ func TestBackupCopyDir_CopiesFiles(t *testing.T) {
 
 func TestHandleBackup_CheckpointFailure(t *testing.T) {
 	eng := &checkpointErrorEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	outputDir := filepath.Join(t.TempDir(), "backup-fail-out")
 	body := `{"output_dir":"` + outputDir + `"}`
@@ -134,7 +134,7 @@ func TestHandleBackup_WithDataDir_CopiesWalAndSecret(t *testing.T) {
 	// Use a real Pebble checkpoint engine.
 	pebbleDir := filepath.Join(dataDir, "pebble")
 	eng := &backupMockEngine{pebbleDir: pebbleDir}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, dataDir, nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, dataDir, nil)
 
 	outputDir := filepath.Join(t.TempDir(), "backup-with-wal")
 	body := `{"output_dir":"` + outputDir + `"}`
@@ -163,7 +163,7 @@ func TestHandleBackup_WithDataDir_CopiesWalAndSecret(t *testing.T) {
 
 func TestReadyEndpoint_NotReady_Boost(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 	// Force subsystemsReady to false (it defaults to false, but subsystemsReady
 	// is set to true somewhere in the initialization. Let's check.)
 	server.subsystemsReady.Store(false)
@@ -183,7 +183,7 @@ func TestReadyEndpoint_NotReady_Boost(t *testing.T) {
 
 func TestHealthEndpoint_WithVersion(t *testing.T) {
 	eng := &MockEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 	server.version = "1.2.3"
 
 	req := httptest.NewRequest("GET", "/api/health", nil)
@@ -264,7 +264,7 @@ func TestWithClusterAuth_InactiveCluster_PassesThrough(t *testing.T) {
 
 func TestContradictionsEndpoint_EngineError(t *testing.T) {
 	eng := &contradictionsErrorEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("GET", "/api/contradictions?vault=default", nil)
 	w := httptest.NewRecorder()
@@ -287,7 +287,7 @@ func (e *contradictionsErrorEngine) GetContradictions(_ context.Context, _ strin
 
 func TestGuideEndpoint_EngineError(t *testing.T) {
 	eng := &guideErrorEngine{}
-	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, nil, "", nil)
+	server := NewServer("localhost:8080", eng, nil, nil, nil, EmbedInfo{}, EnrichInfo{}, nil, "", nil)
 
 	req := httptest.NewRequest("GET", "/api/guide?vault=default", nil)
 	w := httptest.NewRecorder()
