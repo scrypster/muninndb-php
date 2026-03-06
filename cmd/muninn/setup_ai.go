@@ -273,8 +273,17 @@ func windsurfConfigPath() string {
 }
 
 // openClawConfigPath returns the path to OpenClaw's config file.
-// OpenClaw reads ~/.openclaw/openclaw.json — not mcp.json.
+// macOS/Linux: ~/.openclaw/openclaw.json
+// Windows:     %APPDATA%\OpenClaw\openclaw.json
 func openClawConfigPath() string {
+	if runtime.GOOS == "windows" {
+		appData := os.Getenv("APPDATA")
+		if appData == "" {
+			home, _ := os.UserHomeDir()
+			appData = filepath.Join(home, "AppData", "Roaming")
+		}
+		return filepath.Join(appData, "OpenClaw", "openclaw.json")
+	}
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".openclaw", "openclaw.json")
 }
@@ -342,66 +351,99 @@ func configureWindsurf(mcpURL, token string) error {
 	return nil
 }
 
-// openClawMCPEntry returns the JSON map for muninn's OpenClaw MCP entry.
-// OpenClaw uses transport:"streamable-http" (not type:"http") and nests
-// MCP servers under provider.mcpServers in openclaw.json.
-func openClawMCPEntry(mcpURL, token string) map[string]any {
-	entry := map[string]any{
-		"transport": "streamable-http",
-		"url":       mcpURL,
+// openClawMCPEntry returns the JSON map for muninn's OpenClaw stdio MCP entry.
+// OpenClaw spawns this as a local subprocess; the muninn binary handles
+// auth internally by reading ~/.muninn/mcp.token at runtime.
+func openClawMCPEntry() map[string]any {
+	return map[string]any{
+		"command":   "muninn",
+		"args":      []any{"mcp"},
+		"transport": "stdio",
 	}
-	if token != "" {
-		entry["headers"] = map[string]any{
-			"Authorization": "Bearer " + token,
-		}
-	}
-	return entry
 }
 
-// mergeOpenClawMCP upserts muninn into cfg["provider"]["mcpServers"]["muninn"],
-// preserving all other entries.
-func mergeOpenClawMCP(cfg map[string]any, mcpURL, token string) {
-	provider, ok := cfg["provider"].(map[string]any)
-	if !ok {
-		provider = map[string]any{}
-	}
-	servers, ok := provider["mcpServers"].(map[string]any)
+// mergeOpenClawMCP upserts muninn into the root-level cfg["mcpServers"] map,
+// preserving all other entries. OpenClaw reads root-level mcpServers for
+// stdio server definitions.
+func mergeOpenClawMCP(cfg map[string]any) {
+	servers, ok := cfg["mcpServers"].(map[string]any)
 	if !ok {
 		servers = map[string]any{}
 	}
-	servers["muninn"] = openClawMCPEntry(mcpURL, token)
-	provider["mcpServers"] = servers
-	cfg["provider"] = provider
+	servers["muninn"] = openClawMCPEntry()
+	cfg["mcpServers"] = servers
 }
 
-// configureOpenClaw writes the muninn MCP entry into OpenClaw's openclaw.json.
-func configureOpenClaw(mcpURL, token string) error {
+// configureOpenClaw writes the muninn stdio MCP entry into OpenClaw's openclaw.json.
+// The mcpURL and token parameters are accepted for interface compatibility but are
+// not embedded in the config — the muninn mcp proxy reads the token at runtime.
+func configureOpenClaw(_, _ string) error {
 	path := openClawConfigPath()
-
-	hadProvider := false
-	if existing, err := os.ReadFile(path); err == nil {
-		var peek map[string]any
-		if json.Unmarshal(existing, &peek) == nil {
-			hadProvider = peek["provider"] != nil
-		}
-	}
-
-	_, err := writeAIToolConfig(path, func(cfg map[string]any) {
-		mergeOpenClawMCP(cfg, mcpURL, token)
+	summary, err := writeAIToolConfig(path, func(cfg map[string]any) {
+		mergeOpenClawMCP(cfg)
 	})
 	if err != nil {
 		return err
 	}
-
-	var summary string
-	if hadProvider {
-		summary = "updated provider.mcpServers.muninn in existing config (other servers preserved)"
-	} else {
-		summary = "added provider.mcpServers.muninn to config"
-	}
-
 	fmt.Printf("  ✓ OpenClaw: %s\n    %s\n", summary, path)
 	fmt.Println("  → Restart OpenClaw to activate MuninnDB memory")
+	return nil
+}
+
+// openClawSkillContent is the SKILL.md content that teaches OpenClaw how to
+// use MuninnDB for persistent memory across sessions.
+const openClawSkillContent = `# MuninnDB Memory
+
+MuninnDB is your persistent memory system, available via the "muninn" MCP server.
+
+## When to use memory
+
+- Store important facts, decisions, user preferences, and project context
+- Recall relevant memories at the start of each conversation
+- Be proactive — if the user shares something worth remembering, store it without being asked
+
+## Available tools
+
+- **muninn_remember** — store a memory (vault, concept, content)
+- **muninn_recall** — search memories by context (vault, context)
+- **muninn_read** — read a specific memory by ID (vault, id)
+- **muninn_link** — link two related memories (vault, source_id, target_id)
+- **muninn_guide** — learn MuninnDB best practices (call this on first connect)
+- **muninn_remember_batch** — store multiple memories in one call (vault, memories[])
+
+## Usage pattern
+
+At the start of each session, call muninn_recall with relevant context to surface
+what you know. When the user shares preferences, facts, or decisions, call
+muninn_remember. Use vault "default" for general memories.
+`
+
+// openClawSkillPath returns the path to the muninn SKILL.md for OpenClaw.
+// macOS/Linux: ~/.openclaw/skills/muninn/SKILL.md
+// Windows:     %APPDATA%\OpenClaw\skills\muninn\SKILL.md
+func openClawSkillPath() string {
+	if runtime.GOOS == "windows" {
+		appData := os.Getenv("APPDATA")
+		if appData == "" {
+			home, _ := os.UserHomeDir()
+			appData = filepath.Join(home, "AppData", "Roaming")
+		}
+		return filepath.Join(appData, "OpenClaw", "skills", "muninn", "SKILL.md")
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".openclaw", "skills", "muninn", "SKILL.md")
+}
+
+// configureOpenClawSkill writes the MuninnDB SKILL.md into OpenClaw's skills directory.
+func configureOpenClawSkill() error {
+	path := openClawSkillPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return fmt.Errorf("create skill directory: %w", err)
+	}
+	if err := os.WriteFile(path, []byte(openClawSkillContent), 0644); err != nil {
+		return fmt.Errorf("write SKILL.md: %w", err)
+	}
+	fmt.Printf("  ✓ OpenClaw skill: wrote SKILL.md\n    %s\n", path)
 	return nil
 }
 
