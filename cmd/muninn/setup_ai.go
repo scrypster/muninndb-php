@@ -218,6 +218,33 @@ func mergeOpenCodeMCP(cfg map[string]any, mcpURL, token string) {
 	cfg["mcp"] = mcp
 }
 
+// claudeCodeMCPEntry returns the JSON map for muninn's Claude Code MCP entry.
+// Claude Code requires "type":"http" for schema validation; this is distinct from
+// Claude Desktop which crashes if "type" is present (see mcpServerEntry).
+func claudeCodeMCPEntry(mcpURL, token string) map[string]any {
+	entry := map[string]any{
+		"type": "http",
+		"url":  mcpURL,
+	}
+	if token != "" {
+		entry["headers"] = map[string]any{
+			"Authorization": "Bearer " + token,
+		}
+	}
+	return entry
+}
+
+// mergeClaudeCodeMCP upserts muninn into cfg["mcpServers"] using the Claude
+// Code-specific entry format (includes "type":"http").
+func mergeClaudeCodeMCP(cfg map[string]any, mcpURL, token string) {
+	servers, ok := cfg["mcpServers"].(map[string]any)
+	if !ok {
+		servers = map[string]any{}
+	}
+	servers["muninn"] = claudeCodeMCPEntry(mcpURL, token)
+	cfg["mcpServers"] = servers
+}
+
 // claudeCodeConfigPath returns the path to Claude Code's (claude CLI) config file.
 // Claude Code reads ~/.claude.json for global MCP server configuration.
 func claudeCodeConfigPath() string {
@@ -229,7 +256,7 @@ func claudeCodeConfigPath() string {
 func configureClaudeCode(mcpURL, token string) error {
 	path := claudeCodeConfigPath()
 	summary, err := writeAIToolConfig(path, func(cfg map[string]any) {
-		mergeMCPServers(cfg, mcpURL, token)
+		mergeClaudeCodeMCP(cfg, mcpURL, token)
 	})
 	if err != nil {
 		return err

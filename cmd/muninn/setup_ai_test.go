@@ -255,6 +255,54 @@ func TestMCPServerEntry_NoToken(t *testing.T) {
 	}
 }
 
+// TestClaudeCodeMCPEntry_HasType verifies that the Claude Code entry includes "type":"http".
+func TestClaudeCodeMCPEntry_HasType(t *testing.T) {
+	entry := claudeCodeMCPEntry("http://localhost:8750/mcp", "")
+	if entry["type"] != "http" {
+		t.Errorf(`type = %v, want "http" — Claude Code schema requires this field`, entry["type"])
+	}
+	if entry["url"] != "http://localhost:8750/mcp" {
+		t.Errorf("url = %v, want http://localhost:8750/mcp", entry["url"])
+	}
+}
+
+// TestClaudeCodeMCPEntry_WithToken verifies token is included under headers.
+func TestClaudeCodeMCPEntry_WithToken(t *testing.T) {
+	entry := claudeCodeMCPEntry("http://localhost:8750/mcp", "mdb_tok")
+	headers, ok := entry["headers"].(map[string]any)
+	if !ok {
+		t.Fatal("headers missing")
+	}
+	if headers["Authorization"] != "Bearer mdb_tok" {
+		t.Errorf("Authorization = %v, want Bearer mdb_tok", headers["Authorization"])
+	}
+}
+
+// TestClaudeCodeMCPEntry_NoToken verifies no headers when token is empty.
+func TestClaudeCodeMCPEntry_NoToken(t *testing.T) {
+	entry := claudeCodeMCPEntry("http://localhost:8750/mcp", "")
+	if _, ok := entry["headers"]; ok {
+		t.Error("headers should not be present when token is empty")
+	}
+}
+
+// TestMergeClaudeCodeMCP_SetsTypeField verifies mergeClaudeCodeMCP writes "type":"http".
+func TestMergeClaudeCodeMCP_SetsTypeField(t *testing.T) {
+	cfg := map[string]any{}
+	mergeClaudeCodeMCP(cfg, "http://localhost:8750/mcp", "tok")
+	servers, ok := cfg["mcpServers"].(map[string]any)
+	if !ok {
+		t.Fatal("mcpServers missing")
+	}
+	muninn, ok := servers["muninn"].(map[string]any)
+	if !ok {
+		t.Fatal("mcpServers.muninn missing")
+	}
+	if muninn["type"] != "http" {
+		t.Errorf(`type = %v, want "http"`, muninn["type"])
+	}
+}
+
 // TestParseToolNumbers verifies tool selection parsing.
 func TestParseToolNumbers(t *testing.T) {
 	tests := []struct {

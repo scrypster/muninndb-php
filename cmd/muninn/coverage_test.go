@@ -907,6 +907,10 @@ func TestConfigureClaudeCode(t *testing.T) {
 	if !strings.Contains(string(data), `"muninn"`) {
 		t.Errorf("muninn not in config: %s", data)
 	}
+	// Regression guard for issue #109: Claude Code schema requires "type":"http".
+	if !strings.Contains(string(data), `"type"`) || !strings.Contains(string(data), `"http"`) {
+		t.Errorf(`"type":"http" missing from written config — Claude Code schema will reject it: %s`, data)
+	}
 }
 
 // --- configureNamedTools claude-code alias ---
