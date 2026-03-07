@@ -207,6 +207,7 @@ type ActivationItem struct {
 	Why             string          `msgpack:"why,omitempty"               json:"why,omitempty"`
 	HopPath         []string        `msgpack:"hop_path,omitempty"          json:"hop_path,omitempty"`
 	Dormant         bool            `msgpack:"dormant,omitempty"           json:"dormant,omitempty"`
+	CreatedAt       int64           `msgpack:"created_at,omitempty"        json:"created_at,omitempty"`
 	LastAccess      int64           `msgpack:"last_access,omitempty"       json:"last_access,omitempty"`
 	AccessCount     uint32          `msgpack:"access_count,omitempty"      json:"access_count,omitempty"`
 	Relevance       float32         `msgpack:"relevance,omitempty"         json:"relevance,omitempty"`

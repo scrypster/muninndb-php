@@ -186,6 +186,46 @@ func TestActivationToMemoryEmptySourceType(t *testing.T) {
 	}
 }
 
+// TestActivationToMemoryCreatedAt is a regression test for GitHub issue #97:
+// muninn_recall returned created_at: 0001-01-01T00:00:00Z (Go zero-value) for
+// all engrams because CreatedAt was not mapped through the ActivationItem pipeline.
+func TestActivationToMemoryCreatedAt(t *testing.T) {
+	// Use a well-known timestamp to avoid test fragility.
+	want := time.Date(2026, 3, 6, 20, 15, 29, 0, time.UTC)
+	item := &mbp.ActivationItem{
+		ID:        "engram-abc",
+		Concept:   "test",
+		Content:   "content",
+		CreatedAt: want.UnixNano(),
+	}
+	m := activationToMemory(item)
+
+	if m.CreatedAt.IsZero() {
+		t.Fatal("CreatedAt is zero — regression: issue #97 not fixed")
+	}
+	if !m.CreatedAt.Equal(want) {
+		t.Errorf("CreatedAt = %v, want %v", m.CreatedAt, want)
+	}
+	if m.CreatedAt.Location() != time.UTC {
+		t.Errorf("CreatedAt location = %v, want UTC", m.CreatedAt.Location())
+	}
+}
+
+// TestActivationToMemoryCreatedAtZero verifies that a zero CreatedAt (not yet
+// persisted, or old data) maps to the Unix epoch, not a Go zero time.
+func TestActivationToMemoryCreatedAtZero(t *testing.T) {
+	item := &mbp.ActivationItem{
+		ID:        "engram-zero",
+		CreatedAt: 0,
+	}
+	m := activationToMemory(item)
+
+	want := time.Unix(0, 0).UTC()
+	if !m.CreatedAt.Equal(want) {
+		t.Errorf("CreatedAt with 0 input = %v, want %v", m.CreatedAt, want)
+	}
+}
+
 func TestConvertReadResponseToMemory(t *testing.T) {
 	resp := &mbp.ReadResponse{
 		ID:         "read-123",

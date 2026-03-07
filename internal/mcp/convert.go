@@ -24,6 +24,7 @@ func activationToMemory(item *mbp.ActivationItem) Memory {
 		VectorScore: float64(item.ScoreComponents.SemanticSimilarity),
 		Confidence:  item.Confidence,
 		Why:         item.Why,
+		CreatedAt:   time.Unix(0, item.CreatedAt).UTC(),
 		LastAccess:  time.Unix(0, item.LastAccess).UTC(),
 		AccessCount: item.AccessCount,
 		Relevance:   item.Relevance,

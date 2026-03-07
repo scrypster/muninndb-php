@@ -1628,6 +1628,7 @@ func (e *Engine) activateCore(ctx context.Context, req *mbp.ActivateRequest, str
 			Confidence:  scored.Engram.Confidence,
 			Why:         scored.Why,
 			Dormant:     scored.Dormant,
+			CreatedAt:   scored.Engram.CreatedAt.UnixNano(),
 			LastAccess:  scored.Engram.LastAccess.UnixNano(),
 			AccessCount: scored.Engram.AccessCount,
 			Relevance:   scored.Engram.Relevance,
