@@ -25,8 +25,8 @@ type PluginStore interface {
 	// Also updates the EmbedDim field in ERF metadata.
 	UpdateEmbedding(ctx context.Context, id ULID, vec []float32) error
 
-	// UpdateDigest updates the digest fields (summary, key_points, memory_type,
-	// classification) on an existing engram. Called by the enrich plugin.
+	// UpdateDigest updates digest fields (summary, key_points, memory_type,
+	// type_label/topic classification) on an existing engram. Called by enrich.
 	UpdateDigest(ctx context.Context, id ULID, result *EnrichmentResult) error
 
 	// UpsertEntity creates or updates a lightweight entity record.

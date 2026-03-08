@@ -179,6 +179,60 @@ func TestOpenAIProvider_Complete_Success(t *testing.T) {
 	}
 }
 
+func TestOpenAIProvider_Complete_UsesReasoningFallback(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		resp := openaiChatResponse{
+			Choices: []struct {
+				Message openaiMessage `json:"message"`
+			}{
+				{Message: openaiMessage{Role: "assistant", Content: "", Reasoning: json.RawMessage(`"{\"ok\":true}"`)}},
+			},
+		}
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	p := NewOpenAILLMProvider()
+	p.baseURL = srv.URL
+	p.model = "gpt-4o-mini"
+	p.apiKey = "test-key"
+
+	got, err := p.Complete(context.Background(), "system", "user")
+	if err != nil {
+		t.Fatalf("Complete failed: %v", err)
+	}
+	if got != `{"ok":true}` {
+		t.Fatalf("expected reasoning fallback payload, got %q", got)
+	}
+}
+
+func TestOpenAIProvider_Complete_UsesStructuredReasoningFallback(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		resp := openaiChatResponse{
+			Choices: []struct {
+				Message openaiMessage `json:"message"`
+			}{
+				{Message: openaiMessage{Role: "assistant", Reasoning: json.RawMessage(`{"ok":true}`)}},
+			},
+		}
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	p := NewOpenAILLMProvider()
+	p.baseURL = srv.URL
+	p.model = "gpt-4o-mini"
+	p.apiKey = "test-key"
+
+	got, err := p.Complete(context.Background(), "system", "user")
+	if err != nil {
+		t.Fatalf("Complete failed: %v", err)
+	}
+	if got != `{"ok":true}` {
+		t.Fatalf("expected structured reasoning fallback payload, got %q", got)
+	}
+}
+
 func TestOpenAIProvider_Complete_ErrorStatus(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusTooManyRequests)
@@ -251,6 +305,30 @@ func TestOpenAIProvider_Init_Success(t *testing.T) {
 				Message openaiMessage `json:"message"`
 			}{
 				{Message: openaiMessage{Role: "assistant", Content: "OK"}},
+			},
+		}
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	p := NewOpenAILLMProvider()
+	err := p.Init(context.Background(), LLMProviderConfig{
+		BaseURL: srv.URL,
+		Model:   "test",
+		APIKey:  "key",
+	})
+	if err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+}
+
+func TestOpenAIProvider_Init_SuccessWithReasoningFallback(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		resp := openaiChatResponse{
+			Choices: []struct {
+				Message openaiMessage `json:"message"`
+			}{
+				{Message: openaiMessage{Role: "assistant", Reasoning: json.RawMessage(`"{\"ok\":true}"`)}},
 			},
 		}
 		json.NewEncoder(w).Encode(resp)

@@ -202,7 +202,9 @@ func encodeV2Into(b *erfBuffer, eng *Engram) error {
 	binary.BigEndian.PutUint32(b.buf[OffsetStability:OffsetStability+4], math.Float32bits(eng.Stability))
 	binary.BigEndian.PutUint32(b.buf[OffsetAccessCount:OffsetAccessCount+4], eng.AccessCount)
 	b.buf[OffsetState] = eng.State
-	// AssocCount and EmbedDim are zero for v2 (zero-initialized by make above)
+	// AssocCount remains zero for v2 because associations are stored out-of-line.
+	// Preserve EmbedDim so metadata survives full-record rewrites such as UpdateDigest.
+	b.buf[OffsetEmbedDim] = eng.EmbedDim
 	b.buf[OffsetMemoryType] = eng.MemoryType
 	binary.BigEndian.PutUint16(b.buf[OffsetClassification:OffsetClassification+2], eng.Classification)
 

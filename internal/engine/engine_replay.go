@@ -145,8 +145,8 @@ func (e *Engine) ReplayEnrichment(ctx context.Context, vault string, stages []st
 			continue
 		}
 
-		// Persist enrichment results (summary, key_points, memory_type).
-		if updateErr := e.store.UpdateDigest(ctx, eng.ID, result.Summary, result.KeyPoints, result.MemoryType); updateErr != nil {
+		// Persist enrichment results (summary, key_points, memory_type, type_label).
+		if updateErr := e.store.UpdateDigest(ctx, eng.ID, result.Summary, result.KeyPoints, result.MemoryType, result.TypeLabel); updateErr != nil {
 			slog.Warn("replay enrichment: UpdateDigest failed",
 				"id", eng.ID.String(), "err", updateErr)
 			continue

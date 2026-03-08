@@ -176,6 +176,9 @@ func TestPipelineRun_AllFail(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error when all calls fail")
 	}
+	if !strings.Contains(err.Error(), "entities:") {
+		t.Fatalf("expected aggregated stage errors, got: %v", err)
+	}
 
 	if result != nil {
 		t.Fatalf("expected nil result when all calls fail")
@@ -612,8 +615,11 @@ func TestFullModeBackwardCompat(t *testing.T) {
 	if len(result.Relationships) != 1 {
 		t.Fatalf("expected 1 relationship, got %d", len(result.Relationships))
 	}
-	if result.MemoryType != "tech_fact" {
-		t.Fatalf("expected type_label 'tech_fact', got %q", result.MemoryType)
+	if result.MemoryType != "fact" {
+		t.Fatalf("expected canonical memory_type 'fact', got %q", result.MemoryType)
+	}
+	if result.TypeLabel != "tech_fact" {
+		t.Fatalf("expected type_label 'tech_fact', got %q", result.TypeLabel)
 	}
 }
 

@@ -2,10 +2,13 @@ package plugin
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"runtime"
 	"sync"
 	"time"
+
+	"github.com/cockroachdb/pebble"
 )
 
 // pollInterval is how often the processor checks for newly written, unembedded engrams.
@@ -418,8 +421,12 @@ func (rp *RetroactiveProcessor) processEngram(ctx context.Context, eng *Engram) 
 		// conflated summarization keypoints with entity extraction. Flags are authoritative.
 		flags, err := rp.store.GetDigestFlags(ctx, eng.ID)
 		if err != nil {
-			slog.Warn("enrich: failed to read digest flags, skipping engram", "id", eng.ID.String(), "err", err)
-			return nil
+			if errors.Is(err, pebble.ErrNotFound) {
+				flags = 0
+			} else {
+				slog.Warn("enrich: failed to read digest flags, skipping engram", "id", eng.ID.String(), "err", err)
+				return nil
+			}
 		}
 		hasSummary := eng.Summary != "" || (flags&DigestSummarized != 0)
 		hasEntities := flags&DigestEntities != 0

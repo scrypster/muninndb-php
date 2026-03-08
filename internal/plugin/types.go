@@ -22,7 +22,8 @@ type PluginConfig struct {
 type EnrichmentResult struct {
 	Summary        string              // abstractive summary (replaces extractive)
 	KeyPoints      []string            // semantic key points (replaces IDF-based)
-	MemoryType     string              // nuanced classification (e.g., "architectural_decision")
+	MemoryType     string              // canonical memory type (e.g., "decision")
+	TypeLabel      string              // nuanced classification label (e.g., "architectural_decision")
 	Classification string              // topic category (e.g., "infrastructure/databases")
 	Entities       []ExtractedEntity   // people, projects, tools, organizations
 	Relationships  []ExtractedRelation // typed relationships between entities
@@ -69,7 +70,7 @@ type PluginStatus struct {
 // RetroactiveStats is the progress of a retroactive processor.
 type RetroactiveStats struct {
 	PluginName string    `json:"plugin_name"`
-	Status     string    `json:"status"`     // "running", "complete", "paused", "failed"
+	Status     string    `json:"status"` // "running", "complete", "paused", "failed"
 	Processed  int64     `json:"processed"`
 	Total      int64     `json:"total"`
 	RatePerSec float64   `json:"rate_per_sec"`

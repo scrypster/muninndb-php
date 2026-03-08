@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -100,6 +101,9 @@ func (ps *PebbleStore) ScanWithoutFlag(ctx context.Context, flag uint8) *PluginE
 func (ps *PebbleStore) SetDigestFlag(ctx context.Context, id ULID, flag uint8) error {
 	raw, err := ps.getDigestFlagsRaw([16]byte(id))
 	if err != nil {
+		if !errors.Is(err, pebble.ErrNotFound) {
+			return fmt.Errorf("SetDigestFlag: read current flags: %w", err)
+		}
 		raw = 0
 	}
 	raw |= flag

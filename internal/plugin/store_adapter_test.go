@@ -75,7 +75,8 @@ func TestStoreAdapter_Methods(t *testing.T) {
 	result := &EnrichmentResult{
 		Summary:    "PostgreSQL is used for payments",
 		KeyPoints:  []string{"database", "payments"},
-		MemoryType: "decision",
+		MemoryType: "task",
+		TypeLabel:  "database_task",
 	}
 	if err := adapter.UpdateDigest(ctx, ULID(id), result); err != nil {
 		t.Errorf("UpdateDigest should return nil, got %v", err)
@@ -88,6 +89,22 @@ func TestStoreAdapter_Methods(t *testing.T) {
 	}
 	if eng.Summary != "PostgreSQL is used for payments" {
 		t.Errorf("engram Summary = %q, want %q", eng.Summary, "PostgreSQL is used for payments")
+	}
+	if eng.MemoryType != storage.TypeTask {
+		t.Errorf("engram MemoryType = %v, want %v", eng.MemoryType, storage.TypeTask)
+	}
+	if eng.TypeLabel != "database_task" {
+		t.Errorf("engram TypeLabel = %q, want %q", eng.TypeLabel, "database_task")
+	}
+	flags, err := store.GetDigestFlags(ctx, id)
+	if err != nil {
+		t.Fatalf("GetDigestFlags: %v", err)
+	}
+	if flags&DigestSummarized == 0 {
+		t.Fatalf("expected DigestSummarized flag to be set, flags=%08b", flags)
+	}
+	if flags&DigestClassified == 0 {
+		t.Fatalf("expected DigestClassified flag to be set, flags=%08b", flags)
 	}
 }
 

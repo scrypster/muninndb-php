@@ -55,6 +55,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -436,11 +437,17 @@ func (ps *PebbleStore) UpsertRelationshipRecord(ctx context.Context, ws [8]byte,
 	return ps.db.Set(key, val, pebble.NoSync)
 }
 
-// UpdateDigest updates the summary, key points, and memory type fields on an
+const (
+	// Keep these values aligned with plugin.DigestClassified and plugin.DigestSummarized.
+	digestClassifiedFlag uint8 = 0x20
+	digestSummarizedFlag uint8 = 0x40
+)
+
+// UpdateDigest updates the summary, key points, memory type, and type label on an
 // existing engram identified by id. The engram's vault prefix is resolved via
 // FindVaultPrefix. Both 0x01 (full engram) and 0x02 (meta slice) keys are
 // updated atomically, and the L1/meta caches are invalidated.
-func (ps *PebbleStore) UpdateDigest(ctx context.Context, id ULID, summary string, keyPoints []string, memoryType string) error {
+func (ps *PebbleStore) UpdateDigest(ctx context.Context, id ULID, summary string, keyPoints []string, memoryType string, typeLabel string) error {
 	ws, ok := ps.FindVaultPrefix(id)
 	if !ok {
 		return fmt.Errorf("UpdateDigest: engram %s not found", id.String())
@@ -463,6 +470,9 @@ func (ps *PebbleStore) UpdateDigest(ctx context.Context, id ULID, summary string
 			eng.MemoryType = mt
 		}
 	}
+	if typeLabel != "" {
+		eng.TypeLabel = typeLabel
+	}
 	eng.UpdatedAt = time.Now()
 
 	erfEng := toERFEngram(eng)
@@ -483,6 +493,21 @@ func (ps *PebbleStore) UpdateDigest(ctx context.Context, id ULID, summary string
 		metaSlice = metaSlice[:erf.MetaKeySize]
 	}
 	batch.Set(metaKey, metaSlice, nil)
+
+	flags, flagsErr := ps.getDigestFlagsRaw([16]byte(id))
+	if flagsErr != nil {
+		if !errors.Is(flagsErr, pebble.ErrNotFound) {
+			return fmt.Errorf("UpdateDigest: read digest flags: %w", flagsErr)
+		}
+		flags = 0
+	}
+	if summary != "" || len(keyPoints) > 0 {
+		flags |= digestSummarizedFlag
+	}
+	if memoryType != "" || typeLabel != "" {
+		flags |= digestClassifiedFlag
+	}
+	batch.Set(keys.DigestFlagsKey([16]byte(id)), []byte{flags}, nil)
 
 	// Invalidate caches before commit — cached structs are stale.
 	ps.cache.Delete(ws, id)

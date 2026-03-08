@@ -76,9 +76,8 @@ func TestParseEntities_BadJSON(t *testing.T) {
 	raw := `This is not valid JSON`
 	entities, err := ParseEntityResponse(raw)
 
-	// Should not error, just return nil/empty
-	if err != nil {
-		t.Fatalf("ParseEntityResponse failed: %v", err)
+	if err == nil {
+		t.Fatal("expected parse error for invalid entity JSON")
 	}
 
 	if len(entities) != 0 {
@@ -169,7 +168,7 @@ func TestValidateAndDedupeEntities(t *testing.T) {
 		{Name: "PostgreSQL", Type: "database", Confidence: 0.8},
 		{Name: "PostgreSQL", Type: "database", Confidence: 0.95}, // higher confidence wins
 		{Name: "Redis", Type: "tool", Confidence: 0.7},
-		{Name: "", Type: "tool", Confidence: 0.5},      // empty name => skipped
+		{Name: "", Type: "tool", Confidence: 0.5},       // empty name => skipped
 		{Name: "Neg", Type: "person", Confidence: -0.5}, // clamped to 0.0
 		{Name: "Over", Type: "person", Confidence: 1.5}, // clamped to 1.0
 	}
@@ -251,8 +250,8 @@ func TestParseRelationshipResponse_DirectArray(t *testing.T) {
 func TestParseRelationshipResponse_BadJSON(t *testing.T) {
 	raw := `not valid json at all`
 	rels, err := ParseRelationshipResponse(raw)
-	if err != nil {
-		t.Fatalf("should not error, got: %v", err)
+	if err == nil {
+		t.Fatal("expected parse error for invalid relationship JSON")
 	}
 	if len(rels) != 0 {
 		t.Fatalf("expected 0 relationships, got %d", len(rels))
@@ -262,8 +261,8 @@ func TestParseRelationshipResponse_BadJSON(t *testing.T) {
 func TestParseClassification_BadJSON(t *testing.T) {
 	raw := `totally broken {{{`
 	memType, typeLabel, cat, subcat, tags, err := ParseClassificationResponse(raw)
-	if err != nil {
-		t.Fatalf("should not error, got: %v", err)
+	if err == nil {
+		t.Fatal("expected parse error for invalid classification JSON")
 	}
 	if memType != "" || typeLabel != "" || cat != "" || subcat != "" || tags != nil {
 		t.Fatal("expected all empty on bad JSON")
@@ -273,8 +272,8 @@ func TestParseClassification_BadJSON(t *testing.T) {
 func TestParseSummarize_BadJSON(t *testing.T) {
 	raw := `garbage in`
 	summary, keyPoints, err := ParseSummarizeResponse(raw)
-	if err != nil {
-		t.Fatalf("should not error, got: %v", err)
+	if err == nil {
+		t.Fatal("expected parse error for invalid summarize JSON")
 	}
 	if summary != "" || keyPoints != nil {
 		t.Fatal("expected empty on bad JSON")

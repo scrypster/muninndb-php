@@ -98,7 +98,7 @@ func TestUpdateDigest_PersistsValue(t *testing.T) {
 	newKeyPoints := []string{"point A", "point B", "point C"}
 
 	// UpdateDigest resolves the vault prefix internally via FindVaultPrefix.
-	require.NoError(t, store.UpdateDigest(ctx, id, newSummary, newKeyPoints, ""))
+	require.NoError(t, store.UpdateDigest(ctx, id, newSummary, newKeyPoints, "", ""))
 
 	// Read the engram back (cache was invalidated by UpdateDigest).
 	got, err := store.GetEngram(ctx, ws, id)
@@ -123,7 +123,7 @@ func TestUpdateDigest_PreservesUnchangedFields(t *testing.T) {
 	id, err := store.WriteEngram(ctx, ws, eng)
 	require.NoError(t, err)
 
-	require.NoError(t, store.UpdateDigest(ctx, id, "new summary", nil, ""))
+	require.NoError(t, store.UpdateDigest(ctx, id, "new summary", nil, "", ""))
 
 	got, err := store.GetEngram(ctx, ws, id)
 	require.NoError(t, err)
@@ -145,13 +145,41 @@ func TestUpdateDigest_Idempotent(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.NoError(t, store.UpdateDigest(ctx, id, "first", []string{"k1"}, ""))
-	require.NoError(t, store.UpdateDigest(ctx, id, "second", []string{"k2"}, ""))
+	require.NoError(t, store.UpdateDigest(ctx, id, "first", []string{"k1"}, "", ""))
+	require.NoError(t, store.UpdateDigest(ctx, id, "second", []string{"k2"}, "", ""))
 
 	got, err := store.GetEngram(ctx, ws, id)
 	require.NoError(t, err)
 	require.Equal(t, "second", got.Summary, "second UpdateDigest call must overwrite the first")
 	require.Equal(t, []string{"k2"}, got.KeyPoints)
+}
+
+// TestUpdateDigest_PreservesEmbedDim verifies that digest rewrites do not wipe
+// the embedding metadata patched by UpdateEmbedding.
+func TestUpdateDigest_PreservesEmbedDim(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	ws := store.VaultPrefix("update-digest-preserve-embed-dim")
+
+	id, err := store.WriteEngram(ctx, ws, &Engram{
+		Concept: "embed-digest-concept",
+		Content: "embed-digest-content",
+	})
+	require.NoError(t, err)
+
+	vec := make([]float32, 2560)
+	vec[0] = 0.25
+	require.NoError(t, store.UpdateEmbedding(ctx, ws, id, vec))
+
+	before, err := store.GetEngram(ctx, ws, id)
+	require.NoError(t, err)
+	require.Equal(t, EmbedDimension(255), before.EmbedDim, "precondition: EmbedDim should reflect EmbedOther before digest update")
+
+	require.NoError(t, store.UpdateDigest(ctx, id, "summary", []string{"kp"}, "", ""))
+
+	after, err := store.GetEngram(ctx, ws, id)
+	require.NoError(t, err)
+	require.Equal(t, EmbedDimension(255), after.EmbedDim, "UpdateDigest must preserve EmbedDim")
 }
 
 // TestUpdateDigest_NotFound verifies that UpdateDigest returns an error when
@@ -161,6 +189,6 @@ func TestUpdateDigest_NotFound(t *testing.T) {
 	ctx := context.Background()
 
 	ghost := NewULID()
-	err := store.UpdateDigest(ctx, ghost, "summary", []string{"kp"}, "")
+	err := store.UpdateDigest(ctx, ghost, "summary", []string{"kp"}, "", "")
 	require.Error(t, err, "UpdateDigest must return an error for a non-existent engram ID")
 }

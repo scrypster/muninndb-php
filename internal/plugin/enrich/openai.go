@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -20,17 +21,18 @@ type OpenAILLMProvider struct {
 
 // openaiChatRequest is the request structure for OpenAI chat API.
 type openaiChatRequest struct {
-	Model            string               `json:"model"`
-	Messages         []openaiMessage      `json:"messages"`
-	Temperature      float32              `json:"temperature"`
-	MaxTokens        int                  `json:"max_tokens,omitempty"`
-	ResponseFormat   *openaiResponseFormat `json:"response_format,omitempty"`
+	Model          string                `json:"model"`
+	Messages       []openaiMessage       `json:"messages"`
+	Temperature    float32               `json:"temperature"`
+	MaxTokens      int                   `json:"max_tokens,omitempty"`
+	ResponseFormat *openaiResponseFormat `json:"response_format,omitempty"`
 }
 
 // openaiMessage is a message in the OpenAI chat API.
 type openaiMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role      string          `json:"role"`
+	Content   string          `json:"content"`
+	Reasoning json.RawMessage `json:"reasoning,omitempty"`
 }
 
 // openaiResponseFormat specifies JSON response format for OpenAI.
@@ -134,7 +136,34 @@ func (p *OpenAILLMProvider) Complete(ctx context.Context, system, user string) (
 		return "", fmt.Errorf("openai response has no choices")
 	}
 
-	return chatResp.Choices[0].Message.Content, nil
+	msg := chatResp.Choices[0].Message
+	if content := strings.TrimSpace(msg.Content); content != "" {
+		return content, nil
+	}
+	reasoning, err := reasoningPayload(msg.Reasoning)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse openai reasoning payload: %w", err)
+	}
+	if reasoning != "" {
+		return reasoning, nil
+	}
+
+	return "", fmt.Errorf("openai response has no content or reasoning")
+}
+
+func reasoningPayload(raw json.RawMessage) (string, error) {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return "", nil
+	}
+	if strings.HasPrefix(trimmed, `"`) {
+		var value string
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return "", err
+		}
+		return strings.TrimSpace(value), nil
+	}
+	return trimmed, nil
 }
 
 // Close releases HTTP connections.

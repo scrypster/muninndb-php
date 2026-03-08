@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/cockroachdb/pebble"
 )
 
 // ---------------------------------------------------------------------------
@@ -628,6 +630,32 @@ func TestRetroactiveProcessor_KeyPointsAloneDoNotSkipEntities(t *testing.T) {
 	if store.upsertEntityCalls != 1 {
 		t.Errorf("expected 1 UpsertEntity call (KeyPoints alone must not skip entities), got %d",
 			store.upsertEntityCalls)
+	}
+}
+
+func TestRetroactiveProcessor_MissingDigestFlagsDoNotSkipEngram(t *testing.T) {
+	eng := &Engram{Concept: "service", Content: "uses postgres"}
+	iter := &mockIterator{engrams: []*Engram{eng}}
+
+	store := &mockPluginStore{
+		countResult:    1,
+		scanResult:     iter,
+		getFlagsErr:    pebble.ErrNotFound,
+		getFlagsResult: 0,
+	}
+	enrichPlugin := &enrichMockForRetro{
+		mockPlugin: mockPlugin{name: "enrich-missing-flags", tier: TierEnrich},
+		enrichResult: &EnrichmentResult{
+			Summary: "summary",
+		},
+	}
+	rp := NewRetroactiveProcessor(store, enrichPlugin, DigestEnrich)
+
+	if err := rp.processEngram(context.Background(), eng); err != nil {
+		t.Fatalf("processEngram should succeed when digest flags are missing: %v", err)
+	}
+	if enrichPlugin.callCount != 1 {
+		t.Fatalf("expected enrich to run when digest flags are missing, got %d calls", enrichPlugin.callCount)
 	}
 }
 
