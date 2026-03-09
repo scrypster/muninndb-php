@@ -300,7 +300,9 @@ document.addEventListener('alpine:init', () => {
       try {
         const h = await fetch('/api/health').then(r => r.json());
         this.appVersion = h.version || '';
-      } catch (_) {}
+      } catch (err) {
+        console.warn('[muninn] health check failed:', err);
+      }
 
       // Load initial data (gated on auth check)
       await this.checkAuth();
@@ -586,7 +588,9 @@ document.addEventListener('alpine:init', () => {
           { name: 'Contradict',  state: data.contradict?.state ?? 0 },
           { name: 'Confidence',  state: data.confidence?.state ?? 0 },
         ];
-      } catch (_) {}
+      } catch (err) {
+        console.warn('[muninn] worker stats failed:', err);
+      }
     },
 
     workerStateName(state) {
@@ -1813,7 +1817,9 @@ document.addEventListener('alpine:init', () => {
         try {
           const secResp = await fetch('/api/admin/cluster/token', { credentials: 'same-origin' });
           if (secResp.ok) this.clusterSecurityPosture = await secResp.json();
-        } catch (_) {}
+        } catch (err) {
+          console.warn('[muninn] cluster security posture fetch failed:', err);
+        }
         await Promise.all([
           this._loadClusterNodes(),
           this._loadClusterHealth(),
@@ -1846,19 +1852,25 @@ document.addEventListener('alpine:init', () => {
         if (prevEpoch !== null && newEpoch !== prevEpoch && newEpoch > 0) {
           this._recordFailoverEvent(newEpoch, health);
         }
-      } catch (_) {}
+      } catch (err) {
+        console.warn('[muninn] cluster nodes fetch failed:', err);
+      }
     },
 
     async _loadClusterHealth() {
       try {
         this.clusterHealth = await this.apiCall('/v1/cluster/health');
-      } catch (_) {}
+      } catch (err) {
+        console.warn('[muninn] cluster health fetch failed:', err);
+      }
     },
 
     async _loadClusterCCS() {
       try {
         this.clusterCCS = await this.apiCall('/v1/cluster/cognitive/consistency');
-      } catch (_) {}
+      } catch (err) {
+        console.warn('[muninn] cluster CCS fetch failed:', err);
+      }
     },
 
     _nodeStatus(node, health) {
@@ -2026,7 +2038,9 @@ document.addEventListener('alpine:init', () => {
           const data = JSON.parse(e.data);
           this.clusterFeed.unshift({ ...data, ts: new Date().toLocaleTimeString() });
           if (this.clusterFeed.length > 200) this.clusterFeed.pop();
-        } catch (_) {}
+        } catch (err) {
+          console.warn('[muninn] cluster feed parse error:', err, e.data);
+        }
       });
       this._clusterFeedSSE = es;
     },
@@ -2043,8 +2057,9 @@ document.addEventListener('alpine:init', () => {
       try {
         const resp = await fetch('/api/admin/cluster/token', { credentials: 'same-origin' });
         if (resp.ok) this.clusterToken = await resp.json();
-      } catch (_) {}
-      finally { this.clusterTokenLoading = false; }
+      } catch (err) {
+        console.warn('[muninn] cluster token load failed:', err);
+      } finally { this.clusterTokenLoading = false; }
     },
 
     async regenerateToken() {
@@ -2055,7 +2070,9 @@ document.addEventListener('alpine:init', () => {
           credentials: 'same-origin',
         });
         if (resp.ok) this.clusterToken = await resp.json();
-      } catch (_) {}
+      } catch (err) {
+        this.addNotification('error', 'Token regeneration failed: ' + err.message);
+      }
     },
 
     copyToken() {
@@ -2079,8 +2096,9 @@ document.addEventListener('alpine:init', () => {
           this.clusterSettingsSaved = true;
           setTimeout(() => { this.clusterSettingsSaved = false; }, 2500);
         }
-      } catch (_) {}
-      finally { this.clusterSettingsSaving = false; }
+      } catch (err) {
+        this.addNotification('error', 'Failed to save cluster settings: ' + err.message);
+      } finally { this.clusterSettingsSaving = false; }
     },
 
     async rotateTLS() {
