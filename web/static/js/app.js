@@ -63,6 +63,7 @@ document.addEventListener('alpine:init', () => {
     // Graph
     graphLoaded: false,
     graphTab: 'memory',
+    graphLabelMode: 'full', // 'full' | 'short' | 'none'
     _cy: null,
     entityGraphLoaded: false,
     entityGraphStatus: '',
@@ -1160,18 +1161,22 @@ document.addEventListener('alpine:init', () => {
         const nodesToRender = filteredEngrams.length > 0 ? filteredEngrams : engrams;
 
         // Build node elements
-        const nodeElements = nodesToRender.map(e => ({
-          data: {
-            id: e.id,
-            label: e.concept || e.id.slice(0, 8),
-            size: connectedNodeIds.has(e.id) ? 20 + (e.confidence || 0.5) * 20 : 12,
-            color: !connectedNodeIds.has(e.id) ? '#64748b'
-                 : (e.confidence || 0) > 0.7 ? '#06b6d4'
-                 : (e.confidence || 0) > 0.4 ? '#a855f7' : '#eab308',
-            orphan: !connectedNodeIds.has(e.id),
-            snippet: (e.content || '').slice(0, 80),
-          },
-        }));
+        const nodeElements = nodesToRender.map(e => {
+          const fullLabel = e.concept || e.id.slice(0, 8);
+          return {
+            data: {
+              id: e.id,
+              label: fullLabel,
+              shortLabel: fullLabel.length > 20 ? fullLabel.slice(0, 18) + '…' : fullLabel,
+              size: connectedNodeIds.has(e.id) ? 20 + (e.confidence || 0.5) * 20 : 12,
+              color: !connectedNodeIds.has(e.id) ? '#64748b'
+                   : (e.confidence || 0) > 0.7 ? '#06b6d4'
+                   : (e.confidence || 0) > 0.4 ? '#a855f7' : '#eab308',
+              orphan: !connectedNodeIds.has(e.id),
+              snippet: (e.content || '').slice(0, 80),
+            },
+          };
+        });
 
         const elements = [...nodeElements, ...edges];
 
@@ -1219,13 +1224,47 @@ document.addEventListener('alpine:init', () => {
               style: { 'border-width': 3, 'border-color': '#06b6d4' },
             },
           ],
-          layout: { name: 'fcose', animate: true, animationDuration: 600 },
+          layout: {
+            name: 'fcose',
+            animate: true,
+            animationDuration: 600,
+            randomize: true,
+            padding: 40,
+            idealEdgeLength: 120,
+            nodeRepulsion: 6500,
+            edgeElasticity: 0.45,
+            gravity: 0.2,
+            numIter: 2500,
+            tile: true,
+            tilingPaddingVertical: 30,
+            tilingPaddingHorizontal: 30,
+          },
           wheelSensitivity: 0.3,
         });
 
-        // Fade edges in after nodes settle into position (fcose layout: 600ms).
-        // cy.one() fires once and removes itself — does not re-trigger on layout re-runs.
+        // Apply current label mode to the freshly initialised graph.
+        this._applyGraphLabelStyle();
+
+        // Resize Cytoscape when the container changes size (sidebar collapse,
+        // window resize, etc). Only resize() here — fit() is handled by layoutstop
+        // to avoid zooming in on pre-layout node positions.
+        if (this._cyResizeObserver) this._cyResizeObserver.disconnect();
+        const cyContainer = document.getElementById('cy');
+        if (cyContainer && typeof ResizeObserver !== 'undefined') {
+          let _cyResizeTimer = null;
+          this._cyResizeObserver = new ResizeObserver(() => {
+            clearTimeout(_cyResizeTimer);
+            _cyResizeTimer = setTimeout(() => {
+              if (this._cy) this._cy.resize();
+            }, 150);
+          });
+          this._cyResizeObserver.observe(cyContainer);
+        }
+
+        // Fade edges in and fit view after nodes settle (fcose layout: 600ms).
+        // cy.one() fires once and removes itself — does not re-trigger on re-runs.
         this._cy.one('layoutstop', () => {
+          this._cy.fit(undefined, 40);
           this._cy.edges().animate({
             style: { opacity: 0.6 },
             duration: 250,
@@ -1259,6 +1298,22 @@ document.addEventListener('alpine:init', () => {
     },
     graphFit() {
       if (this._cy) { this._cy.fit(); }
+    },
+    graphCycleLabel() {
+      const modes = ['full', 'short', 'none'];
+      const next = modes[(modes.indexOf(this.graphLabelMode) + 1) % modes.length];
+      this.graphLabelMode = next;
+      this._applyGraphLabelStyle();
+    },
+    _applyGraphLabelStyle() {
+      if (!this._cy) return;
+      const mode = this.graphLabelMode;
+      this._cy.nodes().forEach(node => {
+        const lbl = mode === 'full' ? node.data('label')
+                  : mode === 'short' ? node.data('shortLabel')
+                  : '';
+        node.style('label', lbl);
+      });
     },
 
     // ── Entity Graph ───────────────────────────────────────────────────────
