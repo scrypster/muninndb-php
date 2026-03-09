@@ -420,39 +420,68 @@ func configureWindsurf(mcpURL, token string) error {
 	return nil
 }
 
-// openClawMCPEntry returns the JSON map for muninn's OpenClaw stdio MCP entry.
-// OpenClaw spawns this as a local subprocess; the muninn binary handles
-// auth internally by reading ~/.muninn/mcp.token at runtime.
-func openClawMCPEntry() map[string]any {
-	return map[string]any{
-		"command":   "muninn",
-		"args":      []any{"mcp"},
-		"transport": "stdio",
+// openClawMCPEntry returns the JSON map for muninn's OpenClaw HTTP MCP entry.
+// OpenClaw reads MCP servers from provider.mcpServers; root-level mcpServers is
+// not a valid key and causes a fatal config validation error on startup.
+// The streamable-http transport connects directly to the running muninn daemon.
+func openClawMCPEntry(mcpURL, token string) map[string]any {
+	entry := map[string]any{
+		"transport": "streamable-http",
+		"url":       mcpURL,
 	}
+	if token != "" {
+		entry["headers"] = map[string]any{
+			"Authorization": "Bearer " + token,
+		}
+	}
+	return entry
 }
 
-// mergeOpenClawMCP upserts muninn into the root-level cfg["mcpServers"] map,
-// preserving all other entries. OpenClaw reads root-level mcpServers for
-// stdio server definitions.
-func mergeOpenClawMCP(cfg map[string]any) {
-	servers, ok := cfg["mcpServers"].(map[string]any)
+// mergeOpenClawMCP upserts muninn into cfg["provider"]["mcpServers"],
+// preserving all other entries. OpenClaw validates root-level mcpServers as
+// an unrecognized key; MCP servers must be nested under provider.mcpServers.
+func mergeOpenClawMCP(cfg map[string]any, mcpURL, token string) {
+	provider, ok := cfg["provider"].(map[string]any)
+	if !ok {
+		provider = map[string]any{}
+	}
+	servers, ok := provider["mcpServers"].(map[string]any)
 	if !ok {
 		servers = map[string]any{}
 	}
-	servers["muninn"] = openClawMCPEntry()
-	cfg["mcpServers"] = servers
+	servers["muninn"] = openClawMCPEntry(mcpURL, token)
+	provider["mcpServers"] = servers
+	cfg["provider"] = provider
 }
 
-// configureOpenClaw writes the muninn stdio MCP entry into OpenClaw's openclaw.json.
-// The mcpURL and token parameters are accepted for interface compatibility but are
-// not embedded in the config — the muninn mcp proxy reads the token at runtime.
-func configureOpenClaw(_, _ string) error {
+// configureOpenClaw writes the muninn HTTP MCP entry into OpenClaw's openclaw.json
+// under provider.mcpServers (the valid path — root-level mcpServers is rejected).
+func configureOpenClaw(mcpURL, token string) error {
 	path := openClawConfigPath()
-	summary, err := writeAIToolConfig(path, func(cfg map[string]any) {
-		mergeOpenClawMCP(cfg)
+
+	// Peek at existing config to generate an accurate summary message.
+	hadProviderMCP := false
+	if existing, err := os.ReadFile(path); err == nil {
+		var peek map[string]any
+		if json.Unmarshal(existing, &peek) == nil {
+			if p, ok := peek["provider"].(map[string]any); ok {
+				hadProviderMCP = p["mcpServers"] != nil
+			}
+		}
+	}
+
+	_, err := writeAIToolConfig(path, func(cfg map[string]any) {
+		mergeOpenClawMCP(cfg, mcpURL, token)
 	})
 	if err != nil {
 		return err
+	}
+
+	var summary string
+	if hadProviderMCP {
+		summary = "updated provider.mcpServers.muninn in existing config (other servers preserved)"
+	} else {
+		summary = "added provider.mcpServers.muninn to config"
 	}
 	fmt.Printf("  ✓ OpenClaw: %s\n    %s\n", summary, path)
 	fmt.Println("  → Restart OpenClaw to activate MuninnDB memory")
@@ -461,7 +490,21 @@ func configureOpenClaw(_, _ string) error {
 
 // openClawSkillContent is the SKILL.md content that teaches OpenClaw how to
 // use MuninnDB for persistent memory across sessions.
-const openClawSkillContent = `# MuninnDB Memory
+// The YAML frontmatter is required for OpenClaw to recognize the skill.
+const openClawSkillContent = `---
+name: muninndb-memory
+description: Persistent cognitive memory for AI agents — store and recall memories across sessions using MuninnDB.
+version: 1.0.0
+metadata:
+  openclaw:
+    requires:
+      bins:
+        - muninn
+    emoji: "🧠"
+    homepage: https://github.com/scrypster/muninndb
+---
+
+# MuninnDB Memory
 
 MuninnDB is your persistent memory system, available via the "muninn" MCP server.
 
