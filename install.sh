@@ -34,7 +34,7 @@ PLATFORM="${OS}-${ARCH}"
 # ── Resolve latest release tag ───────────────────────────────────────────────
 echo "  Checking latest release..."
 TAG=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
-  | grep '"tag_name"' | head -1 | cut -d'"' -f4)
+  | sed -n 's/.*"tag_name" *: *"\([^"]*\)".*/\1/p' | head -1)
 
 if [ -z "${TAG}" ]; then
   echo "muninn: could not determine latest version (GitHub API rate limit?)" >&2
