@@ -135,6 +135,24 @@ func TestAPIKey_ExpiryPast(t *testing.T) {
 	}
 }
 
+// TestGenerateAPIKey_WriteModeAccepted verifies that "write" is a valid mode.
+func TestGenerateAPIKey_WriteModeAccepted(t *testing.T) {
+	s := NewStore(openAuthTestDB(t))
+	_, _, err := s.GenerateAPIKey("default", "ingest-bot", "write", nil)
+	if err != nil {
+		t.Errorf("write mode should be accepted, got: %v", err)
+	}
+}
+
+// TestGenerateAPIKey_InvalidModeRejected verifies that unknown modes are rejected.
+func TestGenerateAPIKey_InvalidModeRejected(t *testing.T) {
+	s := NewStore(openAuthTestDB(t))
+	_, _, err := s.GenerateAPIKey("default", "bad", "superuser", nil)
+	if err == nil {
+		t.Error("expected error for invalid mode, got nil")
+	}
+}
+
 // TestAPIKey_WrongVault creates a key for "vault-a" and verifies that
 // ValidateAPIKey still succeeds (keys are global by token, not vault-scoped)
 // but the returned key's vault is "vault-a", not "vault-b".

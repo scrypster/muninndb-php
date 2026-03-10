@@ -65,6 +65,22 @@ func TestCreateAPIKey(t *testing.T) {
 	}
 }
 
+// TestCreateAPIKey_WriteModeAccepted tests that "write" mode is accepted.
+func TestCreateAPIKey_WriteModeAccepted(t *testing.T) {
+	store := newTestAuthStore(t)
+	srv := newTestServer(t, store)
+
+	body, _ := json.Marshal(map[string]string{"vault": "default", "label": "bot", "mode": "write"})
+	req := httptest.NewRequest("POST", "/api/admin/keys", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Errorf("expected 201 for write mode, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 // TestCreateAPIKeyInvalidMode tests that an invalid mode is rejected
 func TestCreateAPIKeyInvalidMode(t *testing.T) {
 	store := newTestAuthStore(t)

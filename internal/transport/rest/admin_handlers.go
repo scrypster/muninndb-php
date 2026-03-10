@@ -101,8 +101,8 @@ func (s *Server) handleCreateAPIKey(authStore *auth.Store) http.HandlerFunc {
 			s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "label too long")
 			return
 		}
-		if req.Mode != "" && req.Mode != "full" && req.Mode != "observe" {
-			s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "mode must be 'full' or 'observe'")
+		if req.Mode != "" && req.Mode != "full" && req.Mode != "observe" && req.Mode != "write" {
+			s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "mode must be 'full', 'observe', or 'write'")
 			return
 		}
 		var expiresAt *time.Time
