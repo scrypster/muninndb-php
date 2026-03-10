@@ -161,6 +161,8 @@ func printStatusDisplay(compact bool) runState {
 			fmt.Println("  muninn help   →  see all commands")
 		}
 		if state == stateRunning {
+			fmt.Println()
+			fmt.Println("  Web UI → http://127.0.0.1:8476")
 			checkVersionHint()
 		}
 	}
