@@ -210,3 +210,39 @@ func TestAdminCluster_Disable_NoCoordinator(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 }
+
+// TestAdminCluster_Settings_UsesErrInvalidClusterRequest verifies that cluster settings
+// validation errors return error code 4014 (ErrInvalidClusterRequest), not 4003
+// (ErrInvalidEngram which belongs to the engram domain).
+func TestAdminCluster_Settings_UsesErrInvalidClusterRequest(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"invalid JSON", `{bad json`},
+		{"heartbeat_ms zero", `{"heartbeat_ms":0}`},
+		{"sdown_beats zero", `{"sdown_beats":0}`},
+		{"ccs_interval too low", `{"ccs_interval_seconds":2}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newTestServer(t, nil)
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest("PUT", "/api/admin/cluster/settings", strings.NewReader(tc.body))
+			r.Header.Set("Content-Type", "application/json")
+			s.mux.ServeHTTP(w, r)
+
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400, got %d", w.Code)
+			}
+			var resp ErrorResponse
+			if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("unmarshal response: %v", err)
+			}
+			if resp.Error.Code != ErrInvalidClusterRequest {
+				t.Errorf("error code = %d, want %d (ErrInvalidClusterRequest); got %q",
+					resp.Error.Code, ErrInvalidClusterRequest, resp.Error.Message)
+			}
+		})
+	}
+}

@@ -75,24 +75,24 @@ func (s *Server) handleAdminClusterEnable(w http.ResponseWriter, r *http.Request
 	}
 	var req enableClusterRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "invalid JSON")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidClusterRequest, "invalid JSON")
 		return
 	}
 	if req.Role == "" {
-		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "role is required")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidClusterRequest, "role is required")
 		return
 	}
 	validRoles := map[string]bool{"primary": true, "replica": true, "sentinel": true, "observer": true}
 	if !validRoles[req.Role] {
-		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "role must be one of: primary, replica, sentinel, observer")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidClusterRequest, "role must be one of: primary, replica, sentinel, observer")
 		return
 	}
 	if req.BindAddr == "" {
-		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "bind_addr is required")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidClusterRequest, "bind_addr is required")
 		return
 	}
 	if req.Role != "primary" && req.CortexAddr == "" {
-		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "cortex_addr is required for non-primary roles")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidClusterRequest, "cortex_addr is required for non-primary roles")
 		return
 	}
 	// Start from defaults so fields like LeaseTTL and HeartbeatMS are never
@@ -135,11 +135,11 @@ func (s *Server) handleAdminClusterAddNode(w http.ResponseWriter, r *http.Reques
 		Token string `json:"token"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "invalid JSON")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidClusterRequest, "invalid JSON")
 		return
 	}
 	if req.Addr == "" {
-		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "addr is required")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidClusterRequest, "addr is required")
 		return
 	}
 	tm := s.joinTokenManager()
@@ -163,7 +163,7 @@ func (s *Server) handleAdminClusterRemoveNode(w http.ResponseWriter, r *http.Req
 	}
 	nodeID := r.PathValue("id")
 	if nodeID == "" {
-		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "node id is required in path")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidClusterRequest, "node id is required in path")
 		return
 	}
 	if r.URL.Query().Get("drain") == "true" {
@@ -177,7 +177,7 @@ func (s *Server) handleAdminClusterRemoveNode(w http.ResponseWriter, r *http.Req
 	}
 	if err := s.coordinator.RemoveNode(nodeID); err != nil {
 		if errors.Is(err, replication.ErrSelfRemoval) {
-			s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "cannot remove self from cluster")
+			s.sendError(r, w, http.StatusBadRequest, ErrInvalidClusterRequest, "cannot remove self from cluster")
 			return
 		}
 		s.sendError(r, w, http.StatusInternalServerError, ErrInternal, fmt.Sprintf("remove node: %v", err))
@@ -199,11 +199,11 @@ func (s *Server) handleAdminClusterFailover(w http.ResponseWriter, r *http.Reque
 		TargetNodeID string `json:"target_node_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "invalid JSON")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidClusterRequest, "invalid JSON")
 		return
 	}
 	if req.TargetNodeID == "" {
-		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "target_node_id is required")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidClusterRequest, "target_node_id is required")
 		return
 	}
 	if err := s.coordinator.GracefulFailover(r.Context(), req.TargetNodeID); err != nil {
@@ -256,23 +256,34 @@ func (s *Server) handleAdminClusterGetSettings(w http.ResponseWriter, r *http.Re
 func (s *Server) handleAdminClusterSettings(w http.ResponseWriter, r *http.Request) {
 	var req clusterSettingsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "invalid JSON")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidClusterRequest, "invalid JSON")
 		return
 	}
 	if req.HeartbeatMS != nil && *req.HeartbeatMS <= 0 {
-		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "heartbeat_ms must be > 0")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidClusterRequest, "heartbeat_ms must be > 0")
 		return
 	}
 	if req.SDOWNBeats != nil && *req.SDOWNBeats < 1 {
-		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "sdown_beats must be >= 1")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidClusterRequest, "sdown_beats must be >= 1")
 		return
 	}
 	if req.CCSIntervalS != nil && *req.CCSIntervalS < 5 {
-		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "ccs_interval_seconds must be >= 5")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidClusterRequest, "ccs_interval_seconds must be >= 5")
 		return
 	}
-	if s.coordinator != nil && req.HeartbeatMS != nil {
-		s.coordinator.MSP().SetHeartbeatInterval(time.Duration(*req.HeartbeatMS) * time.Millisecond)
+	if s.coordinator != nil {
+		if req.HeartbeatMS != nil {
+			s.coordinator.MSP().SetHeartbeatInterval(time.Duration(*req.HeartbeatMS) * time.Millisecond)
+		}
+		if req.SDOWNBeats != nil {
+			s.coordinator.MSP().SetMissedThreshold(*req.SDOWNBeats)
+		}
+		if req.CCSIntervalS != nil && s.coordinator.CCSProbe() != nil {
+			s.coordinator.CCSProbe().SetInterval(time.Duration(*req.CCSIntervalS) * time.Second)
+		}
+		if req.ReconcileHeal != nil {
+			s.coordinator.SetReconcileOnHeal(*req.ReconcileHeal)
+		}
 	}
 	if err := s.applyAndPersistSettings(req); err != nil {
 		s.sendError(r, w, http.StatusInternalServerError, ErrInternal, fmt.Sprintf("persist settings: %v", err))
@@ -284,11 +295,11 @@ func (s *Server) handleAdminClusterSettings(w http.ResponseWriter, r *http.Reque
 func (s *Server) handleAdminClusterTestNode(w http.ResponseWriter, r *http.Request) {
 	var req testNodeRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "invalid JSON")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidClusterRequest, "invalid JSON")
 		return
 	}
 	if req.Addr == "" {
-		s.sendError(r, w, http.StatusBadRequest, ErrInvalidEngram, "addr is required")
+		s.sendError(r, w, http.StatusBadRequest, ErrInvalidClusterRequest, "addr is required")
 		return
 	}
 	start := time.Now()

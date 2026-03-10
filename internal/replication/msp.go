@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/vmihailenco/msgpack/v5"
@@ -32,6 +33,9 @@ type MSP struct {
 	// interval stores the current heartbeat interval, updated by SetHeartbeatInterval.
 	// Protected by mu. Zero means "use the value passed to Run()".
 	interval time.Duration
+
+	// missedThreshold is the SDOWN beat count, hot-reloadable via SetMissedThreshold.
+	missedThreshold atomic.Int32
 
 	// votedDown is scaffolded for Phase 2 gossip: maps nodeID → set of voter nodeIDs
 	// that have reported it SDOWN. Not yet populated from gossip.
@@ -208,7 +212,10 @@ func (m *MSP) AllPeers() []*PeerState {
 // Run is the main heartbeat loop. It sends PINGs every pingInterval and
 // uses LastSeen to detect SDOWN when a peer has not been heard from for
 // missedThreshold * pingInterval. Blocks until ctx is cancelled.
+// The missedThreshold can be updated at runtime via SetMissedThreshold.
 func (m *MSP) Run(ctx context.Context, pingInterval time.Duration, missedThreshold int) error {
+	m.missedThreshold.Store(int32(missedThreshold))
+
 	ticker := time.NewTicker(pingInterval)
 	defer ticker.Stop()
 
@@ -222,9 +229,15 @@ func (m *MSP) Run(ctx context.Context, pingInterval time.Duration, missedThresho
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			m.tick(payload, pingInterval, missedThreshold)
+			m.tick(payload, pingInterval, int(m.missedThreshold.Load()))
 		}
 	}
+}
+
+// SetMissedThreshold updates the SDOWN missed-beat threshold for future ticks.
+// Safe to call after Run(). The change takes effect on the next tick.
+func (m *MSP) SetMissedThreshold(n int) {
+	m.missedThreshold.Store(int32(n))
 }
 
 // nonObserverQuorumLocked computes quorum based only on non-observer peers

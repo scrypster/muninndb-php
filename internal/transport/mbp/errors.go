@@ -19,6 +19,7 @@ const (
 	ErrVaultForbidden       ErrorCode = 4011
 	ErrRateLimited          ErrorCode = 4012
 	ErrMaxResultsExceeded   ErrorCode = 4013
+	ErrInvalidClusterRequest ErrorCode = 4014
 	ErrStorageError         ErrorCode = 5001
 	ErrIndexError           ErrorCode = 5002
 	ErrEnrichmentError      ErrorCode = 5003
@@ -65,6 +66,8 @@ func ErrorCodeMessage(code ErrorCode) string {
 		return "rate limited"
 	case ErrMaxResultsExceeded:
 		return "max results exceeded"
+	case ErrInvalidClusterRequest:
+		return "invalid cluster request"
 	case ErrStorageError:
 		return "storage error"
 	case ErrIndexError:

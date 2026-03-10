@@ -53,9 +53,10 @@ const (
 	ErrWeightsInvalid       = mbp.ErrWeightsInvalid
 	ErrAuthFailed           = mbp.ErrAuthFailed
 	ErrVaultForbidden       = mbp.ErrVaultForbidden
-	ErrRateLimited          = mbp.ErrRateLimited
-	ErrMaxResultsExceeded   = mbp.ErrMaxResultsExceeded
-	ErrStorageError         = mbp.ErrStorageError
+	ErrRateLimited           = mbp.ErrRateLimited
+	ErrMaxResultsExceeded    = mbp.ErrMaxResultsExceeded
+	ErrInvalidClusterRequest = mbp.ErrInvalidClusterRequest
+	ErrStorageError          = mbp.ErrStorageError
 	ErrIndexError           = mbp.ErrIndexError
 	ErrEnrichmentError      = mbp.ErrEnrichmentError
 	ErrShardUnavailable     = mbp.ErrShardUnavailable

@@ -9,6 +9,7 @@ import (
 	"math"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -60,6 +61,9 @@ type CCSProbe struct {
 	last    CCSResult
 	sampleN int // number of keys to sample per round (default 100)
 
+	// probeIntervalS is the CCS probe interval in seconds, hot-reloadable via SetInterval.
+	probeIntervalS atomic.Int32
+
 	// pending tracks in-flight probe rounds: requestID -> channel of responses.
 	pendingMu sync.Mutex
 	pending   map[string]chan mbp.CCSResponseMsg
@@ -67,8 +71,11 @@ type CCSProbe struct {
 
 // NewCCSProbe creates a CCSProbe. store may be nil; if nil the probe returns
 // score=1.0 (no cognitive state to compare).
+// defaultCCSIntervalS is the default CCS probe interval in seconds.
+const defaultCCSIntervalS = 30
+
 func NewCCSProbe(store HebbianSampler, coord *ClusterCoordinator) *CCSProbe {
-	return &CCSProbe{
+	p := &CCSProbe{
 		store:   store,
 		coord:   coord,
 		sampleN: 100,
@@ -80,6 +87,8 @@ func NewCCSProbe(store HebbianSampler, coord *ClusterCoordinator) *CCSProbe {
 			SampledAt:  time.Now(),
 		},
 	}
+	p.probeIntervalS.Store(defaultCCSIntervalS)
+	return p
 }
 
 // LastResult returns the most recently computed CCSResult (thread-safe).
@@ -89,13 +98,31 @@ func (p *CCSProbe) LastResult() CCSResult {
 	return p.last
 }
 
+// SetInterval updates the CCS probe interval. Safe to call after Run().
+// The change takes effect on the next ticker reset.
+func (p *CCSProbe) SetInterval(d time.Duration) {
+	s := int32(d.Seconds())
+	if s < 1 {
+		s = 1
+	}
+	p.probeIntervalS.Store(s)
+}
+
 // Run starts the periodic CCS sampling loop. It runs until ctx is cancelled.
 // Only the Cortex node performs probes; Lobes are passive responders.
+// The probe interval can be updated at runtime via SetInterval.
 func (p *CCSProbe) Run(ctx context.Context) {
-	ticker := time.NewTicker(30 * time.Second)
+	interval := time.Duration(p.probeIntervalS.Load()) * time.Second
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
+		// Reset ticker if interval has changed.
+		newInterval := time.Duration(p.probeIntervalS.Load()) * time.Second
+		if newInterval != interval {
+			interval = newInterval
+			ticker.Reset(interval)
+		}
 		select {
 		case <-ctx.Done():
 			return

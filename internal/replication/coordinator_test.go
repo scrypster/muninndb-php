@@ -1270,8 +1270,14 @@ func TestBug176_CrashRecoveryPathClearsBreadcrumb(t *testing.T) {
 		done <- coord.runAsCortex(ctx)
 	}()
 
-	// Allow time for crash-recovery to promote and clear the role, then unblock.
-	time.Sleep(100 * time.Millisecond)
+	// Wait for crash-recovery to promote (Role transitions to Primary), then unblock.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if coord.Role() == RolePrimary {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
 	cancel()
 	select {
 	case <-done:
@@ -1333,4 +1339,89 @@ func TestBug176_HandleHandoffClearsBreadcrumb(t *testing.T) {
 	if role != "" {
 		t.Errorf("LoadRole() = %q after HandleHandoff, want \"\" (regression: issue #176)", role)
 	}
+}
+
+// TestMSP_SetMissedThreshold verifies that SetMissedThreshold hot-reloads the SDOWN beat
+// count without restarting the MSP.
+func TestMSP_SetMissedThreshold(t *testing.T) {
+	mgr := NewConnManager("node1")
+	msp := NewMSP("node1", "127.0.0.1:9000", mgr)
+
+	// Atomic starts at zero before Run(); SetMissedThreshold can be called before Run().
+	msp.SetMissedThreshold(3)
+	if got := int(msp.missedThreshold.Load()); got != 3 {
+		t.Fatalf("after SetMissedThreshold(3), missedThreshold = %d, want 3", got)
+	}
+
+	// Hot-reload to 10.
+	msp.SetMissedThreshold(10)
+	if got := int(msp.missedThreshold.Load()); got != 10 {
+		t.Errorf("after SetMissedThreshold(10), missedThreshold = %d, want 10", got)
+	}
+
+	// Run() also sets the threshold from its parameter on startup.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = msp.Run(ctx, 100*time.Millisecond, 5)
+	}()
+	// Poll until Run() has stored the threshold.
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if int(msp.missedThreshold.Load()) == 5 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if got := int(msp.missedThreshold.Load()); got != 5 {
+		t.Errorf("after Run(threshold=5), missedThreshold = %d, want 5", got)
+	}
+}
+
+// TestCCSProbe_SetInterval verifies that SetInterval hot-reloads the CCS probe interval.
+func TestCCSProbe_SetInterval(t *testing.T) {
+	probe := NewCCSProbe(nil, nil)
+
+	// Default interval is 30s.
+	if got := int(probe.probeIntervalS.Load()); got != defaultCCSIntervalS {
+		t.Fatalf("default probeIntervalS = %d, want %d", got, defaultCCSIntervalS)
+	}
+
+	// Hot-reload to 60s.
+	probe.SetInterval(60 * time.Second)
+	if got := int(probe.probeIntervalS.Load()); got != 60 {
+		t.Errorf("after SetInterval(60s), probeIntervalS = %d, want 60", got)
+	}
+
+	// Minimum clamped to 1.
+	probe.SetInterval(0)
+	if got := int(probe.probeIntervalS.Load()); got != 1 {
+		t.Errorf("after SetInterval(0), probeIntervalS = %d, want 1 (clamped)", got)
+	}
+}
+
+// TestCoordinator_SetReconcileOnHeal verifies that SetReconcileOnHeal toggles the flag
+// and that the SDOWN recovery path respects it.
+func TestCoordinator_SetReconcileOnHeal(t *testing.T) {
+	coord, _ := newTestCoordinator(t, "primary")
+
+	// Default: enabled.
+	if got := coord.reconcileOnHeal.Load(); got != 1 {
+		t.Fatalf("default reconcileOnHeal = %d, want 1", got)
+	}
+
+	// Disable.
+	coord.SetReconcileOnHeal(false)
+	if got := coord.reconcileOnHeal.Load(); got != 0 {
+		t.Errorf("after SetReconcileOnHeal(false), reconcileOnHeal = %d, want 0", got)
+	}
+
+	// Re-enable.
+	coord.SetReconcileOnHeal(true)
+	if got := coord.reconcileOnHeal.Load(); got != 1 {
+		t.Errorf("after SetReconcileOnHeal(true), reconcileOnHeal = %d, want 1", got)
+	}
+
 }

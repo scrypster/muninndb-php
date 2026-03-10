@@ -86,6 +86,11 @@ type ClusterCoordinator struct {
 	// nodeState tracks whether the coordinator is in normal or draining mode.
 	nodeState atomic.Uint32
 
+	// reconcileOnHeal controls whether post-partition reconciliation fires when a peer
+	// recovers from SDOWN. Hot-reloadable via SetReconcileOnHeal.
+	// 1 = enabled (default), 0 = disabled.
+	reconcileOnHeal atomic.Uint32
+
 	// ccsProbe measures Cognitive Consistency Score across cluster nodes.
 	// Set via SetCCSProbe after the coordinator is created.
 	ccsProbe *CCSProbe
@@ -161,6 +166,8 @@ func NewClusterCoordinator(
 		streamers:   make(map[string]context.CancelFunc),
 		reconDelay:  reconDelay,
 	}
+	// Default reconcile-on-heal to enabled; matches config default (ReconcileHeal=true).
+	c.reconcileOnHeal.Store(1)
 
 	// Wire token manager when a cluster secret is configured.
 	if cfg.ClusterSecret != "" {
@@ -216,7 +223,7 @@ func NewClusterCoordinator(
 					Addr:   p.Addr,
 					Role:   p.Role,
 				})
-				if c.reconciler != nil {
+				if c.reconciler != nil && c.reconcileOnHeal.Load() == 1 {
 					go func() {
 						time.Sleep(c.reconDelay)
 						if !c.IsLeader() {
@@ -1306,6 +1313,26 @@ func (c *ClusterCoordinator) SetMOL(mol *wal.MOL) {
 		panic("SetMOL called after Run()")
 	}
 	c.mol = mol
+}
+
+// SetReconcileOnHeal controls whether post-partition reconciliation fires when a
+// peer recovers from SDOWN. Safe to call at any time (hot-reloadable).
+func (c *ClusterCoordinator) SetReconcileOnHeal(enabled bool) {
+	if enabled {
+		c.reconcileOnHeal.Store(1)
+	} else {
+		c.reconcileOnHeal.Store(0)
+	}
+}
+
+// GetClusterConfig returns the in-memory cluster config.
+func (c *ClusterCoordinator) GetClusterConfig() *config.ClusterConfig {
+	return c.cfg
+}
+
+// CCSProbe returns the CCSProbe, or nil if not configured.
+func (c *ClusterCoordinator) CCSProbe() *CCSProbe {
+	return c.ccsProbe
 }
 
 // IncrementSnapshotCount marks the start of a snapshot transfer.
