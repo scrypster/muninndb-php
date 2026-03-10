@@ -5,11 +5,15 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/cockroachdb/pebble"
 )
+
+// ErrKeyNotFound is returned by RevokeAPIKey when the key does not exist.
+var ErrKeyNotFound = errors.New("api key not found")
 
 // GenerateAPIKey creates a new API key for the given vault.
 // Returns the raw token (shown once) and the key metadata.
@@ -124,16 +128,17 @@ func (s *Store) ListAPIKeys(vault string) ([]APIKey, error) {
 }
 
 // RevokeAPIKey removes the key with the given display ID from the given vault.
+// Returns ErrKeyNotFound if the key does not exist or the ID is invalid.
 func (s *Store) RevokeAPIKey(vault, keyID string) error {
 	idBytes, err := base64.RawURLEncoding.DecodeString(keyID)
-	if err != nil || len(idBytes) < 8 {
-		return fmt.Errorf("invalid key id")
+	if err != nil || len(idBytes) != 8 {
+		return ErrKeyNotFound
 	}
 
 	idxKey := apiKeyVaultIdxKey(vault, idBytes)
 	storageHash, closer, err := s.db.Get(idxKey)
 	if err != nil {
-		return fmt.Errorf("key not found")
+		return ErrKeyNotFound
 	}
 	hash := make([]byte, 16)
 	copy(hash, storageHash)
