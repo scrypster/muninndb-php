@@ -612,7 +612,7 @@ func runServer() {
 		uiAddrDefault = v
 	}
 	uiAddr := flag.String("ui-addr", uiAddrDefault, "Web UI HTTP listen address")
-	mcpToken := flag.String("mcp-token", "", "Bearer token for MCP auth (empty = no auth)")
+	mcpToken := flag.String("mcp-token", "", "Bearer token override for MCP auth (leave empty to read from ~/.muninn/mcp.token)")
 	dev := flag.Bool("dev", false, "serve web assets from ./web directory (development mode)")
 	backupInterval := flag.String("backup-interval", "", "Automated backup interval (e.g. 6h, 30m); empty = disabled")
 	backupDir := flag.String("backup-dir", "", "Directory to write automated backups into")
@@ -649,6 +649,12 @@ func runServer() {
 		fmt.Fprintf(os.Stderr, "  MUNINN_BACKUP_RETAIN          Number of automated backups to keep (default: 5)\n")
 	}
 	flag.Parse()
+
+	// MCP token: --mcp-token flag is an explicit override (tests, container entrypoints).
+	// Default path reads from ~/.muninn/mcp.token so the token never appears in `ps` output.
+	if *mcpToken == "" {
+		*mcpToken = readTokenFile()
+	}
 
 	// TLS env fallbacks — flags take priority; env vars are the fallback.
 	if *tlsCert == "" {

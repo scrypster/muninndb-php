@@ -35,13 +35,14 @@ func parseExplicitFlag(name string, osArgs []string) string {
 // It forwards --listen-host when non-default, --cors-origins when non-empty,
 // and any explicitly provided per-service address flags (--rest-addr, --mbp-addr,
 // --grpc-addr, --mcp-addr, --ui-addr) so they take effect in the daemon.
-func buildDaemonArgs(dataDir string, dev bool, mcpToken string, osArgs []string, listenHostEnv, corsOriginsEnv string) []string {
+//
+// The MCP bearer token is intentionally NOT passed as a CLI argument to avoid
+// exposing it in `ps` output. The daemon reads it directly from
+// ~/.muninn/mcp.token at startup via readTokenFile().
+func buildDaemonArgs(dataDir string, dev bool, osArgs []string, listenHostEnv, corsOriginsEnv string) []string {
 	args := []string{"--daemon", "--data", dataDir}
 	if dev {
 		args = append(args, "--dev")
-	}
-	if mcpToken != "" {
-		args = append(args, "--mcp-token", mcpToken)
 	}
 	// --listen-host: forward when non-default
 	listenHost := parseListenHost(osArgs, listenHostEnv)
@@ -101,7 +102,7 @@ func runStart(webEnabled bool) {
 		}
 	}
 
-	args := buildDaemonArgs(dataDir, dev, readTokenFile(), os.Args[1:], os.Getenv("MUNINN_LISTEN_HOST"), os.Getenv("MUNINN_CORS_ORIGINS"))
+	args := buildDaemonArgs(dataDir, dev, os.Args[1:], os.Getenv("MUNINN_LISTEN_HOST"), os.Getenv("MUNINN_CORS_ORIGINS"))
 	if !webEnabled {
 		args = append(args, "--no-web")
 	}

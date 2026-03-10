@@ -62,7 +62,7 @@ func TestCORSOriginsResolution(t *testing.T) {
 func TestBuildDaemonArgs_CORSFlagBeatsEnv(t *testing.T) {
 	osArgs := []string{"--cors-origins=http://flag.local"}
 	corsOriginsEnv := "http://env.local"
-	got := buildDaemonArgs("/tmp/data", false, "", osArgs, "", corsOriginsEnv)
+	got := buildDaemonArgs("/tmp/data", false, osArgs, "", corsOriginsEnv)
 
 	foundFlag := false
 	foundEnv := false
@@ -98,7 +98,7 @@ func TestBuildDaemonArgs_PortFlagsForwarded(t *testing.T) {
 	}
 	for _, tc := range cases {
 		osArgs := []string{tc.flag, tc.val}
-		got := buildDaemonArgs("/tmp/data", false, "", osArgs, "", "")
+		got := buildDaemonArgs("/tmp/data", false, osArgs, "", "")
 
 		foundFlag := false
 		foundVal := false
@@ -119,7 +119,7 @@ func TestBuildDaemonArgs_PortFlagsForwarded(t *testing.T) {
 // TestBuildDaemonArgs_PortFlagsEqForm verifies forwarding for --flag=value syntax.
 func TestBuildDaemonArgs_PortFlagsEqForm(t *testing.T) {
 	osArgs := []string{"--rest-addr=127.0.0.1:8485"}
-	got := buildDaemonArgs("/tmp/data", false, "", osArgs, "", "")
+	got := buildDaemonArgs("/tmp/data", false, osArgs, "", "")
 
 	found := false
 	for i, arg := range got {
@@ -136,7 +136,7 @@ func TestBuildDaemonArgs_PortFlagsEqForm(t *testing.T) {
 // address flags produces no --*-addr entries in daemon args (they are redundant
 // since the daemon uses the same defaults).
 func TestBuildDaemonArgs_DefaultAddrNotForwarded(t *testing.T) {
-	got := buildDaemonArgs("/tmp/data", false, "", []string{}, "", "")
+	got := buildDaemonArgs("/tmp/data", false, []string{}, "", "")
 	for _, arg := range got {
 		for _, flag := range []string{"--rest-addr", "--mbp-addr", "--grpc-addr", "--mcp-addr", "--ui-addr"} {
 			if arg == flag {

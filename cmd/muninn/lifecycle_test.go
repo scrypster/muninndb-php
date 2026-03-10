@@ -11,7 +11,6 @@ func TestBuildDaemonArgs(t *testing.T) {
 		name           string
 		dataDir        string
 		dev            bool
-		mcpToken       string
 		osArgs         []string
 		listenHostEnv  string
 		corsOriginsEnv string
@@ -19,21 +18,21 @@ func TestBuildDaemonArgs(t *testing.T) {
 		wantAbsent     []string
 	}{
 		{
-			name:    "default listen-host not forwarded",
-			dataDir: "/tmp/data",
-			osArgs:  []string{},
+			name:       "default listen-host not forwarded",
+			dataDir:    "/tmp/data",
+			osArgs:     []string{},
 			wantAbsent: []string{"--listen-host"},
 		},
 		{
-			name:    "non-default listen-host forwarded",
-			dataDir: "/tmp/data",
-			osArgs:  []string{"--listen-host", "0.0.0.0"},
+			name:         "non-default listen-host forwarded",
+			dataDir:      "/tmp/data",
+			osArgs:       []string{"--listen-host", "0.0.0.0"},
 			wantContains: []string{"--listen-host", "0.0.0.0"},
 		},
 		{
-			name:    "cors-origins flag in osArgs forwarded",
-			dataDir: "/tmp/data",
-			osArgs:  []string{"--cors-origins", "http://flag.local"},
+			name:         "cors-origins flag in osArgs forwarded",
+			dataDir:      "/tmp/data",
+			osArgs:       []string{"--cors-origins", "http://flag.local"},
 			wantContains: []string{"--cors-origins", "http://flag.local"},
 		},
 		{
@@ -52,10 +51,10 @@ func TestBuildDaemonArgs(t *testing.T) {
 			wantAbsent:     []string{"http://env.local"},
 		},
 		{
-			name:         "neither cors flag nor env not forwarded",
-			dataDir:      "/tmp/data",
-			osArgs:       []string{},
-			wantAbsent:   []string{"--cors-origins"},
+			name:       "neither cors flag nor env not forwarded",
+			dataDir:    "/tmp/data",
+			osArgs:     []string{},
+			wantAbsent: []string{"--cors-origins"},
 		},
 		{
 			name:         "dev true forwarded",
@@ -65,17 +64,18 @@ func TestBuildDaemonArgs(t *testing.T) {
 			wantContains: []string{"--dev"},
 		},
 		{
-			name:         "mcpToken set forwarded",
-			dataDir:      "/tmp/data",
-			mcpToken:     "tok123",
-			osArgs:       []string{},
-			wantContains: []string{"--mcp-token", "tok123"},
+			// Token must NEVER appear in daemon argv — it is read from disk by the daemon.
+			// This prevents the token from leaking via `ps ax` or /proc/<pid>/cmdline.
+			name:       "mcp-token never in daemon args",
+			dataDir:    "/tmp/data",
+			osArgs:     []string{},
+			wantAbsent: []string{"--mcp-token"},
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := buildDaemonArgs(tc.dataDir, tc.dev, tc.mcpToken, tc.osArgs, tc.listenHostEnv, tc.corsOriginsEnv)
+			got := buildDaemonArgs(tc.dataDir, tc.dev, tc.osArgs, tc.listenHostEnv, tc.corsOriginsEnv)
 
 			for _, want := range tc.wantContains {
 				found := false
