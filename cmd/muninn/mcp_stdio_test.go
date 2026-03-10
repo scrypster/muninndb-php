@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -116,16 +117,151 @@ func TestRunMCPStdioWith_EmptyLinesSkipped(t *testing.T) {
 	}
 }
 
-func TestRunMCPStdioWith_DaemonUnreachableNoOutput(t *testing.T) {
+// withMCPStderr redirects mcpStderr for the duration of a test.
+func withMCPStderr(t *testing.T, w io.Writer) {
+	t.Helper()
+	orig := mcpStderr
+	mcpStderr = w
+	t.Cleanup(func() { mcpStderr = orig })
+}
+
+func TestRunMCPStdioWith_DaemonUnreachable_JSONRPCError(t *testing.T) {
 	withMCPProxyURL(t, "http://127.0.0.1:1") // nothing listening
 
-	in := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"ping"}` + "\n")
+	in := strings.NewReader(`{"jsonrpc":"2.0","id":42,"method":"ping"}` + "\n")
 	var out bytes.Buffer
-	// Must not panic — error goes to stderr, stdout stays empty.
+	var errBuf bytes.Buffer
+	withMCPStderr(t, &errBuf)
 	runMCPStdioWith(in, &out)
 
-	if out.Len() != 0 {
-		t.Errorf("expected no stdout when daemon unreachable, got %q", out.String())
+	// Must produce a valid JSON-RPC error, not silence.
+	var resp map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out.String())), &resp); err != nil {
+		t.Fatalf("expected valid JSON-RPC error response, got: %q — parse error: %v", out.String(), err)
+	}
+	errObj, _ := resp["error"].(map[string]any)
+	if errObj == nil {
+		t.Fatalf("expected error field in response, got %v", resp)
+	}
+	if code, _ := errObj["code"].(float64); code != -32000 {
+		t.Errorf("expected error code -32000, got %v", code)
+	}
+	if id, _ := resp["id"].(float64); id != 42 {
+		t.Errorf("expected id=42 in error response, got %v", resp["id"])
+	}
+	// Diagnostic message must go to stderr.
+	if !strings.Contains(errBuf.String(), "daemon unreachable") {
+		t.Errorf("expected stderr diagnostic about daemon unreachable, got %q", errBuf.String())
+	}
+}
+
+// TestRunMCPStdioWith_401_JSONRPCError verifies that an HTTP 401 is converted to
+// a proper JSON-RPC error with code -32001 and a diagnostic on stderr.
+func TestRunMCPStdioWith_401_JSONRPCError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"error":"unauthorized"}`))
+	}))
+	defer srv.Close()
+	withMCPProxyURL(t, srv.URL)
+
+	var errBuf bytes.Buffer
+	withMCPStderr(t, &errBuf)
+
+	in := strings.NewReader(`{"jsonrpc":"2.0","id":7,"method":"tools/list"}` + "\n")
+	var out bytes.Buffer
+	runMCPStdioWith(in, &out)
+
+	var resp map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out.String())), &resp); err != nil {
+		t.Fatalf("expected valid JSON-RPC error response, got: %q — parse error: %v", out.String(), err)
+	}
+	errObj, _ := resp["error"].(map[string]any)
+	if errObj == nil {
+		t.Fatalf("expected error field in response, got %v", resp)
+	}
+	if code, _ := errObj["code"].(float64); code != -32001 {
+		t.Errorf("expected error code -32001, got %v", code)
+	}
+	if id, _ := resp["id"].(float64); id != 7 {
+		t.Errorf("expected id=7 in error response, got %v", resp["id"])
+	}
+	msg, _ := errObj["message"].(string)
+	if !strings.Contains(msg, "authentication") {
+		t.Errorf("expected auth message, got %q", msg)
+	}
+	if !strings.Contains(errBuf.String(), "401") {
+		t.Errorf("expected 401 diagnostic on stderr, got %q", errBuf.String())
+	}
+}
+
+// TestRunMCPStdioWith_404_JSONRPCError verifies HTTP 404 → JSON-RPC error -32004.
+func TestRunMCPStdioWith_404_JSONRPCError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+	withMCPProxyURL(t, srv.URL)
+	withMCPStderr(t, &bytes.Buffer{})
+
+	in := strings.NewReader(`{"jsonrpc":"2.0","id":3,"method":"ping"}` + "\n")
+	var out bytes.Buffer
+	runMCPStdioWith(in, &out)
+
+	var resp map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out.String())), &resp); err != nil {
+		t.Fatalf("expected valid JSON, got: %q — %v", out.String(), err)
+	}
+	errObj, _ := resp["error"].(map[string]any)
+	if code, _ := errObj["code"].(float64); code != -32004 {
+		t.Errorf("expected -32004, got %v", code)
+	}
+}
+
+// TestRunMCPStdioWith_500_JSONRPCError verifies HTTP 500 → JSON-RPC error -32000.
+func TestRunMCPStdioWith_500_JSONRPCError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	withMCPProxyURL(t, srv.URL)
+	withMCPStderr(t, &bytes.Buffer{})
+
+	in := strings.NewReader(`{"jsonrpc":"2.0","id":9,"method":"ping"}` + "\n")
+	var out bytes.Buffer
+	runMCPStdioWith(in, &out)
+
+	var resp map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out.String())), &resp); err != nil {
+		t.Fatalf("expected valid JSON, got: %q — %v", out.String(), err)
+	}
+	errObj, _ := resp["error"].(map[string]any)
+	if code, _ := errObj["code"].(float64); code != -32000 {
+		t.Errorf("expected -32000, got %v", code)
+	}
+}
+
+// TestRunMCPStdioWith_ErrorNullIDWhenNoIDInRequest verifies that errors for
+// requests without an id field use id:null in the response.
+func TestRunMCPStdioWith_ErrorNullIDWhenNoIDInRequest(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+	withMCPProxyURL(t, srv.URL)
+	withMCPStderr(t, &bytes.Buffer{})
+
+	// Notification: no "id" field
+	in := strings.NewReader(`{"jsonrpc":"2.0","method":"notifications/initialized"}` + "\n")
+	var out bytes.Buffer
+	runMCPStdioWith(in, &out)
+
+	var resp map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out.String())), &resp); err != nil {
+		t.Fatalf("expected valid JSON, got: %q — %v", out.String(), err)
+	}
+	if resp["id"] != nil {
+		t.Errorf("expected id:null for request with no id, got %v", resp["id"])
 	}
 }
 

@@ -140,7 +140,7 @@ muninn init --tool claude --yes
 muninn init --tool cursor,claude --yes
 ```
 
-**Manual MCP config:** Point any MCP client to `http://127.0.0.1:8750/mcp`.
+**Manual MCP config:** HTTP clients (Cursor, Codex, OpenCode) can connect to `http://127.0.0.1:8750/mcp`. If MCP auth is enabled, include the token in the `Authorization` header: `Authorization: Bearer $(cat ~/.muninn/mcp.token)`. Claude Desktop uses the built-in stdio bridge — run `muninn init` instead of pointing it at the URL directly.
 
 ---
 
