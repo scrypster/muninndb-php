@@ -670,3 +670,99 @@ func TestMCPFullPipelineProof(t *testing.T) {
 		t.Errorf("gamma (2d ago) should appear in since=15d results")
 	}
 }
+
+// TestVaultBehaviorPersistsAfterInit is an end-to-end regression test for issue #189.
+// It starts a real daemon, calls applyBehaviorToVault (the function invoked during
+// `muninn init`), then reads back the plasticity config via the REST API to confirm
+// the mode was actually written to storage — not just acknowledged in memory.
+func TestVaultBehaviorPersistsAfterInit(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test")
+	}
+	dataDir := t.TempDir()
+	startDaemon(t, dataDir)
+
+	// Wait for the REST admin API (8475) to be accepting connections.
+	adminReady := false
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := http.Get("http://127.0.0.1:8475/api/vaults")
+		if err == nil {
+			resp.Body.Close()
+			adminReady = true
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if !adminReady {
+		t.Fatal("REST API did not become available within 8s")
+	}
+
+	// Apply behavior via the same function called during init.
+	// This uses the default vaultAdminBase (8475) and vaultUIBase (8476).
+	out := captureStdout(func() {
+		applyBehaviorToVault("selective", "")
+	})
+	if strings.Contains(out, "muninn vault behavior") {
+		// Fallback message printed — something went wrong with apply.
+		t.Fatalf("applyBehaviorToVault triggered fallback: %s", out)
+	}
+	if !strings.Contains(out, "selective") {
+		t.Errorf("applyBehaviorToVault success message should contain 'selective', got: %q", out)
+	}
+
+	// Verify persistence via REST GET — login first to get a session cookie,
+	// then hit the plasticity endpoint directly.
+	loginResp, err := http.Post(
+		"http://127.0.0.1:8476/api/auth/login",
+		"application/json",
+		strings.NewReader(`{"username":"root","password":"password"}`),
+	)
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	defer loginResp.Body.Close()
+	if loginResp.StatusCode != http.StatusOK {
+		t.Fatalf("login: HTTP %d", loginResp.StatusCode)
+	}
+
+	// Collect session cookie.
+	var sessionCookie *http.Cookie
+	for _, c := range loginResp.Cookies() {
+		if c.Name == "session" || c.Name == "muninn_session" || strings.Contains(c.Name, "session") {
+			sessionCookie = c
+			break
+		}
+	}
+	if sessionCookie == nil {
+		t.Fatal("login did not return a session cookie")
+	}
+
+	// GET plasticity and verify behavior_mode = "selective".
+	getReq, err := http.NewRequest("GET", "http://127.0.0.1:8475/api/admin/vault/default/plasticity", nil)
+	if err != nil {
+		t.Fatalf("build GET: %v", err)
+	}
+	getReq.AddCookie(sessionCookie)
+	getResp, err := (&http.Client{}).Do(getReq)
+	if err != nil {
+		t.Fatalf("GET plasticity: %v", err)
+	}
+	defer getResp.Body.Close()
+	if getResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(getResp.Body)
+		t.Fatalf("GET plasticity: HTTP %d: %s", getResp.StatusCode, body)
+	}
+
+	var result struct {
+		Resolved struct {
+			BehaviorMode string `json:"behavior_mode"`
+		} `json:"resolved"`
+	}
+	if err := json.NewDecoder(getResp.Body).Decode(&result); err != nil {
+		t.Fatalf("decode plasticity response: %v", err)
+	}
+	if result.Resolved.BehaviorMode != "selective" {
+		t.Errorf("behavior_mode = %q after applyBehaviorToVault, want \"selective\"", result.Resolved.BehaviorMode)
+	}
+}

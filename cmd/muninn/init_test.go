@@ -458,3 +458,39 @@ func TestApplyBehaviorToVault_Success(t *testing.T) {
 		t.Errorf("success output should contain the mode name, got: %q", out)
 	}
 }
+
+// TestApplyBehaviorToVault_FallbackOnAuthFailure covers the non-fresh-install
+// scenario: user has changed the root password, so loginAdmin returns 401.
+// applyBehaviorToVault must still print the manual fallback and not abort.
+func TestApplyBehaviorToVault_FallbackOnAuthFailure(t *testing.T) {
+	oldAdmin := vaultAdminBase
+	oldUI := vaultUIBase
+	defer func() { vaultAdminBase = oldAdmin; vaultUIBase = oldUI }()
+
+	// Server is up but login returns 401 (changed password scenario).
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/auth/login" {
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte(`{"error":"invalid credentials"}`))
+			return
+		}
+		// Plasticity endpoint should never be reached in this path.
+		t.Errorf("unexpected request to %s", r.URL.Path)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	vaultAdminBase = srv.URL
+	vaultUIBase = srv.URL
+
+	out := captureStdout(func() {
+		applyBehaviorToVault("prompted", "")
+	})
+
+	// Must print the fallback command — never abort silently.
+	if !strings.Contains(out, "muninn vault behavior") {
+		t.Errorf("auth failure should trigger fallback command, got: %q", out)
+	}
+	if !strings.Contains(out, "prompted") {
+		t.Errorf("fallback output should include the mode name, got: %q", out)
+	}
+}
