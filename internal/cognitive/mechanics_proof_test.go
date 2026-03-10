@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -428,8 +429,47 @@ func TestProveContradiction_Symmetry(t *testing.T) {
 // Part 4: End-to-end integration via live API
 // ---------------------------------------------------------------------------
 
+// bearerTransport injects a Bearer token into every outgoing request.
+type bearerTransport struct {
+	token string
+	base  http.RoundTripper
+}
+
+func (bt *bearerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	r := req.Clone(req.Context())
+	r.Header.Set("Authorization", "Bearer "+bt.token)
+	return bt.base.RoundTrip(r)
+}
+
+// liveClient returns an authenticated http.Client and the server base URL.
+// Skips the test if MUNINN_TEST_TOKEN is not set or the server is unreachable.
+func liveClient(t *testing.T) (*http.Client, string) {
+	t.Helper()
+	token := os.Getenv("MUNINN_TEST_TOKEN")
+	if token == "" {
+		t.Skip("MUNINN_TEST_TOKEN not set — set to an API key to run live integration tests")
+	}
+	base := os.Getenv("MUNINN_TEST_URL")
+	if base == "" {
+		base = "http://127.0.0.1:8475"
+	}
+	client := &http.Client{
+		Timeout:   10 * time.Second,
+		Transport: &bearerTransport{token: token, base: http.DefaultTransport},
+	}
+	resp, err := client.Get(base + "/api/stats")
+	if err != nil || resp.StatusCode != 200 {
+		if resp != nil {
+			resp.Body.Close()
+		}
+		t.Skipf("server not reachable at %s — skipping live test", base)
+	}
+	resp.Body.Close()
+	return client, base
+}
+
 // TestLiveIntegration_WriteAndActivate is a live integration test hitting the running server.
-// Run with: go test -run TestLiveIntegration -v
+// Run with: MUNINN_TEST_TOKEN=<key> go test -run TestLiveIntegration -v
 // cleanupVault registers a t.Cleanup that deletes the test vault when the test finishes.
 // It authenticates with the admin API first (default creds root/password via the UI login endpoint).
 func cleanupVault(t *testing.T, base, vault string) {
@@ -471,14 +511,7 @@ func cleanupVault(t *testing.T, base, vault string) {
 }
 
 func TestLiveIntegration_WriteAndActivate(t *testing.T) {
-	base := "http://127.0.0.1:8475"
-
-	// Check server is up
-	resp, err := http.Get(base + "/api/stats")
-	if err != nil || resp.StatusCode != 200 {
-		t.Skip("server not running at 127.0.0.1:8475 — skipping live test")
-	}
-	resp.Body.Close()
+	client, base := liveClient(t)
 
 	vault := "proof-test-" + fmt.Sprintf("%d", time.Now().UnixNano())
 	t.Logf("Using vault: %s", vault)
@@ -504,7 +537,7 @@ func TestLiveIntegration_WriteAndActivate(t *testing.T) {
 	var ids []string
 	for _, e := range engrams {
 		body, _ := json.Marshal(e)
-		resp, err := http.Post(base+"/api/engrams", "application/json", bytes.NewReader(body))
+		resp, err := client.Post(base+"/api/engrams", "application/json", bytes.NewReader(body))
 		if err != nil {
 			t.Fatalf("write engram %q: %v", e.Concept, err)
 		}
@@ -540,7 +573,7 @@ func TestLiveIntegration_WriteAndActivate(t *testing.T) {
 		MaxResults: 5,
 		Threshold:  0.01, // low threshold to ensure FTS-only results are included
 	})
-	resp2, err := http.Post(base+"/api/activate", "application/json", bytes.NewReader(body))
+	resp2, err := client.Post(base+"/api/activate", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("activate: %v", err)
 	}
@@ -817,14 +850,7 @@ func TestProveWorker_DormancyWakeUp(t *testing.T) {
 // TestLiveIntegration_ContradictionDetection verifies that contradicting engrams
 // trigger the contradiction detection worker.
 func TestLiveIntegration_ContradictionDetection(t *testing.T) {
-	base := "http://127.0.0.1:8475"
-
-	// Check server is up
-	resp, err := http.Get(base + "/api/stats")
-	if err != nil || resp.StatusCode != 200 {
-		t.Skip("server not running at 127.0.0.1:8475 — skipping live test")
-	}
-	resp.Body.Close()
+	client, base := liveClient(t)
 
 	vault := "proof-contra-" + fmt.Sprintf("%d", time.Now().UnixNano())
 	t.Logf("Using vault: %s", vault)
@@ -849,7 +875,7 @@ func TestLiveIntegration_ContradictionDetection(t *testing.T) {
 	}
 
 	bodyA, _ := json.Marshal(engramA)
-	respA, err := http.Post(base+"/api/engrams", "application/json", bytes.NewReader(bodyA))
+	respA, err := client.Post(base+"/api/engrams", "application/json", bytes.NewReader(bodyA))
 	if err != nil {
 		t.Fatalf("write engram A: %v", err)
 	}
@@ -872,7 +898,7 @@ func TestLiveIntegration_ContradictionDetection(t *testing.T) {
 	}
 
 	bodyB, _ := json.Marshal(engramB)
-	respB, err := http.Post(base+"/api/engrams", "application/json", bytes.NewReader(bodyB))
+	respB, err := client.Post(base+"/api/engrams", "application/json", bytes.NewReader(bodyB))
 	if err != nil {
 		t.Fatalf("write engram B: %v", err)
 	}
@@ -900,7 +926,7 @@ func TestLiveIntegration_ContradictionDetection(t *testing.T) {
 		Vault:    vault,
 	}
 	bodyLink1, _ := json.Marshal(linkAB)
-	respLink1, err := http.Post(base+"/api/link", "application/json", bytes.NewReader(bodyLink1))
+	respLink1, err := client.Post(base+"/api/link", "application/json", bytes.NewReader(bodyLink1))
 	if err != nil {
 		t.Fatalf("create link A→B: %v", err)
 	}
@@ -919,7 +945,7 @@ func TestLiveIntegration_ContradictionDetection(t *testing.T) {
 		Vault:    vault,
 	}
 	bodyLink2, _ := json.Marshal(linkBA)
-	respLink2, err := http.Post(base+"/api/link", "application/json", bytes.NewReader(bodyLink2))
+	respLink2, err := client.Post(base+"/api/link", "application/json", bytes.NewReader(bodyLink2))
 	if err != nil {
 		t.Fatalf("create link B→A: %v", err)
 	}
@@ -937,7 +963,7 @@ func TestLiveIntegration_ContradictionDetection(t *testing.T) {
 		MaxResults int      `json:"max_results"`
 	}
 
-	respActivate, err := http.Post(base+"/api/activate", "application/json",
+	respActivate, err := client.Post(base+"/api/activate", "application/json",
 		bytes.NewReader([]byte(fmt.Sprintf(`{
 			"context": ["sky color"],
 			"vault": "%s",
@@ -981,14 +1007,7 @@ func TestLiveIntegration_ContradictionDetection(t *testing.T) {
 
 // TestLiveIntegration_ScoreComposition verifies the breakdown of FTS, Semantic, and Hebbian scores.
 func TestLiveIntegration_ScoreComposition(t *testing.T) {
-	base := "http://127.0.0.1:8475"
-
-	// Check server is up
-	resp, err := http.Get(base + "/api/stats")
-	if err != nil || resp.StatusCode != 200 {
-		t.Skip("server not running at 127.0.0.1:8475 — skipping live test")
-	}
-	resp.Body.Close()
+	client, base := liveClient(t)
 
 	vault := "proof-score-" + fmt.Sprintf("%d", time.Now().UnixNano())
 	t.Logf("Using vault: %s", vault)
@@ -1038,7 +1057,7 @@ func TestLiveIntegration_ScoreComposition(t *testing.T) {
 			Vault:      vault,
 			Confidence: 0.9,
 		})
-		resp, err := http.Post(base+"/api/engrams", "application/json", bytes.NewReader(body))
+		resp, err := client.Post(base+"/api/engrams", "application/json", bytes.NewReader(body))
 		if err != nil {
 			t.Fatalf("write %q: %v", eng.concept, err)
 		}
@@ -1060,7 +1079,7 @@ func TestLiveIntegration_ScoreComposition(t *testing.T) {
 		MaxResults int      `json:"max_results"`
 	}
 
-	respActivate, err := http.Post(base+"/api/activate", "application/json",
+	respActivate, err := client.Post(base+"/api/activate", "application/json",
 		bytes.NewReader([]byte(fmt.Sprintf(`{
 			"context": ["neural network training"],
 			"vault": "%s",
@@ -1143,14 +1162,7 @@ func TestLiveIntegration_ScoreComposition(t *testing.T) {
 // TestLiveIntegration_HNSWRetroactiveProcessing verifies that the RetroactiveProcessor
 // embeds engrams asynchronously and SemanticSimilarity becomes non-zero after a delay.
 func TestLiveIntegration_HNSWRetroactiveProcessing(t *testing.T) {
-	base := "http://127.0.0.1:8475"
-
-	// Check server is up
-	resp, err := http.Get(base + "/api/stats")
-	if err != nil || resp.StatusCode != 200 {
-		t.Skip("server not running at 127.0.0.1:8475 — skipping live test")
-	}
-	resp.Body.Close()
+	client, base := liveClient(t)
 
 	vault := "proof-hnsw-" + fmt.Sprintf("%d", time.Now().UnixNano())
 	t.Logf("Using vault: %s", vault)
@@ -1174,7 +1186,7 @@ func TestLiveIntegration_HNSWRetroactiveProcessing(t *testing.T) {
 	}
 
 	body1, _ := json.Marshal(engram1)
-	resp1, err := http.Post(base+"/api/engrams", "application/json", bytes.NewReader(body1))
+	resp1, err := client.Post(base+"/api/engrams", "application/json", bytes.NewReader(body1))
 	if err != nil {
 		t.Fatalf("write engram 1: %v", err)
 	}
@@ -1196,7 +1208,7 @@ func TestLiveIntegration_HNSWRetroactiveProcessing(t *testing.T) {
 	}
 
 	body2, _ := json.Marshal(engram2)
-	resp2, err := http.Post(base+"/api/engrams", "application/json", bytes.NewReader(body2))
+	resp2, err := client.Post(base+"/api/engrams", "application/json", bytes.NewReader(body2))
 	if err != nil {
 		t.Fatalf("write engram 2: %v", err)
 	}
@@ -1219,7 +1231,7 @@ func TestLiveIntegration_HNSWRetroactiveProcessing(t *testing.T) {
 	}
 
 	t.Logf("\nPhase 1: Immediate activation (< 100ms after writes)")
-	respActivate1, err := http.Post(base+"/api/activate", "application/json",
+	respActivate1, err := client.Post(base+"/api/activate", "application/json",
 		bytes.NewReader([]byte(fmt.Sprintf(`{
 			"context": ["feline sleep"],
 			"vault": "%s",
@@ -1262,7 +1274,7 @@ func TestLiveIntegration_HNSWRetroactiveProcessing(t *testing.T) {
 
 	// Phase 3: Activate again to check if SemanticSimilarity improved
 	t.Logf("Phase 3: Activation after 3s wait")
-	respActivate2, err := http.Post(base+"/api/activate", "application/json",
+	respActivate2, err := client.Post(base+"/api/activate", "application/json",
 		bytes.NewReader([]byte(fmt.Sprintf(`{
 			"context": ["feline sleep"],
 			"vault": "%s",
