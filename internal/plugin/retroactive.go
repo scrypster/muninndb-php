@@ -186,6 +186,8 @@ func (rp *RetroactiveProcessor) processBatchIdle(ctx context.Context, consecutiv
 	ok := rp.processBatch(ctx)
 	if ok && rp.Stats().Processed > prev {
 		*consecutiveIdle = 0
+	} else if ok {
+		(*consecutiveIdle)++
 	}
 	return ok
 }
@@ -446,14 +448,16 @@ func (rp *RetroactiveProcessor) processBatch(ctx context.Context) bool {
 	rp.statsMu.Lock()
 	rp.stats.Status = "idle"
 	passProcessed := rp.stats.Processed - passStart
+	totalProcessed := rp.stats.Processed
+	totalErrors := rp.stats.Errors
 	rp.statsMu.Unlock()
 
 	if passProcessed > 0 {
 		slog.Info("retroactive processor: complete",
 			"plugin", rp.plugin.Name(),
 			"pass_processed", passProcessed,
-			"total_processed", rp.stats.Processed,
-			"errors", rp.stats.Errors)
+			"total_processed", totalProcessed,
+			"errors", totalErrors)
 	} else {
 		slog.Debug("retroactive processor: idle (phantom count)",
 			"plugin", rp.plugin.Name(),
