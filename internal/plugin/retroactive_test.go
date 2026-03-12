@@ -718,44 +718,26 @@ func TestRetroactiveProcessor_ProgressEvery100(t *testing.T) {
 // are zeroed at the start of each processBatch pass so stale values from a prior
 // pass don't leak into the embed-status API response while the processor is idle.
 func TestRetroactiveProcessor_StaleRateReset(t *testing.T) {
-	const n = 5
-
-	engrams := make([]*Engram, n)
-	for i := range engrams {
-		engrams[i] = &Engram{Content: "text"}
-	}
-
-	store := &mockPluginStore{
-		countResult: int64(n),
-		scanResult:  &mockIterator{engrams: engrams},
-	}
+	store := &mockPluginStore{countResult: 0} // zero-work pass to trigger early-return path
 	plugin := &mockEmbedPlugin{
 		mockPlugin: mockPlugin{name: "embed-reset", tier: TierEmbed},
 	}
 
 	rp := NewRetroactiveProcessor(store, plugin, DigestEmbed)
 
-	// Seed non-zero rate/ETA as if a prior pass ran
+	// Seed non-zero rate/ETA to simulate stale values left over from a prior pass.
 	rp.statsMu.Lock()
 	rp.stats.RatePerSec = 99.9
 	rp.stats.ETASeconds = 9999
 	rp.statsMu.Unlock()
 
-	// Run a new pass — processBatch must zero rate/ETA before starting
-	// A pass with countResult=0 would skip processing, so use n>0 but reset happens first
-	store2 := &mockPluginStore{countResult: 0} // zero work pass
-	rp2 := NewRetroactiveProcessor(store2, plugin, DigestEmbed)
-	rp2.statsMu.Lock()
-	rp2.stats.RatePerSec = 99.9
-	rp2.stats.ETASeconds = 9999
-	rp2.statsMu.Unlock()
+	// processBatch must zero rate/ETA at the very start, before the count check.
+	rp.processBatch(context.Background())
 
-	rp2.processBatch(context.Background()) // triggers the reset path at pass start
-
-	rp2.statsMu.RLock()
-	rate := rp2.stats.RatePerSec
-	eta := rp2.stats.ETASeconds
-	rp2.statsMu.RUnlock()
+	rp.statsMu.RLock()
+	rate := rp.stats.RatePerSec
+	eta := rp.stats.ETASeconds
+	rp.statsMu.RUnlock()
 
 	if rate != 0 {
 		t.Errorf("expected RatePerSec=0 at new pass start, got %v", rate)
