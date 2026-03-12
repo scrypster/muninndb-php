@@ -900,6 +900,13 @@ func runServer() {
 
 	// Determine embedder provider and model for the status endpoint.
 	embedInfo := resolveEmbedInfo(savedPluginCfg)
+	// Wire hardware acceleration flag once at startup (captured before first request).
+	if embedPlugin != nil {
+		if h, ok := embedPlugin.(plugin.HardwareAwarePlugin); ok {
+			v := h.HardwareAccelerated()
+			embedInfo.HardwareAccelerated = &v
+		}
+	}
 
 	// Build enrich plugin (optional): env vars → saved config.
 	enrichCtx, enrichCancel := context.WithTimeout(context.Background(), 30*time.Second)
