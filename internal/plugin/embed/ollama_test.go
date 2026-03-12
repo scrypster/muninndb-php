@@ -505,9 +505,13 @@ func TestOllamaProvider_DynamicTimeout(t *testing.T) {
 			return
 		}
 		if r.Method == "POST" && r.URL.Path == "/api/embed" {
-			json.NewEncoder(w).Encode(ollamaBatchEmbedResponse{
-				Embeddings: [][]float64{{0.1, 0.2}},
-			})
+			var req ollamaBatchEmbedRequest
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			embeddings := make([][]float64, len(req.Input))
+			for i := range embeddings {
+				embeddings[i] = []float64{0.1, 0.2}
+			}
+			json.NewEncoder(w).Encode(ollamaBatchEmbedResponse{Embeddings: embeddings})
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
