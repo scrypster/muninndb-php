@@ -500,7 +500,7 @@ type EmbedStatusResponse struct {
 	// ETASeconds is the estimated seconds until indexing completes; 0 when not indexing or rate unknown.
 	ETASeconds int64 `json:"eta_seconds"`
 	// HardwareAccelerated is nil for cloud providers; true/false for Ollama (GPU vs CPU).
-	HardwareAccelerated *bool `json:"hardware_accelerated"`
+	HardwareAccelerated *bool `json:"hardware_accelerated,omitempty"`
 }
 
 // handleEmbedStatus returns the current embedder configuration and indexing state.
