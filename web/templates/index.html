@@ -1425,34 +1425,7 @@
                     OpenAI
                     <div style="font-size:0.62rem;margin-top:0.15rem;color:#22c55e;">⚡ Near-instant</div>
                   </button>
-                  <button
-                    @click="pluginCfg.embedProvider='cohere';pluginCfg.embedCmd=''"
-                    :class="pluginCfg.embedProvider==='cohere' ? 'tab-btn active' : 'tab-btn'"
-                    style="display:flex;flex-direction:column;align-items:center;">
-                    Cohere
-                    <div style="font-size:0.62rem;margin-top:0.15rem;color:#22c55e;">⚡ Near-instant</div>
-                  </button>
-                  <button
-                    @click="pluginCfg.embedProvider='google';pluginCfg.embedCmd=''"
-                    :class="pluginCfg.embedProvider==='google' ? 'tab-btn active' : 'tab-btn'"
-                    style="display:flex;flex-direction:column;align-items:center;">
-                    Google
-                    <div style="font-size:0.62rem;margin-top:0.15rem;color:#22c55e;">⚡ Near-instant</div>
-                  </button>
-                  <button
-                    @click="pluginCfg.embedProvider='mistral';pluginCfg.embedCmd=''"
-                    :class="pluginCfg.embedProvider==='mistral' ? 'tab-btn active' : 'tab-btn'"
-                    style="display:flex;flex-direction:column;align-items:center;">
-                    Mistral
-                    <div style="font-size:0.62rem;margin-top:0.15rem;color:#22c55e;">⚡ Near-instant</div>
-                  </button>
-                  <button
-                    @click="pluginCfg.embedProvider='jina';pluginCfg.embedCmd=''"
-                    :class="pluginCfg.embedProvider==='jina' ? 'tab-btn active' : 'tab-btn'"
-                    style="display:flex;flex-direction:column;align-items:center;">
-                    Jina
-                    <div style="font-size:0.62rem;margin-top:0.15rem;color:#22c55e;">⚡ Near-instant</div>
-                  </button>
+
                   <button
                     @click="pluginCfg.embedProvider='ollama';pluginCfg.embedCmd=''"
                     :class="pluginCfg.embedProvider==='ollama' ? 'tab-btn active' : 'tab-btn'"
@@ -1486,33 +1459,6 @@
                     <div style="font-size:0.75rem;"><div style="color:#64748b;margin-bottom:0.2rem;">Requires</div><div style="color:#f8fafc;">API key</div></div>
                   </div>
 
-                  <!-- Cohere -->
-                  <div x-show="pluginCfg.embedProvider === 'cohere'" style="background:#0f1f3b;border:1px solid #1d4ed8;border-radius:8px;padding:0.65rem 0.9rem;display:flex;gap:2rem;flex-wrap:wrap;">
-                    <div style="font-size:0.75rem;"><div style="color:#64748b;margin-bottom:0.2rem;">Speed</div><div style="color:#22c55e;">⚡ &lt;5s for any vault size</div></div>
-                    <div style="font-size:0.75rem;"><div style="color:#64748b;margin-bottom:0.2rem;">Data</div><div style="color:#f8fafc;">Text sent to Cohere API</div></div>
-                    <div style="font-size:0.75rem;"><div style="color:#64748b;margin-bottom:0.2rem;">Requires</div><div style="color:#f8fafc;">API key</div></div>
-                  </div>
-
-                  <!-- Google -->
-                  <div x-show="pluginCfg.embedProvider === 'google'" style="background:#0f1f3b;border:1px solid #1d4ed8;border-radius:8px;padding:0.65rem 0.9rem;display:flex;gap:2rem;flex-wrap:wrap;">
-                    <div style="font-size:0.75rem;"><div style="color:#64748b;margin-bottom:0.2rem;">Speed</div><div style="color:#22c55e;">⚡ &lt;5s for any vault size</div></div>
-                    <div style="font-size:0.75rem;"><div style="color:#64748b;margin-bottom:0.2rem;">Data</div><div style="color:#f8fafc;">Text sent to Google API</div></div>
-                    <div style="font-size:0.75rem;"><div style="color:#64748b;margin-bottom:0.2rem;">Requires</div><div style="color:#f8fafc;">API key</div></div>
-                  </div>
-
-                  <!-- Mistral -->
-                  <div x-show="pluginCfg.embedProvider === 'mistral'" style="background:#0f1f3b;border:1px solid #1d4ed8;border-radius:8px;padding:0.65rem 0.9rem;display:flex;gap:2rem;flex-wrap:wrap;">
-                    <div style="font-size:0.75rem;"><div style="color:#64748b;margin-bottom:0.2rem;">Speed</div><div style="color:#22c55e;">⚡ &lt;5s for any vault size</div></div>
-                    <div style="font-size:0.75rem;"><div style="color:#64748b;margin-bottom:0.2rem;">Data</div><div style="color:#f8fafc;">Text sent to Mistral API</div></div>
-                    <div style="font-size:0.75rem;"><div style="color:#64748b;margin-bottom:0.2rem;">Requires</div><div style="color:#f8fafc;">API key</div></div>
-                  </div>
-
-                  <!-- Jina -->
-                  <div x-show="pluginCfg.embedProvider === 'jina'" style="background:#0f1f3b;border:1px solid #1d4ed8;border-radius:8px;padding:0.65rem 0.9rem;display:flex;gap:2rem;flex-wrap:wrap;">
-                    <div style="font-size:0.75rem;"><div style="color:#64748b;margin-bottom:0.2rem;">Speed</div><div style="color:#22c55e;">⚡ &lt;5s for any vault size</div></div>
-                    <div style="font-size:0.75rem;"><div style="color:#64748b;margin-bottom:0.2rem;">Data</div><div style="color:#f8fafc;">Text sent to Jina API</div></div>
-                    <div style="font-size:0.75rem;"><div style="color:#64748b;margin-bottom:0.2rem;">Requires</div><div style="color:#f8fafc;">API key</div></div>
-                  </div>
 
                   <!-- Ollama -->
                   <div x-show="pluginCfg.embedProvider === 'ollama'" style="background:#1c1403;border:1px solid #78350f;border-radius:8px;padding:0.65rem 0.9rem;">
