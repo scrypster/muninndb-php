@@ -1368,6 +1368,31 @@
                       </div>
                       <div style="font-size:0.75rem;color:var(--text-muted);margin-top:0.25rem;"
                            x-text="embedStatus.embedded_count + ' / ' + embedStatus.total_count + ' engrams indexed'"></div>
+                      <!-- Hardware badge (shown when Ollama — hardware_accelerated is non-null) -->
+                      <div style="margin-top:0.4rem;display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
+                        <span x-show="pluginCfg.embedHardwareGPU !== null"
+                              :style="pluginCfg.embedHardwareGPU ? 'background:#14532d;color:#22c55e;border-radius:9999px;padding:0.1rem 0.5rem;font-size:0.7rem;font-weight:600;' : 'background:#451a03;color:#f59e0b;border-radius:9999px;padding:0.1rem 0.5rem;font-size:0.7rem;font-weight:600;'">
+                          <span x-text="pluginCfg.embedHardwareGPU ? '⚡ GPU mode' : '⚠ CPU mode'"></span>
+                        </span>
+                        <!-- Rate readout (show only when indexing AND rate > 0) -->
+                        <span x-show="embedStatus.indexing && pluginCfg.embedRatePerSec > 0"
+                              style="font-size:0.7rem;color:var(--text-muted);"
+                              x-text="embedSecsPerItem()"></span>
+                        <!-- ETA display (show only when indexing AND ETA > 0) -->
+                        <span x-show="embedStatus.indexing && pluginCfg.embedETASecs > 0"
+                              style="font-size:0.7rem;color:var(--text-muted);">
+                          ⏱ <span x-text="embedETADisplay()"></span> remaining
+                        </span>
+                      </div>
+                      <!-- CPU advisory tip (show only when CPU Ollama AND indexing) -->
+                      <div x-show="embedIsCPU && embedStatus.indexing" style="margin-top:0.5rem;font-size:0.75rem;color:#a8a29e;background:#1c1917;border-radius:6px;padding:0.5rem 0.75rem;">
+                        💡 CPU-only Ollama is 20–100× slower than GPU. Switch to a cloud provider (Voyage AI, OpenAI) for near-instant re-embedding.
+                        <div style="margin-top:0.4rem;display:flex;gap:0.5rem;flex-wrap:wrap;">
+                          <span style="font-size:0.7rem;padding:0.2rem 0.5rem;border-radius:4px;background:#0c1a2e;color:#22c55e;">⚡ Cloud: &lt;5s total</span>
+                          <span style="font-size:0.7rem;padding:0.2rem 0.5rem;border-radius:4px;background:#1c1917;color:#f59e0b;">🎮 GPU Ollama: ~2–5 min</span>
+                          <span style="font-size:0.7rem;padding:0.2rem 0.5rem;border-radius:4px;background:#1c1917;color:#a8a29e;">🐢 CPU Ollama: 30 min–2h</span>
+                        </div>
+                      </div>
                     </div>
                   </template>
                 </div>
@@ -1386,13 +1411,128 @@
               <div style="margin-bottom:1rem;">
                 <div style="font-size:0.8125rem;font-weight:600;color:var(--text-primary);margin-bottom:0.625rem;">Select provider</div>
                 <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
-                  <template x-for="opt in [{val:'ollama',label:'Ollama'},{val:'openai',label:'OpenAI'},{val:'voyage',label:'Voyage AI'}]" :key="opt.val">
-                    <button
-                      @click="pluginCfg.embedProvider=opt.val;pluginCfg.embedCmd=''"
-                      :class="pluginCfg.embedProvider===opt.val ? 'tab-btn active' : 'tab-btn'"
-                      x-text="opt.label">
-                    </button>
-                  </template>
+                  <button
+                    @click="pluginCfg.embedProvider='voyage';pluginCfg.embedCmd=''"
+                    :class="pluginCfg.embedProvider==='voyage' ? 'tab-btn active' : 'tab-btn'"
+                    style="display:flex;flex-direction:column;align-items:center;">
+                    Voyage AI
+                    <div style="font-size:0.62rem;margin-top:0.15rem;color:#22c55e;">⚡ Near-instant</div>
+                  </button>
+                  <button
+                    @click="pluginCfg.embedProvider='openai';pluginCfg.embedCmd=''"
+                    :class="pluginCfg.embedProvider==='openai' ? 'tab-btn active' : 'tab-btn'"
+                    style="display:flex;flex-direction:column;align-items:center;">
+                    OpenAI
+                    <div style="font-size:0.62rem;margin-top:0.15rem;color:#22c55e;">⚡ Near-instant</div>
+                  </button>
+                  <button
+                    @click="pluginCfg.embedProvider='cohere';pluginCfg.embedCmd=''"
+                    :class="pluginCfg.embedProvider==='cohere' ? 'tab-btn active' : 'tab-btn'"
+                    style="display:flex;flex-direction:column;align-items:center;">
+                    Cohere
+                    <div style="font-size:0.62rem;margin-top:0.15rem;color:#22c55e;">⚡ Near-instant</div>
+                  </button>
+                  <button
+                    @click="pluginCfg.embedProvider='google';pluginCfg.embedCmd=''"
+                    :class="pluginCfg.embedProvider==='google' ? 'tab-btn active' : 'tab-btn'"
+                    style="display:flex;flex-direction:column;align-items:center;">
+                    Google
+                    <div style="font-size:0.62rem;margin-top:0.15rem;color:#22c55e;">⚡ Near-instant</div>
+                  </button>
+                  <button
+                    @click="pluginCfg.embedProvider='mistral';pluginCfg.embedCmd=''"
+                    :class="pluginCfg.embedProvider==='mistral' ? 'tab-btn active' : 'tab-btn'"
+                    style="display:flex;flex-direction:column;align-items:center;">
+                    Mistral
+                    <div style="font-size:0.62rem;margin-top:0.15rem;color:#22c55e;">⚡ Near-instant</div>
+                  </button>
+                  <button
+                    @click="pluginCfg.embedProvider='jina';pluginCfg.embedCmd=''"
+                    :class="pluginCfg.embedProvider==='jina' ? 'tab-btn active' : 'tab-btn'"
+                    style="display:flex;flex-direction:column;align-items:center;">
+                    Jina
+                    <div style="font-size:0.62rem;margin-top:0.15rem;color:#22c55e;">⚡ Near-instant</div>
+                  </button>
+                  <button
+                    @click="pluginCfg.embedProvider='ollama';pluginCfg.embedCmd=''"
+                    :class="pluginCfg.embedProvider==='ollama' ? 'tab-btn active' : 'tab-btn'"
+                    style="display:flex;flex-direction:column;align-items:center;">
+                    Ollama
+                    <div style="font-size:0.62rem;margin-top:0.15rem;color:#f59e0b;">🎮 GPU / 🐢 CPU</div>
+                  </button>
+                  <button
+                    @click="pluginCfg.embedProvider='local';pluginCfg.embedCmd=''"
+                    :class="pluginCfg.embedProvider==='local' ? 'tab-btn active' : 'tab-btn'"
+                    style="display:flex;flex-direction:column;align-items:center;">
+                    Built-in
+                    <div style="font-size:0.62rem;margin-top:0.15rem;color:#60a5fa;">🔧 Fast, local</div>
+                  </button>
+                </div>
+
+                <!-- Provider detail panel -->
+                <div style="margin-top:0.75rem;">
+
+                  <!-- Voyage AI -->
+                  <div x-show="pluginCfg.embedProvider === 'voyage'" style="background:#0f1f3b;border:1px solid #1d4ed8;border-radius:8px;padding:0.65rem 0.9rem;display:flex;gap:2rem;flex-wrap:wrap;">
+                    <div style="font-size:0.75rem;"><div style="color:#64748b;margin-bottom:0.2rem;">Speed</div><div style="color:#22c55e;">⚡ &lt;5s for any vault size</div></div>
+                    <div style="font-size:0.75rem;"><div style="color:#64748b;margin-bottom:0.2rem;">Data</div><div style="color:#f8fafc;">Text sent to Voyage API</div></div>
+                    <div style="font-size:0.75rem;"><div style="color:#64748b;margin-bottom:0.2rem;">Requires</div><div style="color:#f8fafc;">API key</div></div>
+                  </div>
+
+                  <!-- OpenAI -->
+                  <div x-show="pluginCfg.embedProvider === 'openai'" style="background:#0f1f3b;border:1px solid #1d4ed8;border-radius:8px;padding:0.65rem 0.9rem;display:flex;gap:2rem;flex-wrap:wrap;">
+                    <div style="font-size:0.75rem;"><div style="color:#64748b;margin-bottom:0.2rem;">Speed</div><div style="color:#22c55e;">⚡ &lt;5s for any vault size</div></div>
+                    <div style="font-size:0.75rem;"><div style="color:#64748b;margin-bottom:0.2rem;">Data</div><div style="color:#f8fafc;">Text sent to OpenAI API</div></div>
+                    <div style="font-size:0.75rem;"><div style="color:#64748b;margin-bottom:0.2rem;">Requires</div><div style="color:#f8fafc;">API key</div></div>
+                  </div>
+
+                  <!-- Cohere -->
+                  <div x-show="pluginCfg.embedProvider === 'cohere'" style="background:#0f1f3b;border:1px solid #1d4ed8;border-radius:8px;padding:0.65rem 0.9rem;display:flex;gap:2rem;flex-wrap:wrap;">
+                    <div style="font-size:0.75rem;"><div style="color:#64748b;margin-bottom:0.2rem;">Speed</div><div style="color:#22c55e;">⚡ &lt;5s for any vault size</div></div>
+                    <div style="font-size:0.75rem;"><div style="color:#64748b;margin-bottom:0.2rem;">Data</div><div style="color:#f8fafc;">Text sent to Cohere API</div></div>
+                    <div style="font-size:0.75rem;"><div style="color:#64748b;margin-bottom:0.2rem;">Requires</div><div style="color:#f8fafc;">API key</div></div>
+                  </div>
+
+                  <!-- Google -->
+                  <div x-show="pluginCfg.embedProvider === 'google'" style="background:#0f1f3b;border:1px solid #1d4ed8;border-radius:8px;padding:0.65rem 0.9rem;display:flex;gap:2rem;flex-wrap:wrap;">
+                    <div style="font-size:0.75rem;"><div style="color:#64748b;margin-bottom:0.2rem;">Speed</div><div style="color:#22c55e;">⚡ &lt;5s for any vault size</div></div>
+                    <div style="font-size:0.75rem;"><div style="color:#64748b;margin-bottom:0.2rem;">Data</div><div style="color:#f8fafc;">Text sent to Google API</div></div>
+                    <div style="font-size:0.75rem;"><div style="color:#64748b;margin-bottom:0.2rem;">Requires</div><div style="color:#f8fafc;">API key</div></div>
+                  </div>
+
+                  <!-- Mistral -->
+                  <div x-show="pluginCfg.embedProvider === 'mistral'" style="background:#0f1f3b;border:1px solid #1d4ed8;border-radius:8px;padding:0.65rem 0.9rem;display:flex;gap:2rem;flex-wrap:wrap;">
+                    <div style="font-size:0.75rem;"><div style="color:#64748b;margin-bottom:0.2rem;">Speed</div><div style="color:#22c55e;">⚡ &lt;5s for any vault size</div></div>
+                    <div style="font-size:0.75rem;"><div style="color:#64748b;margin-bottom:0.2rem;">Data</div><div style="color:#f8fafc;">Text sent to Mistral API</div></div>
+                    <div style="font-size:0.75rem;"><div style="color:#64748b;margin-bottom:0.2rem;">Requires</div><div style="color:#f8fafc;">API key</div></div>
+                  </div>
+
+                  <!-- Jina -->
+                  <div x-show="pluginCfg.embedProvider === 'jina'" style="background:#0f1f3b;border:1px solid #1d4ed8;border-radius:8px;padding:0.65rem 0.9rem;display:flex;gap:2rem;flex-wrap:wrap;">
+                    <div style="font-size:0.75rem;"><div style="color:#64748b;margin-bottom:0.2rem;">Speed</div><div style="color:#22c55e;">⚡ &lt;5s for any vault size</div></div>
+                    <div style="font-size:0.75rem;"><div style="color:#64748b;margin-bottom:0.2rem;">Data</div><div style="color:#f8fafc;">Text sent to Jina API</div></div>
+                    <div style="font-size:0.75rem;"><div style="color:#64748b;margin-bottom:0.2rem;">Requires</div><div style="color:#f8fafc;">API key</div></div>
+                  </div>
+
+                  <!-- Ollama -->
+                  <div x-show="pluginCfg.embedProvider === 'ollama'" style="background:#1c1403;border:1px solid #78350f;border-radius:8px;padding:0.65rem 0.9rem;">
+                    <div style="display:flex;gap:2rem;flex-wrap:wrap;margin-bottom:0.5rem;">
+                      <div style="font-size:0.75rem;"><div style="color:#64748b;margin-bottom:0.2rem;">Speed</div><div style="color:#f59e0b;">GPU: ~2–5 min &nbsp;·&nbsp; CPU: 30 min–2h+</div></div>
+                      <div style="font-size:0.75rem;"><div style="color:#64748b;margin-bottom:0.2rem;">Data</div><div style="color:#22c55e;">Stays on your machine</div></div>
+                      <div style="font-size:0.75rem;"><div style="color:#64748b;margin-bottom:0.2rem;">Requires</div><div style="color:#f8fafc;">Ollama running locally</div></div>
+                    </div>
+                    <div style="font-size:0.72rem;color:#a8a29e;background:#1c1917;border-radius:6px;padding:0.4rem 0.65rem;">
+                      💡 Re-embed speed depends on your hardware. GPU-accelerated Ollama is fastest. CPU-only is significantly slower.
+                    </div>
+                  </div>
+
+                  <!-- Built-in -->
+                  <div x-show="pluginCfg.embedProvider === 'local'" style="background:#0c1a2e;border:1px solid #1e40af;border-radius:8px;padding:0.65rem 0.9rem;display:flex;gap:2rem;flex-wrap:wrap;">
+                    <div style="font-size:0.75rem;"><div style="color:#64748b;margin-bottom:0.2rem;">Speed</div><div style="color:#60a5fa;">~1–3 min for any vault</div></div>
+                    <div style="font-size:0.75rem;"><div style="color:#64748b;margin-bottom:0.2rem;">Data</div><div style="color:#22c55e;">Fully local, no API</div></div>
+                    <div style="font-size:0.75rem;"><div style="color:#64748b;margin-bottom:0.2rem;">Requires</div><div style="color:#f8fafc;">Nothing extra</div></div>
+                  </div>
+
                 </div>
               </div>
 
@@ -1466,6 +1606,43 @@
                   <label>Voyage AI API Key</label>
                   <input class="input-field" type="password" x-model="pluginCfg.embedApiKey" placeholder="pa-..." autocomplete="off" />
                 </div>
+              </div>
+
+              <!-- Cohere key field -->
+              <div x-show="pluginCfg.embedProvider==='cohere'" style="margin-bottom:1rem;">
+                <div class="form-group">
+                  <label>Cohere API Key</label>
+                  <input class="input-field" type="password" x-model="pluginCfg.embedApiKey" placeholder="..." autocomplete="off" />
+                </div>
+              </div>
+
+              <!-- Google key field -->
+              <div x-show="pluginCfg.embedProvider==='google'" style="margin-bottom:1rem;">
+                <div class="form-group">
+                  <label>Google API Key</label>
+                  <input class="input-field" type="password" x-model="pluginCfg.embedApiKey" placeholder="..." autocomplete="off" />
+                </div>
+              </div>
+
+              <!-- Mistral key field -->
+              <div x-show="pluginCfg.embedProvider==='mistral'" style="margin-bottom:1rem;">
+                <div class="form-group">
+                  <label>Mistral API Key</label>
+                  <input class="input-field" type="password" x-model="pluginCfg.embedApiKey" placeholder="..." autocomplete="off" />
+                </div>
+              </div>
+
+              <!-- Jina key field -->
+              <div x-show="pluginCfg.embedProvider==='jina'" style="margin-bottom:1rem;">
+                <div class="form-group">
+                  <label>Jina API Key</label>
+                  <input class="input-field" type="password" x-model="pluginCfg.embedApiKey" placeholder="jina_..." autocomplete="off" />
+                </div>
+              </div>
+
+              <!-- Built-in: no configuration needed -->
+              <div x-show="pluginCfg.embedProvider==='local'" style="margin-bottom:1rem;">
+                <div style="font-size:0.8125rem;color:var(--text-muted);">No API key required. The built-in model runs fully locally.</div>
               </div>
 
               <div style="display:flex;gap:0.625rem;align-items:center;margin-bottom:0.875rem;">
