@@ -355,3 +355,48 @@ func TestEmbedService_Voyage_Init_Success(t *testing.T) {
 		t.Error("expected non-nil rate limiter for Voyage")
 	}
 }
+
+// mockHardwareProvider satisfies both Provider and plugin.HardwareAwarePlugin.
+type mockHardwareProvider struct {
+	accelerated bool
+	dims        int
+}
+
+func (m *mockHardwareProvider) Name() string { return "mock-hw" }
+func (m *mockHardwareProvider) Init(_ context.Context, _ ProviderHTTPConfig) (int, error) {
+	return m.dims, nil
+}
+func (m *mockHardwareProvider) EmbedBatch(_ context.Context, texts []string) ([]float32, error) {
+	return make([]float32, len(texts)*m.dims), nil
+}
+func (m *mockHardwareProvider) MaxBatchSize() int    { return 1 }
+func (m *mockHardwareProvider) Close() error         { return nil }
+func (m *mockHardwareProvider) HardwareAccelerated() bool { return m.accelerated }
+
+func TestEmbedService_HardwareAccelerated_Delegates(t *testing.T) {
+	svc := &EmbedService{provider: &mockHardwareProvider{accelerated: true, dims: 2}}
+	if !svc.HardwareAccelerated() {
+		t.Error("expected HardwareAccelerated()=true when inner provider reports GPU")
+	}
+}
+
+// simpleProvider implements only Provider, not HardwareAwarePlugin.
+type simpleProvider struct{}
+
+func (s *simpleProvider) Name() string { return "simple" }
+func (s *simpleProvider) Init(_ context.Context, _ ProviderHTTPConfig) (int, error) {
+	return 2, nil
+}
+func (s *simpleProvider) EmbedBatch(_ context.Context, texts []string) ([]float32, error) {
+	return make([]float32, len(texts)*2), nil
+}
+func (s *simpleProvider) MaxBatchSize() int { return 1 }
+func (s *simpleProvider) Close() error      { return nil }
+
+func TestEmbedService_HardwareAccelerated_NotSupported(t *testing.T) {
+	// Use a provider that does NOT implement plugin.HardwareAwarePlugin
+	svc := &EmbedService{provider: &simpleProvider{}}
+	if svc.HardwareAccelerated() {
+		t.Error("expected HardwareAccelerated()=false when provider does not implement HardwareAwarePlugin")
+	}
+}
