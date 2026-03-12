@@ -209,6 +209,9 @@ document.addEventListener('alpine:init', () => {
       ollamaEmbedModels: [],
       ollamaDetected: null,   // null=unchecked, true=running, false=not found
       ollamaChecking: false,
+      embedRatePerSec: 0,       // from embed-status API: engrams/sec, 0 when idle
+      embedETASecs: 0,          // from embed-status API: seconds until complete, 0 when idle
+      embedHardwareGPU: null,   // null = unknown/cloud; true = GPU; false = CPU-only Ollama
     },
 
     // Vault actions
@@ -1574,11 +1577,20 @@ document.addEventListener('alpine:init', () => {
     // ── Settings ───────────────────────────────────────────────────────────
     async loadEmbedStatus() {
       try {
-        this.embedStatus = await this.apiCall('/api/admin/embed/status');
+        const data = await this.apiCall('/api/admin/embed/status');
+        this.embedStatus = data;
         // Reflect the active provider in the plugin config UI (local is default, not a plugin choice)
-        const p = this.embedStatus?.provider;
+        const p = data?.provider;
         if (p && p !== 'none' && p !== 'local') {
           this.pluginCfg.embedProvider = p;
+        }
+        this.pluginCfg.embedRatePerSec = data.rate_per_sec ?? 0;
+        this.pluginCfg.embedETASecs    = data.eta_seconds ?? 0;
+        // hardware_accelerated is absent for cloud providers; present (true/false) for Ollama
+        if (Object.prototype.hasOwnProperty.call(data, 'hardware_accelerated')) {
+          this.pluginCfg.embedHardwareGPU = data.hardware_accelerated;
+        } else {
+          this.pluginCfg.embedHardwareGPU = null;
         }
       } catch (_) {
         // Non-fatal: embedStatus stays null, UI shows fallback
@@ -1885,6 +1897,31 @@ document.addEventListener('alpine:init', () => {
       const embedded = this.embedStatus.embedded_count;
       if (total <= 0 || embedded < 0) return 0;
       return Math.min(100, Math.round((embedded / total) * 100));
+    },
+
+    // Returns a formatted rate string like "0.7s/embedding", or '' when idle.
+    embedSecsPerItem() {
+      if (this.pluginCfg.embedRatePerSec > 0) {
+        return (1 / this.pluginCfg.embedRatePerSec).toFixed(1) + 's/embedding';
+      }
+      return '';
+    },
+
+    // Returns a human-readable ETA string like "~3 min", or '' when idle.
+    embedETADisplay() {
+      const secs = this.pluginCfg.embedETASecs;
+      if (secs <= 0) return '';
+      if (secs < 60) return '< 1 min';
+      const mins = Math.round(secs / 60);
+      if (mins < 60) return '~' + mins + ' min';
+      const hrs = Math.floor(mins / 60);
+      const rem = mins % 60;
+      return rem > 0 ? '~' + hrs + ' hr ' + rem + ' min' : '~' + hrs + ' hr';
+    },
+
+    // True only when Ollama is the embed provider and hardware_accelerated is explicitly false.
+    get embedIsCPU() {
+      return this.pluginCfg.embedHardwareGPU === false;
     },
 
     // ── Cluster ────────────────────────────────────────────────────────────
