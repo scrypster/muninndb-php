@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -8,7 +9,6 @@ import (
 	"github.com/scrypster/muninndb/internal/engine/vaultjob"
 	"github.com/scrypster/muninndb/internal/metrics"
 	"github.com/scrypster/muninndb/internal/storage"
-	"golang.org/x/net/context"
 )
 
 // ExportVault synchronously exports the named vault to w as a .muninn archive.

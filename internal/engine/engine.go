@@ -627,7 +627,7 @@ func (e *Engine) spawnJob(fn func()) bool {
 // the engine is shutting down and the caller should fail fast.
 func (e *Engine) beginVaultOp() bool {
 	e.vaultOpMu.RLock()
-	if e.vaultOpStopped.Load() {
+	if e.vaultOpStopped.Load() || (e.stopCtx != nil && e.stopCtx.Err() != nil) {
 		e.vaultOpMu.RUnlock()
 		return false
 	}
