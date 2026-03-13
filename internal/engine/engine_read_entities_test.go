@@ -60,17 +60,12 @@ func TestRead_IncludesEntityRelationships(t *testing.T) {
 
 	readResp, err := eng.Read(ctx, &mbp.ReadRequest{Vault: "default", ID: writeResp.ID})
 	require.NoError(t, err)
-	require.NotEmpty(t, readResp.EntityRelationships)
-
-	// Find the explicit "manages" relationship (engine may also add co_occurs_with).
-	var found bool
-	for _, rel := range readResp.EntityRelationships {
-		if rel.FromEntity == "Alice" && rel.ToEntity == "Bob" && rel.RelType == "manages" {
-			found = true
-			break
-		}
-	}
-	require.True(t, found, "expected Alice manages Bob relationship, got: %v", readResp.EntityRelationships)
+	// co_occurs_with is filtered from the read response; only caller-provided relationships returned.
+	require.Len(t, readResp.EntityRelationships, 1)
+	rel := readResp.EntityRelationships[0]
+	require.Equal(t, "Alice", rel.FromEntity)
+	require.Equal(t, "Bob", rel.ToEntity)
+	require.Equal(t, "manages", rel.RelType)
 }
 
 // TestRead_NoEntitiesReturnsEmptySlices verifies that an engram written without

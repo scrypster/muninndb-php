@@ -1446,8 +1446,13 @@ func (e *Engine) Read(ctx context.Context, req *mbp.ReadRequest) (*mbp.ReadRespo
 	})
 
 	// Collect entity-to-entity relationships sourced from this engram (0x21 prefix).
+	// co_occurs_with records are engine-generated side effects (not caller-provided) and
+	// are excluded — use muninn_entity to explore co-occurrence data.
 	var entityRels []mbp.InlineEntityRelationship
 	_ = e.store.ScanEngramRelationships(ctx, wsPrefix, id, func(r storage.RelationshipRecord) error {
+		if r.RelType == "co_occurs_with" {
+			return nil
+		}
 		entityRels = append(entityRels, mbp.InlineEntityRelationship{
 			FromEntity: r.FromEntity,
 			ToEntity:   r.ToEntity,
