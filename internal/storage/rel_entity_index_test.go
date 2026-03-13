@@ -52,6 +52,140 @@ func TestUpsertRelationshipRecord_WritesRelEntityIndex(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// RelinkRelationshipEntity
+// ---------------------------------------------------------------------------
+
+// TestRelinkRelationshipEntity_UpdatesFromAndToEntries verifies that after calling
+// RelinkRelationshipEntity(oldName, newName):
+//   - ScanEntityRelationships(oldName) returns 0 records
+//   - ScanEntityRelationships(newName) returns all records that previously referenced oldName
+//   - The record values themselves contain newName (not oldName)
+func TestRelinkRelationshipEntity_UpdatesFromAndToEntries(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	ws := store.VaultPrefix("relink-rel-entity")
+
+	eng := makeTestEngram("relink relationship test")
+	_, err := store.WriteEngram(ctx, ws, eng)
+	require.NoError(t, err)
+
+	// Write a relationship: "Postgre SQL" uses "PostgreSQL".
+	require.NoError(t, store.UpsertRelationshipRecord(ctx, ws, eng.ID, RelationshipRecord{
+		FromEntity: "Postgre SQL",
+		ToEntity:   "PostgreSQL",
+		RelType:    "uses",
+		Weight:     0.9,
+		Source:     "test",
+	}))
+
+	// Before relink: ScanEntityRelationships("Postgre SQL") finds 1 record.
+	var before []RelationshipRecord
+	require.NoError(t, store.ScanEntityRelationships(ctx, ws, "Postgre SQL",
+		func(r RelationshipRecord) error {
+			before = append(before, r)
+			return nil
+		}))
+	require.Len(t, before, 1, "must find record before relink")
+
+	// Relink "Postgre SQL" → "PostgreSQL" in all relationship records.
+	require.NoError(t, store.RelinkRelationshipEntity(ctx, ws, "Postgre SQL", "PostgreSQL"))
+
+	// After relink: ScanEntityRelationships("Postgre SQL") must return nothing.
+	var afterOld []RelationshipRecord
+	require.NoError(t, store.ScanEntityRelationships(ctx, ws, "Postgre SQL",
+		func(r RelationshipRecord) error {
+			afterOld = append(afterOld, r)
+			return nil
+		}))
+	assert.Empty(t, afterOld, "ScanEntityRelationships for old name must return nothing after relink")
+
+	// ScanEntityRelationships("PostgreSQL") must find 1 record where both sides are "PostgreSQL".
+	var afterNew []RelationshipRecord
+	require.NoError(t, store.ScanEntityRelationships(ctx, ws, "PostgreSQL",
+		func(r RelationshipRecord) error {
+			afterNew = append(afterNew, r)
+			return nil
+		}))
+	require.Len(t, afterNew, 1, "ScanEntityRelationships for new name must return 1 record")
+	assert.Equal(t, "PostgreSQL", afterNew[0].FromEntity, "FromEntity must be updated to new name")
+	assert.Equal(t, "PostgreSQL", afterNew[0].ToEntity, "ToEntity must remain PostgreSQL")
+}
+
+// TestRelinkRelationshipEntity_ToEntitySide verifies the case where oldName appears
+// as toEntity (not fromEntity).
+func TestRelinkRelationshipEntity_ToEntitySide(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	ws := store.VaultPrefix("relink-rel-to")
+
+	eng := makeTestEngram("relink to-entity test")
+	_, err := store.WriteEngram(ctx, ws, eng)
+	require.NoError(t, err)
+
+	require.NoError(t, store.UpsertRelationshipRecord(ctx, ws, eng.ID, RelationshipRecord{
+		FromEntity: "payment-service",
+		ToEntity:   "Postgre SQL",
+		RelType:    "uses",
+		Weight:     0.8,
+		Source:     "test",
+	}))
+
+	require.NoError(t, store.RelinkRelationshipEntity(ctx, ws, "Postgre SQL", "PostgreSQL"))
+
+	var rels []RelationshipRecord
+	require.NoError(t, store.ScanEntityRelationships(ctx, ws, "PostgreSQL",
+		func(r RelationshipRecord) error {
+			rels = append(rels, r)
+			return nil
+		}))
+	require.Len(t, rels, 1)
+	assert.Equal(t, "payment-service", rels[0].FromEntity)
+	assert.Equal(t, "PostgreSQL", rels[0].ToEntity, "ToEntity must be renamed")
+}
+
+// TestRelinkRelationshipEntity_NoopOnMissing verifies that calling RelinkRelationshipEntity
+// for an entity that has no relationships returns nil without error.
+func TestRelinkRelationshipEntity_NoopOnMissing(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	ws := store.VaultPrefix("relink-rel-noop")
+	require.NoError(t, store.RelinkRelationshipEntity(ctx, ws, "NonExistent", "Target"))
+}
+
+// TestRelinkRelationshipEntity_IdempotentOnRepeat verifies that calling RelinkRelationshipEntity
+// twice produces the same correct final state.
+func TestRelinkRelationshipEntity_IdempotentOnRepeat(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	ws := store.VaultPrefix("relink-rel-idempotent")
+
+	eng := makeTestEngram("idempotent relink rel")
+	_, err := store.WriteEngram(ctx, ws, eng)
+	require.NoError(t, err)
+
+	require.NoError(t, store.UpsertRelationshipRecord(ctx, ws, eng.ID, RelationshipRecord{
+		FromEntity: "Postgre SQL",
+		ToEntity:   "Redis",
+		RelType:    "uses",
+		Weight:     0.7,
+		Source:     "test",
+	}))
+
+	require.NoError(t, store.RelinkRelationshipEntity(ctx, ws, "Postgre SQL", "PostgreSQL"))
+	// Second call — must not error; old-hash entries are already gone, new-hash entries idempotently set.
+	require.NoError(t, store.RelinkRelationshipEntity(ctx, ws, "Postgre SQL", "PostgreSQL"))
+
+	var rels []RelationshipRecord
+	require.NoError(t, store.ScanEntityRelationships(ctx, ws, "PostgreSQL",
+		func(r RelationshipRecord) error {
+			rels = append(rels, r)
+			return nil
+		}))
+	require.Len(t, rels, 1)
+	assert.Equal(t, "PostgreSQL", rels[0].FromEntity)
+}
+
+// ---------------------------------------------------------------------------
 // ScanEntityRelationships — filtering
 // ---------------------------------------------------------------------------
 

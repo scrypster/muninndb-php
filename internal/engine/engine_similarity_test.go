@@ -6,6 +6,7 @@ import (
 
 	"github.com/scrypster/muninndb/internal/storage"
 	"github.com/scrypster/muninndb/internal/transport/mbp"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -252,6 +253,68 @@ func TestMergeEntity_SameEntityRejected(t *testing.T) {
 	_, err := eng.MergeEntity(ctx, "default", "PostgreSQL", "PostgreSQL", false)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "must be different")
+}
+
+// TestMergeEntity_RelinkRelationships verifies that after MergeEntity(A→B), relationship
+// records that referenced A are updated to reference B. ScanEntityRelationships("A")
+// returns nothing; ScanEntityRelationships("B") returns all previously-A relationships.
+func TestMergeEntity_RelinkRelationships(t *testing.T) {
+	eng, cleanup := testEnv(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Write entities in separate engrams to avoid triggering the engine's
+	// automatic co-occurrence relationship (which fires when two entities share an engram).
+	writeEntityEngram(t, eng, "default", "Postgre SQL is a database",
+		mbp.InlineEntity{Name: "Postgre SQL", Type: "database"})
+	writeEntityEngram(t, eng, "default", "auth-service is a service",
+		mbp.InlineEntity{Name: "auth-service", Type: "service"})
+	writeEntityEngram(t, eng, "default", "PostgreSQL canonical",
+		mbp.InlineEntity{Name: "PostgreSQL", Type: "database"})
+
+	// Write a relationship: auth-service uses "Postgre SQL".
+	ws := eng.store.ResolveVaultPrefix("default")
+	require.NoError(t, eng.store.UpsertRelationshipRecord(ctx, ws, storage.NewULID(), storage.RelationshipRecord{
+		FromEntity: "auth-service",
+		ToEntity:   "Postgre SQL",
+		RelType:    "uses",
+		Weight:     0.9,
+		Source:     "test",
+	}))
+
+	// Before merge: ScanEntityRelationships("Postgre SQL") finds 1 record.
+	var before []storage.RelationshipRecord
+	require.NoError(t, eng.store.ScanEntityRelationships(ctx, ws, "Postgre SQL",
+		func(r storage.RelationshipRecord) error {
+			before = append(before, r)
+			return nil
+		}))
+	require.Len(t, before, 1, "must find relationship before merge")
+
+	// Merge A → B.
+	result, err := eng.MergeEntity(ctx, "default", "Postgre SQL", "PostgreSQL", false)
+	require.NoError(t, err)
+	require.False(t, result.DryRun)
+
+	// After merge: "Postgre SQL" must have no relationships.
+	var afterA []storage.RelationshipRecord
+	require.NoError(t, eng.store.ScanEntityRelationships(ctx, ws, "Postgre SQL",
+		func(r storage.RelationshipRecord) error {
+			afterA = append(afterA, r)
+			return nil
+		}))
+	assert.Empty(t, afterA, "ScanEntityRelationships(A) must be empty after merge")
+
+	// After merge: "PostgreSQL" must now own the relationship.
+	var afterB []storage.RelationshipRecord
+	require.NoError(t, eng.store.ScanEntityRelationships(ctx, ws, "PostgreSQL",
+		func(r storage.RelationshipRecord) error {
+			afterB = append(afterB, r)
+			return nil
+		}))
+	require.Len(t, afterB, 1, "ScanEntityRelationships(B) must find the relinked relationship")
+	assert.Equal(t, "auth-service", afterB[0].FromEntity)
+	assert.Equal(t, "PostgreSQL", afterB[0].ToEntity, "ToEntity must be updated to canonical name")
 }
 
 func TestMergeEntity_AlreadyMergedEntityARejected(t *testing.T) {

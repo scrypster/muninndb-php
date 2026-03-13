@@ -39,7 +39,9 @@ func BackfillRelEntityIndex(db *pebble.DB) error {
 
 	batch := db.NewBatch()
 	batchCount := 0
-	written, skipped := 0, 0
+	// relationships counts 0x21 keys processed; indexKeys counts 0x26 entries written
+	// (2 per relationship: one for fromHash, one for toHash).
+	relationships, indexKeys, skipped := 0, 0, 0
 
 	for valid := iter.First(); valid; valid = iter.Next() {
 		k := iter.Key()
@@ -70,7 +72,8 @@ func BackfillRelEntityIndex(db *pebble.DB) error {
 			return fmt.Errorf("backfill rel entity index: set to key: %w", err)
 		}
 		batchCount++
-		written++
+		relationships++
+		indexKeys += 2 // one for fromHash, one for toHash
 
 		if batchCount >= batchSize {
 			if err := batch.Commit(pebble.Sync); err != nil {
@@ -96,6 +99,10 @@ func BackfillRelEntityIndex(db *pebble.DB) error {
 	}
 	batch.Close()
 
-	slog.Info("backfill rel entity index complete", "written", written, "skipped", skipped)
+	slog.Info("backfill rel entity index complete",
+		"relationships", relationships,
+		"index_keys", indexKeys,
+		"skipped", skipped,
+	)
 	return nil
 }

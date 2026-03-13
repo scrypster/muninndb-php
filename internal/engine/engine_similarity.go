@@ -176,6 +176,14 @@ func (e *Engine) MergeEntity(ctx context.Context, vault, entityA, entityB string
 		}
 	}
 
+	// Step 1b: update any 0x21 relationship records that reference entity A by name,
+	// replacing A with B in both the record value and the 0x21 key (which encodes the
+	// entity hash). The 0x26 index is updated in the same batches. This keeps
+	// ScanEntityRelationships("B") returning the complete set after a merge.
+	if err := e.store.RelinkRelationshipEntity(ctx, ws, entityA, entityB); err != nil {
+		return nil, fmt.Errorf("merge_entity: relink relationship records from entity_a to entity_b: %w", err)
+	}
+
 	// Step 2: mark A as merged.
 	if err := e.store.UpsertEntityRecord(ctx, storage.EntityRecord{
 		Name:       recA.Name,

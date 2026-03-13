@@ -4,6 +4,8 @@ import (
 	"hash/fnv"
 	"strings"
 	"sync"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 // mergeGuardStripes is the number of merge-guard stripes. 256 gives a ~0.4%
@@ -34,12 +36,14 @@ type mergeGuard struct {
 	mu [mergeGuardStripes]sync.Mutex
 }
 
-// stripeIndex returns the stripe index for an entity name, using the same
-// FNV-32a hash and NFKC-inspired lowercasing as the storage entity locks so
-// that similar entity names map predictably.
+// stripeIndex returns the stripe index for an entity name using the same
+// NFKC normalisation + lowercase + trim pipeline as getEntityLock in the storage
+// layer. Consistent normalisation ensures that entity names which differ only in
+// Unicode representation (e.g. "café" vs "cafe\u0301") map to the same stripe.
 func (g *mergeGuard) stripeIndex(name string) uint32 {
+	normalized := strings.ToLower(strings.TrimSpace(norm.NFKC.String(name)))
 	h := fnv.New32a()
-	h.Write([]byte(strings.ToLower(strings.TrimSpace(name))))
+	h.Write([]byte(normalized))
 	return h.Sum32() % mergeGuardStripes
 }
 

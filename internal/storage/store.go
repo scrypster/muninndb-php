@@ -218,6 +218,12 @@ type EngineStore interface {
 	// specific (engram, entity) pair atomically. Used by MergeEntity to clean up stale links.
 	DeleteEntityEngramLink(ctx context.Context, ws [8]byte, engramID ULID, entityName string) error
 
+	// RelinkRelationshipEntity updates all 0x21 relationship records in vault ws where
+	// oldName appears as fromEntity or toEntity, replacing it with newName and updating
+	// both the 0x21 key (which encodes the entity hash) and the 0x26 index accordingly.
+	// Called by MergeEntity after relinking engram-entity links.
+	RelinkRelationshipEntity(ctx context.Context, ws [8]byte, oldName, newName string) error
+
 	// IncrementEntityCoOccurrence increments the co-occurrence count for two entity names
 	// within a vault. Uses the 0x24 index. Pair is stored in canonical (hashA <= hashB) order.
 	IncrementEntityCoOccurrence(ctx context.Context, ws [8]byte, nameA, nameB string) error
