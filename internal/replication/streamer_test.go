@@ -105,7 +105,8 @@ func TestNetworkStreamer_PushLatency(t *testing.T) {
 	defer cancel()
 
 	ns := NewNetworkStreamer(log, pc, 0)
-	go ns.Stream(ctx) //nolint:errcheck
+	streamErr := make(chan error, 1)
+	go func() { streamErr <- ns.Stream(ctx) }()
 
 	// Append one entry and measure how long until the frame arrives.
 	start := time.Now()
@@ -126,6 +127,9 @@ func TestNetworkStreamer_PushLatency(t *testing.T) {
 	t.Logf("push latency = %v (includes Pebble fsync)", elapsed)
 
 	cancel()
+	if err := <-streamErr; err != nil && err != context.Canceled {
+		t.Fatalf("Stream returned %v, want nil/context.Canceled", err)
+	}
 }
 
 // TestNetworkStreamer_ResumeFromSeq verifies that starting a streamer at
@@ -157,6 +161,37 @@ func TestNetworkStreamer_ResumeFromSeq(t *testing.T) {
 
 	// Should receive exactly entries 6, 7, 8.
 	for want := uint64(6); want <= 8; want++ {
+		entry := readReplEntry(t, server)
+		if entry.Seq != want {
+			t.Errorf("seq = %d, want %d", entry.Seq, want)
+		}
+	}
+
+	cancel()
+	<-streamErr
+}
+
+// TestNetworkStreamer_CatchesUpExistingEntries verifies that the network
+// streamer sends entries that were already present in the replication log when
+// the streamer starts, without requiring a fresh append notification.
+func TestNetworkStreamer_CatchesUpExistingEntries(t *testing.T) {
+	log := newTestLog(t)
+
+	for i := 0; i < 3; i++ {
+		if _, err := log.Append(OpSet, []byte("existing"), []byte("v")); err != nil {
+			t.Fatalf("Append %d: %v", i, err)
+		}
+	}
+
+	pc, server := pipeConn(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	ns := NewNetworkStreamer(log, pc, 0)
+	streamErr := make(chan error, 1)
+	go func() { streamErr <- ns.Stream(ctx) }()
+
+	for want := uint64(1); want <= 3; want++ {
 		entry := readReplEntry(t, server)
 		if entry.Seq != want {
 			t.Errorf("seq = %d, want %d", entry.Seq, want)

@@ -15,6 +15,11 @@ import (
 // Returns an ExportResult with engram count and total key count.
 // Returns ErrVaultNotFound if the vault does not exist.
 func (e *Engine) ExportVault(ctx context.Context, vaultName, embedderModel string, dimension int, resetMeta bool, w io.Writer) (*storage.ExportResult, error) {
+	if !e.beginVaultOp() {
+		return nil, fmt.Errorf("engine is shutting down")
+	}
+	defer e.endVaultOp()
+
 	names, err := e.store.ListVaultNames()
 	if err != nil {
 		return nil, fmt.Errorf("export vault: list vaults: %w", err)
@@ -48,6 +53,11 @@ func (e *Engine) ExportVault(ctx context.Context, vaultName, embedderModel strin
 // Returns the job immediately (202 pattern).
 // Returns an error if vaultName already exists.
 func (e *Engine) StartImport(ctx context.Context, vaultName, embedderModel string, dimension int, resetMeta bool, r io.Reader) (*vaultjob.Job, error) {
+	if !e.beginVaultOp() {
+		return nil, fmt.Errorf("engine is shutting down")
+	}
+	defer e.endVaultOp()
+
 	e.vaultOpsMu.Lock()
 
 	names, err := e.store.ListVaultNames()

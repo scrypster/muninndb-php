@@ -23,6 +23,11 @@ import (
 // goroutine (typically seconds). Actual re-embedding is handled by the existing
 // RetroactiveProcessor micro-batch pipeline.
 func (e *Engine) StartReembedVault(ctx context.Context, vaultName, modelName string) (*vaultjob.Job, error) {
+	if !e.beginVaultOp() {
+		return nil, fmt.Errorf("engine is shutting down")
+	}
+	defer e.endVaultOp()
+
 	mu := e.getVaultMutex(vaultName)
 	if !mu.TryLock() {
 		return nil, fmt.Errorf("vault %q: another operation is in progress", vaultName)

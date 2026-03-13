@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/scrypster/muninndb/internal/engine/vaultjob"
 	"github.com/scrypster/muninndb/internal/transport/mbp"
@@ -100,11 +101,23 @@ func TestEngine_StopDrainsJobs(t *testing.T) {
 		}
 
 		// Trigger a clone job just before Stop. Either the job runs or
-		// spawnJob returns false — both are correct. Must not panic or hang.
+		// the setup path notices shutdown and returns "engine is shutting down" —
+		// both are correct. Must not panic or hang.
+		done := make(chan error, 1)
 		go func() {
-			eng.StartClone(ctx, src, src+"_clone")
+			_, err := eng.StartClone(ctx, src, src+"_clone")
+			done <- err
 		}()
 		cleanup()
+
+		select {
+		case err := <-done:
+			if err != nil && !strings.Contains(err.Error(), "engine is shutting down") {
+				t.Fatalf("unexpected StartClone error during shutdown: %v", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("StartClone did not return after engine shutdown")
+		}
 	}
 }
 
