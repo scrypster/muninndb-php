@@ -132,6 +132,9 @@ func (b *Breaker) RecordFailure() {
 	var cb func(StateChangeEvent)
 	transitioned := false
 	if b.state == StateHalfOpen || b.consecutiveFails >= b.maxFails {
+		// Capture failure count before the half-open reset so the event carries
+		// the actual count that triggered the transition, not the post-reset zero.
+		failCount := b.consecutiveFails
 		// Reset consecutiveFails when transitioning back from half-open to open so
 		// the next probe cycle starts from a clean slate rather than an already-
 		// elevated counter that would cause the circuit to re-open faster than intended.
@@ -148,7 +151,7 @@ func (b *Breaker) RecordFailure() {
 			ev = StateChangeEvent{
 				From:         prev,
 				To:           StateOpen,
-				FailureCount: b.consecutiveFails,
+				FailureCount: failCount,
 			}
 			cb = b.OnStateChange
 		}
