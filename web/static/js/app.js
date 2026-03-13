@@ -819,34 +819,34 @@ document.addEventListener('alpine:init', () => {
           // A supersedes B; archive B
           await this.apiCall('/api/link?vault=' + encodeURIComponent(vault), {
             method: 'POST',
-            body: JSON.stringify({ source_id: idA, target_id: idB, rel_type: 4, weight: 1.0, vault }),
+            body: JSON.stringify({ source_id: idA, target_id: idB, rel_type: 4, weight: 1.0 }),
           });
           await this.apiCall('/api/engrams/' + encodeURIComponent(idB) + '/state?vault=' + encodeURIComponent(vault), {
             method: 'PUT',
-            body: JSON.stringify({ vault, state: 'archived' }),
+            body: JSON.stringify({ state: 'archived' }),
           });
-          await this.apiCall('/api/admin/contradictions/resolve', {
+          await this.apiCall('/api/admin/contradictions/resolve?vault=' + encodeURIComponent(vault), {
             method: 'POST',
-            body: JSON.stringify({ vault, id_a: idA, id_b: idB }),
+            body: JSON.stringify({ id_a: idA, id_b: idB }),
           });
         } else if (action === 'keep_b') {
           // B supersedes A; archive A
           await this.apiCall('/api/link?vault=' + encodeURIComponent(vault), {
             method: 'POST',
-            body: JSON.stringify({ source_id: idB, target_id: idA, rel_type: 4, weight: 1.0, vault }),
+            body: JSON.stringify({ source_id: idB, target_id: idA, rel_type: 4, weight: 1.0 }),
           });
           await this.apiCall('/api/engrams/' + encodeURIComponent(idA) + '/state?vault=' + encodeURIComponent(vault), {
             method: 'PUT',
-            body: JSON.stringify({ vault, state: 'archived' }),
+            body: JSON.stringify({ state: 'archived' }),
           });
-          await this.apiCall('/api/admin/contradictions/resolve', {
+          await this.apiCall('/api/admin/contradictions/resolve?vault=' + encodeURIComponent(vault), {
             method: 'POST',
-            body: JSON.stringify({ vault, id_a: idA, id_b: idB }),
+            body: JSON.stringify({ id_a: idA, id_b: idB }),
           });
         } else if (action === 'dismiss') {
-          await this.apiCall('/api/admin/contradictions/resolve', {
+          await this.apiCall('/api/admin/contradictions/resolve?vault=' + encodeURIComponent(vault), {
             method: 'POST',
-            body: JSON.stringify({ vault, id_a: idA, id_b: idB }),
+            body: JSON.stringify({ id_a: idA, id_b: idB }),
           });
         } else if (action === 'merge') {
           // Open consolidate modal pre-filled with both IDs
@@ -2647,7 +2647,7 @@ document.addEventListener('alpine:init', () => {
       try {
         const res = await this.apiCall(
           '/api/engrams/' + encodeURIComponent(id) + '/state?vault=' + encodeURIComponent(this.vault),
-          { method: 'PUT', body: JSON.stringify({ vault: this.vault, state }) }
+          { method: 'PUT', body: JSON.stringify({ state }) }
         );
         if (this.selectedMemory && this.selectedMemory.id === id) {
           this.selectedMemory = { ...this.selectedMemory, state };
