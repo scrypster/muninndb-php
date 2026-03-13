@@ -46,13 +46,37 @@ func (e *Engine) FindSimilarEntities(ctx context.Context, vault string, threshol
 		return nil, fmt.Errorf("find_similar_entities: scan names: %w", err)
 	}
 
+	// Phase 1: build an inverted trigram index: trigram → []int (indices into names).
+	// This reduces FindSimilarEntities from O(n²) to O(n × T × C) where T is the average
+	// number of trigrams per name (~10) and C is the average candidate count per name
+	// (small at high thresholds). For n=1000 this is ~10K–50K comparisons vs 500K.
+	invertedIdx := make(map[string][]int, len(names)*8)
+	for i, name := range names {
+		for t := range trigrams(name) {
+			invertedIdx[t] = append(invertedIdx[t], i)
+		}
+	}
+
+	// Phase 2: for each name, find candidate indices sharing ≥1 trigram, then compare.
+	// Using j > i avoids duplicate pairs and mirrors the previous double-loop semantics.
+	// Note: trigramSim > 0 iff the trigram sets share at least one entry, so no pair with
+	// sim ≥ threshold > 0 can be missed by the candidate set. At threshold=0 pairs of
+	// entirely different strings are excluded, but that edge case is not meaningful in practice.
 	var pairs []SimilarEntityPair
-	for i := 0; i < len(names); i++ {
-		for j := i + 1; j < len(names); j++ {
-			sim := trigramSim(names[i], names[j])
+	for i, name := range names {
+		candidates := make(map[int]struct{})
+		for t := range trigrams(name) {
+			for _, j := range invertedIdx[t] {
+				if j > i {
+					candidates[j] = struct{}{}
+				}
+			}
+		}
+		for j := range candidates {
+			sim := trigramSim(name, names[j])
 			if sim >= threshold {
 				pairs = append(pairs, SimilarEntityPair{
-					EntityA:    names[i],
+					EntityA:    name,
 					EntityB:    names[j],
 					Similarity: sim,
 				})
@@ -133,10 +157,15 @@ func (e *Engine) MergeEntity(ctx context.Context, vault, entityA, entityB string
 		return result, nil
 	}
 
-	// Step 1: relink each engram from A to B.
+	// Step 1: relink each engram from A to B and delete the stale A links.
+	// Both operations are needed: writing the B link establishes the new association;
+	// deleting the A link removes the ghost that would otherwise persist in the 0x23 index.
 	for _, id := range engramIDs {
 		if err := e.store.WriteEntityEngramLink(ctx, ws, id, entityB); err != nil {
 			return nil, fmt.Errorf("merge_entity: relink engram %s to entity_b: %w", id.String(), err)
+		}
+		if err := e.store.DeleteEntityEngramLink(ctx, ws, id, entityA); err != nil {
+			return nil, fmt.Errorf("merge_entity: remove stale link for engram %s entity_a: %w", id.String(), err)
 		}
 	}
 

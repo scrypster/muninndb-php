@@ -678,6 +678,30 @@ func IdempotencyKey(opID string) []byte {
 	return key
 }
 
+// RelEntityIndexKey constructs the relationship entity index key (0x26 prefix).
+// Written for BOTH fromEntity and toEntity on every UpsertRelationshipRecord call.
+// Enables O(engrams-referencing-entity) relationship lookup instead of a full vault scan.
+// Key: 0x26 | ws(8) | entityHash(8) | engramID(16) = 33 bytes
+// Value: empty (all data is encoded in the key).
+func RelEntityIndexKey(ws [8]byte, entityHash [8]byte, engramID [16]byte) []byte {
+	key := make([]byte, 1+8+8+16)
+	key[0] = 0x26
+	copy(key[1:9], ws[:])
+	copy(key[9:17], entityHash[:])
+	copy(key[17:33], engramID[:])
+	return key
+}
+
+// RelEntityIndexPrefix returns the 17-byte prefix for scanning all relationship
+// engrams for a given entity in a vault (0x26 | ws(8) | entityHash(8)).
+func RelEntityIndexPrefix(ws [8]byte, entityHash [8]byte) []byte {
+	key := make([]byte, 1+8+8)
+	key[0] = 0x26
+	copy(key[1:9], ws[:])
+	copy(key[9:17], entityHash[:])
+	return key
+}
+
 // ArchiveAssocKey constructs the archived association key (0x25 prefix).
 // No weight complement — archive keys are not sorted by weight.
 // No reverse key — restore is one-directional (BFS always traverses outbound edges).

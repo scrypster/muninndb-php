@@ -200,7 +200,17 @@ type EngineStore interface {
 
 	// ScanRelationships scans all vault-scoped relationship records at the 0x21 prefix.
 	// Calls fn for each RelationshipRecord until fn returns a non-nil error or the scan is exhausted.
+	// Use ScanEntityRelationships for per-entity queries — this method does a full vault scan.
 	ScanRelationships(ctx context.Context, ws [8]byte, fn func(record RelationshipRecord) error) error
+
+	// ScanEntityRelationships returns all relationship records where entityName appears
+	// as fromEntity or toEntity, using the 0x26 relationship entity index.
+	// O(engrams-referencing-entity) instead of O(all vault relationships).
+	ScanEntityRelationships(ctx context.Context, ws [8]byte, entityName string, fn func(record RelationshipRecord) error) error
+
+	// DeleteEntityEngramLink deletes the 0x20 forward key and 0x23 reverse key for a
+	// specific (engram, entity) pair atomically. Used by MergeEntity to clean up stale links.
+	DeleteEntityEngramLink(ctx context.Context, ws [8]byte, engramID ULID, entityName string) error
 
 	// IncrementEntityCoOccurrence increments the co-occurrence count for two entity names
 	// within a vault. Uses the 0x24 index. Pair is stored in canonical (hashA <= hashB) order.

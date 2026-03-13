@@ -794,6 +794,11 @@ func runServer() {
 		Description: "backfill embed_dim in ERF records for existing embeddings",
 		Up:          migrate.BackfillEmbedDim,
 	})
+	migRunner.Register(migrate.Migration{
+		Version:     2,
+		Description: "backfill relationship entity index (0x26) for GetEntityAggregate optimisation",
+		Up:          migrate.BackfillRelEntityIndex,
+	})
 	if applied, err := migRunner.Run(); err != nil {
 		slog.Error("migration failed", "err", err)
 		db.Close()

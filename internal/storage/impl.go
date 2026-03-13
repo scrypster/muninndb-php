@@ -69,8 +69,11 @@ type PebbleStore struct {
 	// cold-start loads and periodic flushes.
 	transCache *TransitionCache
 	closeOnce   sync.Once
-	entityLocks       sync.Map // key: normalized entity name → *sync.Mutex
-	coOccurrenceLocks sync.Map // key: "hashA:hashB" → *sync.Mutex
+	// entityLocks and coOccurrenceLocks use fixed-size striped mutex arrays instead of
+	// sync.Map to bound memory growth. sync.Map grows unbounded (one entry per unique key
+	// ever seen); stripedMutex uses a constant 256 × sizeof(sync.Mutex) ≈ 6 KB.
+	entityLocks       stripedMutex // prevents TOCTOU in UpsertEntityRecord
+	coOccurrenceLocks stripedMutex // prevents TOCTOU in IncrementEntityCoOccurrence
 	// archiveBloom is an in-memory Bloom filter over src engram IDs that have
 	// archived associations in the 0x25 namespace. Gates the 0x25 prefix scan
 	// during BFS traversal: if the filter says "no," skip the scan entirely.

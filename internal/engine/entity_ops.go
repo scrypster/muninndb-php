@@ -70,12 +70,12 @@ func (e *Engine) GetEntityAggregate(ctx context.Context, vault, entityName strin
 		return nil, scanErr
 	}
 
-	// 3. Relationships involving this entity (vault-scoped)
+	// 3. Relationships involving this entity (vault-scoped).
+	// ScanEntityRelationships uses the 0x26 index for O(engrams-referencing-entity) lookup
+	// instead of the O(all vault relationships) full scan that ScanRelationships would do.
 	var rels []storage.RelationshipRecord
-	err = e.store.ScanRelationships(ctx, ws, func(r storage.RelationshipRecord) error {
-		if r.FromEntity == entityName || r.ToEntity == entityName {
-			rels = append(rels, r)
-		}
+	err = e.store.ScanEntityRelationships(ctx, ws, entityName, func(r storage.RelationshipRecord) error {
+		rels = append(rels, r)
 		return nil
 	})
 	if err != nil {
