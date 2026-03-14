@@ -9,10 +9,25 @@
         "ext-curl": "*",
         "ext-json": "*"
     },
+    "require-dev": {
+        "phpunit/phpunit": "^11.0"
+    },
     "autoload": {
         "psr-4": {
             "MuninnDB\\": "src/"
+        },
+        "classmap": [
+            "src/Types/Types.php",
+            "src/Exceptions/Exceptions.php"
+        ]
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "MuninnDB\\Tests\\": "tests/"
         }
+    },
+    "scripts": {
+        "test": "phpunit --testdox"
     },
     "minimum-stability": "stable"
 }

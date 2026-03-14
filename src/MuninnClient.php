@@ -127,33 +127,43 @@ class MuninnClient
         array $context,
         string $vault = 'default',
         float $threshold = 0.0,
-        int $limit = 10,
+        int $maxResults = 10,
         int $maxHops = 0,
         string $profile = '',
         string $mode = '',
         ?string $since = null,
         ?string $before = null,
         bool $includeWhy = false,
-        bool $briefMode = false,
+        string $briefMode = '',
     ): ActivateResponse {
-        $body = array_filter([
+        // Always-present fields (threshold=0.0 is a valid value, must not be dropped).
+        $body = [
             'vault'       => $vault,
             'context'     => $context,
             'threshold'   => $threshold,
-            'limit'       => $limit,
-            'max_hops'    => $maxHops,
-            'profile'     => $profile,
-            'mode'        => $mode,
-            'since'       => $since,
-            'before'      => $before,
-            'include_why' => $includeWhy,
-            'brief_mode'  => $briefMode,
-        ], fn(mixed $v) => $v !== '' && $v !== 0 && $v !== 0.0 && $v !== false && $v !== null);
-
-        // These fields must always be present
-        $body['vault']   = $vault;
-        $body['context'] = $context;
-        $body['limit']   = $limit;
+            'max_results' => $maxResults,
+        ];
+        if ($maxHops > 0) {
+            $body['max_hops'] = $maxHops;
+        }
+        if ($profile !== '') {
+            $body['profile'] = $profile;
+        }
+        if ($mode !== '') {
+            $body['mode'] = $mode;
+        }
+        if ($since !== null) {
+            $body['since'] = $since;
+        }
+        if ($before !== null) {
+            $body['before'] = $before;
+        }
+        if ($includeWhy) {
+            $body['include_why'] = true;
+        }
+        if ($briefMode !== '') {
+            $body['brief_mode'] = $briefMode;
+        }
 
         return ActivateResponse::fromArray(
             $this->request('POST', '/api/activate?vault=' . urlencode($vault), $body),
@@ -164,7 +174,7 @@ class MuninnClient
     public function link(
         string $sourceId,
         string $targetId,
-        string $relType = 'related',
+        int $relType = 1,
         float $weight = 1.0,
         string $vault = 'default',
     ): void {
@@ -249,16 +259,24 @@ class MuninnClient
         int $maxHops = 2,
         int $maxNodes = 20,
         array $relTypes = [],
+        bool $followEntities = false,
         string $vault = 'default',
     ): TraverseResponse {
+        $body = [
+            'vault'     => $vault,
+            'start_id'  => $startId,
+            'max_hops'  => $maxHops,
+            'max_nodes' => $maxNodes,
+        ];
+        if ($relTypes !== []) {
+            $body['rel_types'] = $relTypes;
+        }
+        if ($followEntities) {
+            $body['follow_entities'] = true;
+        }
+
         return TraverseResponse::fromArray(
-            $this->request('POST', '/api/traverse?vault=' . urlencode($vault), array_filter([
-                'vault'     => $vault,
-                'start_id'  => $startId,
-                'max_hops'  => $maxHops,
-                'max_nodes' => $maxNodes,
-                'rel_types' => $relTypes,
-            ], fn(mixed $v) => $v !== [])),
+            $this->request('POST', '/api/traverse?vault=' . urlencode($vault), $body),
         );
     }
 
