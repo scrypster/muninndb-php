@@ -10,14 +10,14 @@ var ErrNotFound = errors.New("engram not found")
 
 // Engram is a single memory record returned by the public API.
 type Engram struct {
-	ID         string
-	Concept    string
-	Content    string
-	Summary    string
-	State      string
-	Score      float64
-	Confidence float32
-	Tags       []string
-	CreatedAt  time.Time
-	LastAccess time.Time
+	ID         string    `json:"id"`
+	Concept    string    `json:"concept"`
+	Content    string    `json:"content"`
+	Summary    string    `json:"summary,omitempty"`
+	State      string    `json:"state,omitempty"`
+	Score      float64   `json:"score,omitempty"`
+	Confidence float32   `json:"confidence,omitempty"`
+	Tags       []string  `json:"tags,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+	LastAccess time.Time `json:"last_access"`
 }

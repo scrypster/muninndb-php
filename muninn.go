@@ -175,7 +175,9 @@ func isLockError(err error) bool {
 		return false
 	}
 	msg := err.Error()
-	return strings.Contains(msg, "lock") || strings.Contains(msg, "LOCK") || strings.Contains(msg, "already in use")
+	return strings.Contains(msg, "lock") || strings.Contains(msg, "LOCK") ||
+		strings.Contains(msg, "already in use") ||
+		strings.Contains(msg, "resource temporarily unavailable") // Linux EAGAIN
 }
 
 // embedderAdapter adapts the public muninn.Embedder to activation.Embedder.

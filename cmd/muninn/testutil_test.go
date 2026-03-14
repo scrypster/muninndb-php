@@ -10,6 +10,8 @@ import (
 )
 
 // captureStdout redirects os.Stdout during f() and returns the captured output.
+// The pipe is drained concurrently to avoid deadlock when f() produces more
+// output than the OS pipe buffer (≈4KB on Windows, 64KB on Linux).
 func captureStdout(f func()) string {
 	r, w, err := os.Pipe()
 	if err != nil {
@@ -18,18 +20,25 @@ func captureStdout(f func()) string {
 	old := os.Stdout
 	os.Stdout = w
 
+	var buf bytes.Buffer
+	done := make(chan struct{})
+	go func() {
+		io.Copy(&buf, r)
+		r.Close()
+		close(done)
+	}()
+
 	f()
 
 	w.Close()
 	os.Stdout = old
-
-	var buf bytes.Buffer
-	io.Copy(&buf, r)
-	r.Close()
+	<-done
 	return buf.String()
 }
 
 // captureStderr redirects os.Stderr during f() and returns the captured output.
+// The pipe is drained concurrently to avoid deadlock when f() produces more
+// output than the OS pipe buffer (≈4KB on Windows, 64KB on Linux).
 func captureStderr(f func()) string {
 	r, w, err := os.Pipe()
 	if err != nil {
@@ -38,14 +47,19 @@ func captureStderr(f func()) string {
 	old := os.Stderr
 	os.Stderr = w
 
+	var buf bytes.Buffer
+	done := make(chan struct{})
+	go func() {
+		io.Copy(&buf, r)
+		r.Close()
+		close(done)
+	}()
+
 	f()
 
 	w.Close()
 	os.Stderr = old
-
-	var buf bytes.Buffer
-	io.Copy(&buf, r)
-	r.Close()
+	<-done
 	return buf.String()
 }
 

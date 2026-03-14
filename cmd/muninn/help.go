@@ -117,6 +117,9 @@ var subcommandHelp = map[string]func(){
 				"muninn logs 50 --level warn --no-follow",
 			})
 	},
+	"exec": func() {
+		printExecHelp()
+	},
 	"backup": func() {
 		printSubcommandUsage("backup", "offline point-in-time backup", "muninn backup --output <dir> [flags]",
 			[][2]string{
@@ -301,6 +304,7 @@ func printHelp() {
 	fmt.Printf("  %-32s %s\n", cyan("muninn vault <command>"), "Vault management (create, list, delete, clear, clone, merge, export, import)")
 	fmt.Printf("  %-32s %s\n", cyan("muninn api-key <command>"), "API key management (create, list, revoke)")
 	fmt.Printf("  %-32s %s\n", cyan("muninn admin change-password"), "Change the admin password")
+	fmt.Printf("  %-32s %s\n", cyan("muninn exec <op> [flags]"), "One-shot remember/recall/read/forget (no daemon needed)")
 	fmt.Printf("  %-32s %s\n", cyan("muninn backup --output <dir>"), "Offline point-in-time backup (server must be stopped)")
 	fmt.Printf("  %-32s %s\n", cyan("muninn cluster"), "Cluster management (info, status, failover, add-node, remove-node)")
 	fmt.Printf("  %-32s %s\n", cyan("muninn mcp"), "stdio→HTTP MCP proxy (for OpenClaw)")

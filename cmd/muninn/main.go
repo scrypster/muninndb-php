@@ -57,6 +57,8 @@ func main() {
 		runStopService("web")
 	case "status":
 		runStatus()
+	case "exec":
+		runExec(rest)
 	case "backup":
 		runBackup(rest)
 	case "upgrade":
