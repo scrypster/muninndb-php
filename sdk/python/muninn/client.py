@@ -219,7 +219,7 @@ class MuninnClient:
         results = [
             BatchWriteResult(
                 index=r.get("index", i),
-                id=r.get("id", ""),
+                id=r.get("id"),
                 status=r.get("status", "error"),
                 error=r.get("error"),
             )
@@ -334,6 +334,7 @@ class MuninnClient:
             created_at=response.get("created_at", 0),
             updated_at=response.get("updated_at", 0),
             last_access=response.get("last_access"),
+            coherence=coherence,
         )
 
     async def forget(self, id: str, vault: str = "default", hard: bool = False) -> bool:
@@ -434,7 +435,7 @@ class MuninnClient:
         self,
         vault: str = "default",
         push_on_write: bool = True,
-        threshold: float = 0.0,
+        threshold: float | None = None,
     ) -> SSEStream:
         """Subscribe to vault events via Server-Sent Events (SSE).
 
@@ -451,7 +452,7 @@ class MuninnClient:
         Args:
             vault: Vault to subscribe to (default: "default")
             push_on_write: Emit push events on new writes (default: True)
-            threshold: Min activation threshold for push events (default: 0.0)
+            threshold: Min activation threshold for push events. None means use server default.
 
         Returns:
             SSEStream async iterable
@@ -463,7 +464,7 @@ class MuninnClient:
             "vault": vault,
             "push_on_write": str(push_on_write).lower(),
         }
-        if threshold:
+        if threshold is not None:
             params["threshold"] = str(threshold)
 
         return SSEStream(self, "/api/subscribe", params)
@@ -568,6 +569,7 @@ class MuninnClient:
         max_hops: int = 2,
         max_nodes: int = 20,
         rel_types: list[str] | None = None,
+        follow_entities: bool = False,
         vault: str = "default",
     ) -> TraverseResponse:
         """Traverse the association graph from a starting engram.
@@ -577,6 +579,7 @@ class MuninnClient:
             max_hops: Maximum hops to traverse (default: 2)
             max_nodes: Maximum nodes to return (default: 20)
             rel_types: Filter by relationship types
+            follow_entities: Follow entity-level associations in addition to engram-level (default: False)
             vault: Vault name (default: "default")
 
         Returns:
@@ -590,6 +593,8 @@ class MuninnClient:
         }
         if rel_types:
             body["rel_types"] = rel_types
+        if follow_entities:
+            body["follow_entities"] = True
         response = await self._request("POST", "/api/traverse", json=body, params={"vault": vault})
         nodes = [
             TraversalNode(

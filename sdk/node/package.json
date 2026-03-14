@@ -9,6 +9,8 @@
   ],
   "scripts": {
     "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
@@ -28,6 +30,8 @@
     "url": "https://github.com/scrypster/muninndb"
   },
   "devDependencies": {
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^3.0.0",
+    "msw": "^2.7.0"
   }
 }

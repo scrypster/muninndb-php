@@ -76,14 +76,9 @@ func (c *Client) Write(ctx context.Context, vault, concept, content string, tags
 }
 
 // WriteWithOptions writes an engram with full control over all fields.
+// The caller is responsible for setting Confidence and Stability; no defaults
+// are applied (unlike Write, which hard-codes 0.9 and 0.5).
 func (c *Client) WriteWithOptions(ctx context.Context, req WriteRequest) (*WriteResponse, error) {
-	if req.Confidence == 0 {
-		req.Confidence = 0.9
-	}
-	if req.Stability == 0 {
-		req.Stability = 0.5
-	}
-
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
@@ -205,10 +200,16 @@ func (c *Client) Forget(ctx context.Context, id, vault string) error {
 	return c.request(ctx, "DELETE", path, nil, nil)
 }
 
-// Stats gets database statistics.
-func (c *Client) Stats(ctx context.Context) (*StatsResponse, error) {
+// Stats gets database statistics. Pass an empty vault to get global stats.
+func (c *Client) Stats(ctx context.Context, vault string) (*StatsResponse, error) {
+	path := "/api/stats"
+	if vault != "" {
+		q := url.Values{}
+		q.Set("vault", vault)
+		path += "?" + q.Encode()
+	}
 	resp := &StatsResponse{}
-	if err := c.request(ctx, "GET", "/api/stats", nil, resp); err != nil {
+	if err := c.request(ctx, "GET", path, nil, resp); err != nil {
 		return nil, err
 	}
 	return resp, nil
@@ -384,14 +385,16 @@ func (c *Client) Restore(ctx context.Context, id, vault string) (*RestoreRespons
 }
 
 // Traverse traverses the association graph from a starting engram.
-func (c *Client) Traverse(ctx context.Context, vault, startID string, maxHops, maxNodes int, relTypes []string) (*TraverseResponse, error) {
+// Set followEntities to true to follow entity-level associations in addition to engram-level ones.
+func (c *Client) Traverse(ctx context.Context, vault, startID string, maxHops, maxNodes int, relTypes []string, followEntities bool) (*TraverseResponse, error) {
 	payload := struct {
-		Vault    string   `json:"vault"`
-		StartID  string   `json:"start_id"`
-		MaxHops  int      `json:"max_hops"`
-		MaxNodes int      `json:"max_nodes"`
-		RelTypes []string `json:"rel_types,omitempty"`
-	}{Vault: vault, StartID: startID, MaxHops: maxHops, MaxNodes: maxNodes, RelTypes: relTypes}
+		Vault          string   `json:"vault"`
+		StartID        string   `json:"start_id"`
+		MaxHops        int      `json:"max_hops"`
+		MaxNodes       int      `json:"max_nodes"`
+		RelTypes       []string `json:"rel_types,omitempty"`
+		FollowEntities bool     `json:"follow_entities,omitempty"`
+	}{Vault: vault, StartID: startID, MaxHops: maxHops, MaxNodes: maxNodes, RelTypes: relTypes, FollowEntities: followEntities}
 
 	body, err := json.Marshal(payload)
 	if err != nil {

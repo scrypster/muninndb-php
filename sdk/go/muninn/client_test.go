@@ -179,7 +179,7 @@ func TestTraverse(t *testing.T) {
 	defer srv.Close()
 
 	client := NewClient(srv.URL, "test-token")
-	resp, err := client.Traverse(context.Background(), "default", "n1", 2, 20, nil)
+	resp, err := client.Traverse(context.Background(), "default", "n1", 2, 20, nil, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -360,6 +360,106 @@ func TestRequest_ServerError(t *testing.T) {
 	}
 	if attempts != 3 {
 		t.Errorf("expected 3 attempts (1 initial + 2 retries), got %d", attempts)
+	}
+}
+
+func TestWriteWithOptions_ZeroConfidence_NotOverwritten(t *testing.T) {
+	var receivedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&receivedBody)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(201)
+		json.NewEncoder(w).Encode(WriteResponse{ID: "x", CreatedAt: 1700000000})
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-token")
+	_, err := client.WriteWithOptions(context.Background(), WriteRequest{
+		Vault:   "default",
+		Concept: "test",
+		Content: "body",
+		// Confidence and Stability explicitly zero — should NOT be defaulted to 0.9/0.5
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// confidence=0 is omitempty so it won't appear in the JSON — that's fine.
+	// The key assertion is that WriteWithOptions doesn't silently overwrite with 0.9.
+	if v, ok := receivedBody["confidence"]; ok && v == 0.9 {
+		t.Error("WriteWithOptions must not default confidence=0 to 0.9; caller controls the value")
+	}
+}
+
+func TestTraverse_FollowEntities_Sent(t *testing.T) {
+	var receivedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&receivedBody)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		json.NewEncoder(w).Encode(TraverseResponse{})
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-token")
+	_, err := client.Traverse(context.Background(), "default", "start-id", 2, 20, nil, true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if v, ok := receivedBody["follow_entities"]; !ok || v != true {
+		t.Errorf("expected follow_entities=true in request body, got: %v", receivedBody)
+	}
+}
+
+func TestStats_WithVault(t *testing.T) {
+	var receivedQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedQuery = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		json.NewEncoder(w).Encode(StatsResponse{EngramCount: 42})
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-token")
+	resp, err := client.Stats(context.Background(), "myvault")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.EngramCount != 42 {
+		t.Errorf("expected 42 engrams, got %d", resp.EngramCount)
+	}
+	if receivedQuery != "vault=myvault" {
+		t.Errorf("expected vault=myvault in query, got: %s", receivedQuery)
+	}
+}
+
+func TestAssociationItem_JSONTags(t *testing.T) {
+	// Verify that AssociationItem deserializes from server wire format (snake_case).
+	data := `{"target_id":"t1","rel_type":5,"weight":0.8,"co_activation_count":3}`
+	var item AssociationItem
+	if err := json.Unmarshal([]byte(data), &item); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if item.TargetID != "t1" {
+		t.Errorf("TargetID: want t1, got %q", item.TargetID)
+	}
+	if item.RelType != 5 {
+		t.Errorf("RelType: want 5, got %d", item.RelType)
+	}
+	if item.CoActivationCount != 3 {
+		t.Errorf("CoActivationCount: want 3, got %d", item.CoActivationCount)
+	}
+}
+
+func TestEngramItem_JSONTags(t *testing.T) {
+	// Verify that EngramItem deserializes with created_at (snake_case) from server.
+	data := `{"id":"e1","concept":"c","content":"x","confidence":0.7,"vault":"default","created_at":1700000000}`
+	var item EngramItem
+	if err := json.Unmarshal([]byte(data), &item); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if item.CreatedAt != 1700000000 {
+		t.Errorf("CreatedAt: want 1700000000, got %d", item.CreatedAt)
 	}
 }
 

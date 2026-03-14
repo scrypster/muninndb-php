@@ -61,7 +61,7 @@ func main() {
 	fmt.Printf("Linked %s → %s\n", authID, deployID)
 
 	// Stats
-	stats, err := client.Stats(ctx)
+	stats, err := client.Stats(ctx, "")
 	if err != nil {
 		log.Fatalf("stats failed: %v", err)
 	}

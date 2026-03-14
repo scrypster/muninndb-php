@@ -104,7 +104,7 @@ func main() {
 	// --- Traverse the graph ---
 	if len(ids) > 0 {
 		fmt.Printf("\nTraversing graph from %s...\n", ids[0][:8])
-		graph, err := client.Traverse(ctx, vault, ids[0], 2, 20, nil)
+		graph, err := client.Traverse(ctx, vault, ids[0], 2, 20, nil, false)
 		if err != nil {
 			log.Fatalf("traverse failed: %v", err)
 		}

@@ -38,6 +38,7 @@ langchain = [
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
+    "respx>=0.22",
     "langchain-core>=0.3",
     "langchain>=0.3",
     "langchain-anthropic>=0.3",

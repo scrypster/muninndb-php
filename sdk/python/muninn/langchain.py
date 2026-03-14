@@ -81,7 +81,7 @@ class MuninnDBMemory(_Base):  # type: ignore[misc]
 
     def __init__(
         self,
-        base_url: str = "http://localhost:8475",
+        base_url: str = "http://localhost:8476",
         token: Optional[str] = None,
         vault: str = "default",
         max_results: int = 10,

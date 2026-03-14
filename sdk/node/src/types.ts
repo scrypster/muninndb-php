@@ -26,15 +26,15 @@ export interface Engram {
   tags: string[];
   confidence: number;
   stability: number;
-  memory_type: string;
+  memory_type: number;
   type_label: string;
   summary: string;
-  entities: string[];
-  relationships: string[];
-  state: string;
-  created_at: string;
-  updated_at: string;
-  deleted_at?: string;
+  entities?: unknown[];
+  relationships?: unknown[];
+  state: number;
+  created_at: number;
+  updated_at: number;
+  deleted_at?: number;
   [key: string]: unknown;
 }
 
@@ -58,12 +58,12 @@ export interface WriteOptions {
 
 export interface WriteResponse {
   id: string;
-  created_at: string;
+  created_at: number;
 }
 
 export interface BatchWriteResult {
   index: number;
-  id: string;
+  id?: string;
   status: string;
   error?: string;
 }
@@ -80,14 +80,14 @@ export interface ActivateOptions {
   vault?: string;
   context: string[];
   threshold?: number;
-  limit?: number;
+  max_results?: number;
   max_hops?: number;
   profile?: string;
   mode?: string;
   since?: string;
   before?: string;
   include_why?: boolean;
-  brief_mode?: boolean;
+  brief_mode?: string;
 }
 
 export interface ActivationItem {
@@ -102,8 +102,9 @@ export interface ActivationItem {
 }
 
 export interface BriefSentence {
-  id: string;
+  engram_id?: string;
   text: string;
+  score?: number;
 }
 
 export interface ActivateResponse {
@@ -122,15 +123,16 @@ export interface LinkOptions {
   vault?: string;
   source_id: string;
   target_id: string;
-  rel_type: string;
+  rel_type: number;
   weight?: number;
 }
 
 export interface AssociationItem {
-  source_id: string;
   target_id: string;
-  rel_type: string;
+  rel_type: number;
   weight: number;
+  co_activation_count?: number;
+  restored_at?: number;
   [key: string]: unknown;
 }
 
@@ -195,19 +197,21 @@ export interface TraverseOptions {
   max_hops?: number;
   max_nodes?: number;
   rel_types?: string[];
+  follow_entities?: boolean;
 }
 
 export interface TraversalNode {
   id: string;
   concept: string;
-  depth: number;
+  hop_dist: number;
+  summary?: string;
   [key: string]: unknown;
 }
 
 export interface TraversalEdge {
-  source: string;
-  target: string;
-  rel_type: string;
+  from_id: string;
+  to_id: string;
+  rel_type: number;
   weight: number;
   [key: string]: unknown;
 }
@@ -230,12 +234,12 @@ export interface ExplainOptions {
 }
 
 export interface ExplainComponents {
-  semantic: number;
-  recency: number;
+  full_text_relevance: number;
+  semantic_similarity: number;
+  decay_factor: number;
+  hebbian_boost: number;
+  access_frequency: number;
   confidence: number;
-  stability: number;
-  association: number;
-  [key: string]: unknown;
 }
 
 export interface ExplainResponse {
@@ -256,7 +260,7 @@ export interface ExplainResponse {
 export interface SetStateResponse {
   id: string;
   state: string;
-  previous_state: string;
+  updated: boolean;
   [key: string]: unknown;
 }
 
@@ -267,8 +271,9 @@ export interface SetStateResponse {
 export interface DeletedEngram {
   id: string;
   concept: string;
-  deleted_at: string;
-  [key: string]: unknown;
+  deleted_at: number;
+  recoverable_until: number;
+  tags?: string[];
 }
 
 export interface ListDeletedResponse {
@@ -293,10 +298,10 @@ export interface RetryEnrichResponse {
 
 export interface ContradictionItem {
   id_a: string;
+  concept_a: string;
   id_b: string;
-  concept: string;
-  description: string;
-  [key: string]: unknown;
+  concept_b: string;
+  detected_at: number;
 }
 
 export interface ContradictionsResponse {
@@ -309,15 +314,18 @@ export interface ContradictionsResponse {
 
 export interface CoherenceResult {
   score: number;
-  issues: string[];
-  [key: string]: unknown;
+  orphan_ratio: number;
+  contradiction_density: number;
+  duplication_pressure: number;
+  temporal_variance: number;
+  total_engrams: number;
 }
 
 export interface StatsResponse {
-  vault: string;
-  total_engrams: number;
-  coherence?: CoherenceResult;
-  [key: string]: unknown;
+  engram_count: number;
+  vault_count: number;
+  storage_bytes: number;
+  coherence?: Record<string, CoherenceResult>;
 }
 
 // ---------------------------------------------------------------------------
@@ -337,8 +345,9 @@ export interface ListEngramsResponse {
 
 export interface SessionEntry {
   id: string;
-  action: string;
-  timestamp: string;
+  concept: string;
+  content: string;
+  created_at: number;
   [key: string]: unknown;
 }
 

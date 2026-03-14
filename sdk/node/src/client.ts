@@ -350,9 +350,12 @@ export class MuninnClient {
    * The connection is kept alive until the iterable is broken out of or
    * {@link close} is called.
    */
-  subscribe(vault?: string, pushOnWrite = true): AsyncIterable<SseEvent> {
+  subscribe(vault?: string, pushOnWrite = true, threshold?: number): AsyncIterable<SseEvent> {
     const v = vault ?? this.defaultVault;
-    const url = `${this.baseUrl}/api/subscribe?vault=${encodeURIComponent(v)}&push_on_write=${pushOnWrite}`;
+    let url = `${this.baseUrl}/api/subscribe?vault=${encodeURIComponent(v)}&push_on_write=${pushOnWrite}`;
+    if (threshold !== undefined) {
+      url += `&threshold=${threshold}`;
+    }
     const ac = new AbortController();
     this.activeAbortControllers.add(ac);
 

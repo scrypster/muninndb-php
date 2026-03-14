@@ -28,8 +28,8 @@ class BatchWriteResult:
     """Result for a single engram in a batch write."""
 
     index: int
-    id: str
     status: str
+    id: str | None = None
     error: str | None = None
 
 
