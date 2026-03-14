@@ -156,7 +156,8 @@ func TestExec_AlreadyLocked(t *testing.T) {
 	// Confirm the failure is lock contention, not some unrelated runtime error.
 	if !strings.Contains(stderr, "lock") && !strings.Contains(stderr, "LOCK") &&
 		!strings.Contains(stderr, "held by another process") &&
-		!strings.Contains(stderr, "already in use") {
+		!strings.Contains(stderr, "already in use") &&
+		!strings.Contains(stderr, "resource temporarily unavailable") {
 		t.Errorf("stderr should mention lock contention, got: %s", stderr)
 	}
 }

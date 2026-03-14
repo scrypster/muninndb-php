@@ -209,7 +209,8 @@ func isExecLockError(err error) bool {
 	msg := err.Error()
 	return strings.Contains(msg, "held by another process") ||
 		strings.Contains(msg, "lock") || strings.Contains(msg, "LOCK") ||
-		strings.Contains(msg, "already in use")
+		strings.Contains(msg, "already in use") ||
+		strings.Contains(msg, "resource temporarily unavailable") // Linux EAGAIN
 }
 
 func printExecHelp() {
