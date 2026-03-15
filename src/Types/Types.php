@@ -254,8 +254,8 @@ class TraversalNode
     public function __construct(
         public readonly string $id,
         public readonly string $concept,
-        public readonly ?string $content = null,
-        public readonly ?int $depth = null,
+        public readonly int $hopDist = 0,
+        public readonly ?string $summary = null,
     ) {}
 
     public static function fromArray(array $data): self
@@ -263,8 +263,8 @@ class TraversalNode
         return new self(
             id: $data['id'] ?? '',
             concept: $data['concept'] ?? '',
-            content: $data['content'] ?? null,
-            depth: $data['depth'] ?? null,
+            hopDist: (int) ($data['hop_dist'] ?? 0),
+            summary: $data['summary'] ?? null,
         );
     }
 }
@@ -272,8 +272,8 @@ class TraversalNode
 class TraversalEdge
 {
     public function __construct(
-        public readonly string $source,
-        public readonly string $target,
+        public readonly string $fromId,
+        public readonly string $toId,
         public readonly string $relType,
         public readonly float $weight,
     ) {}
@@ -281,8 +281,8 @@ class TraversalEdge
     public static function fromArray(array $data): self
     {
         return new self(
-            source: $data['source'] ?? '',
-            target: $data['target'] ?? '',
+            fromId: $data['from_id'] ?? '',
+            toId: $data['to_id'] ?? '',
             relType: $data['rel_type'] ?? '',
             weight: (float) ($data['weight'] ?? 1.0),
         );
@@ -322,43 +322,52 @@ class TraverseResponse
 class ExplainComponents
 {
     public function __construct(
-        public readonly ?float $semantic = null,
-        public readonly ?float $recency = null,
-        public readonly ?float $confidence = null,
-        public readonly ?float $stability = null,
-        public readonly ?float $tagBoost = null,
-        public readonly ?float $entityBoost = null,
+        public readonly float $fullTextRelevance = 0.0,
+        public readonly float $semanticSimilarity = 0.0,
+        public readonly float $decayFactor = 0.0,
+        public readonly float $hebbianBoost = 0.0,
+        public readonly float $accessFrequency = 0.0,
+        public readonly float $confidence = 0.0,
     ) {}
 
     public static function fromArray(array $data): self
     {
         return new self(
-            semantic: isset($data['semantic']) ? (float) $data['semantic'] : null,
-            recency: isset($data['recency']) ? (float) $data['recency'] : null,
-            confidence: isset($data['confidence']) ? (float) $data['confidence'] : null,
-            stability: isset($data['stability']) ? (float) $data['stability'] : null,
-            tagBoost: isset($data['tag_boost']) ? (float) $data['tag_boost'] : null,
-            entityBoost: isset($data['entity_boost']) ? (float) $data['entity_boost'] : null,
+            fullTextRelevance: (float) ($data['full_text_relevance'] ?? 0.0),
+            semanticSimilarity: (float) ($data['semantic_similarity'] ?? 0.0),
+            decayFactor: (float) ($data['decay_factor'] ?? 0.0),
+            hebbianBoost: (float) ($data['hebbian_boost'] ?? 0.0),
+            accessFrequency: (float) ($data['access_frequency'] ?? 0.0),
+            confidence: (float) ($data['confidence'] ?? 0.0),
         );
     }
 }
 
 class ExplainResponse
 {
+    /** @param string[] $ftsMatches @param string[] $assocPath */
     public function __construct(
         public readonly string $engramId,
+        public readonly string $concept,
         public readonly float $finalScore,
         public readonly ExplainComponents $components,
-        public readonly ?string $profile = null,
+        public readonly array $ftsMatches = [],
+        public readonly array $assocPath = [],
+        public readonly bool $wouldReturn = false,
+        public readonly float $threshold = 0.0,
     ) {}
 
     public static function fromArray(array $data): self
     {
         return new self(
             engramId: $data['engram_id'] ?? '',
+            concept: $data['concept'] ?? '',
             finalScore: (float) ($data['final_score'] ?? 0.0),
             components: ExplainComponents::fromArray($data['components'] ?? []),
-            profile: $data['profile'] ?? null,
+            ftsMatches: $data['fts_matches'] ?? [],
+            assocPath: $data['assoc_path'] ?? [],
+            wouldReturn: (bool) ($data['would_return'] ?? false),
+            threshold: (float) ($data['threshold'] ?? 0.0),
         );
     }
 }
@@ -368,7 +377,7 @@ class SetStateResponse
     public function __construct(
         public readonly string $id,
         public readonly string $state,
-        public readonly ?string $previousState = null,
+        public readonly bool $updated = false,
     ) {}
 
     public static function fromArray(array $data): self
@@ -376,17 +385,20 @@ class SetStateResponse
         return new self(
             id: $data['id'] ?? '',
             state: $data['state'] ?? '',
-            previousState: $data['previous_state'] ?? null,
+            updated: (bool) ($data['updated'] ?? false),
         );
     }
 }
 
 class DeletedEngram
 {
+    /** @param string[] $tags */
     public function __construct(
         public readonly string $id,
         public readonly string $concept,
-        public readonly ?int $deletedAt = null,
+        public readonly int $deletedAt = 0,
+        public readonly int $recoverableUntil = 0,
+        public readonly array $tags = [],
     ) {}
 
     public static function fromArray(array $data): self
@@ -394,7 +406,9 @@ class DeletedEngram
         return new self(
             id: $data['id'] ?? '',
             concept: $data['concept'] ?? '',
-            deletedAt: $data['deleted_at'] ?? null,
+            deletedAt: (int) ($data['deleted_at'] ?? 0),
+            recoverableUntil: (int) ($data['recoverable_until'] ?? 0),
+            tags: $data['tags'] ?? [],
         );
     }
 }
@@ -419,16 +433,21 @@ class ListDeletedResponse
 
 class RetryEnrichResponse
 {
+    /** @param string[] $pluginsQueued @param string[] $alreadyComplete */
     public function __construct(
-        public readonly string $id,
-        public readonly string $status,
+        public readonly string $engramId,
+        public readonly array $pluginsQueued,
+        public readonly array $alreadyComplete,
+        public readonly ?string $note = null,
     ) {}
 
     public static function fromArray(array $data): self
     {
         return new self(
-            id: $data['id'] ?? '',
-            status: $data['status'] ?? '',
+            engramId: $data['engram_id'] ?? '',
+            pluginsQueued: $data['plugins_queued'] ?? [],
+            alreadyComplete: $data['already_complete'] ?? [],
+            note: $data['note'] ?? null,
         );
     }
 }
@@ -436,19 +455,21 @@ class RetryEnrichResponse
 class ContradictionItem
 {
     public function __construct(
-        public readonly string $engramA,
-        public readonly string $engramB,
-        public readonly string $description,
-        public readonly ?float $severity = null,
+        public readonly string $idA,
+        public readonly string $conceptA,
+        public readonly string $idB,
+        public readonly string $conceptB,
+        public readonly int $detectedAt = 0,
     ) {}
 
     public static function fromArray(array $data): self
     {
         return new self(
-            engramA: $data['engram_a'] ?? '',
-            engramB: $data['engram_b'] ?? '',
-            description: $data['description'] ?? '',
-            severity: isset($data['severity']) ? (float) $data['severity'] : null,
+            idA: $data['id_a'] ?? '',
+            conceptA: $data['concept_a'] ?? '',
+            idB: $data['id_b'] ?? '',
+            conceptB: $data['concept_b'] ?? '',
+            detectedAt: (int) ($data['detected_at'] ?? 0),
         );
     }
 }
@@ -474,43 +495,49 @@ class ContradictionsResponse
 class CoherenceResult
 {
     public function __construct(
-        public readonly ?float $score = null,
-        public readonly ?int $contradictions = null,
+        public readonly float $score = 0.0,
+        public readonly float $orphanRatio = 0.0,
+        public readonly float $contradictionDensity = 0.0,
+        public readonly float $duplicationPressure = 0.0,
+        public readonly float $temporalVariance = 0.0,
+        public readonly int $totalEngrams = 0,
     ) {}
 
     public static function fromArray(array $data): self
     {
         return new self(
-            score: isset($data['score']) ? (float) $data['score'] : null,
-            contradictions: $data['contradictions'] ?? null,
+            score: (float) ($data['score'] ?? 0.0),
+            orphanRatio: (float) ($data['orphan_ratio'] ?? 0.0),
+            contradictionDensity: (float) ($data['contradiction_density'] ?? 0.0),
+            duplicationPressure: (float) ($data['duplication_pressure'] ?? 0.0),
+            temporalVariance: (float) ($data['temporal_variance'] ?? 0.0),
+            totalEngrams: (int) ($data['total_engrams'] ?? 0),
         );
     }
 }
 
 class StatsResponse
 {
+    /** @param array<string, CoherenceResult> $coherence */
     public function __construct(
-        public readonly int $totalEngrams,
-        public readonly int $totalLinks,
-        public readonly ?int $totalVaults = null,
-        public readonly ?int $activeEngrams = null,
-        public readonly ?int $deletedEngrams = null,
-        public readonly ?CoherenceResult $coherence = null,
-        public readonly ?array $raw = null,
+        public readonly int $engramCount,
+        public readonly int $vaultCount,
+        public readonly int $storageBytes,
+        public readonly array $coherence = [],
     ) {}
 
     public static function fromArray(array $data): self
     {
+        $coherence = [];
+        foreach ($data['coherence'] ?? [] as $vault => $c) {
+            $coherence[$vault] = CoherenceResult::fromArray($c);
+        }
+
         return new self(
-            totalEngrams: (int) ($data['total_engrams'] ?? 0),
-            totalLinks: (int) ($data['total_links'] ?? 0),
-            totalVaults: $data['total_vaults'] ?? null,
-            activeEngrams: $data['active_engrams'] ?? null,
-            deletedEngrams: $data['deleted_engrams'] ?? null,
-            coherence: isset($data['coherence'])
-                ? CoherenceResult::fromArray($data['coherence'])
-                : null,
-            raw: $data,
+            engramCount: (int) ($data['engram_count'] ?? 0),
+            vaultCount: (int) ($data['vault_count'] ?? 0),
+            storageBytes: (int) ($data['storage_bytes'] ?? 0),
+            coherence: $coherence,
         );
     }
 }
@@ -568,21 +595,21 @@ class ListEngramsResponse
 class AssociationItem
 {
     public function __construct(
-        public readonly string $id,
-        public readonly string $sourceId,
         public readonly string $targetId,
-        public readonly string $relType,
+        public readonly int $relType,
         public readonly float $weight,
+        public readonly int $coActivationCount = 0,
+        public readonly ?int $restoredAt = null,
     ) {}
 
     public static function fromArray(array $data): self
     {
         return new self(
-            id: $data['id'] ?? '',
-            sourceId: $data['source_id'] ?? '',
             targetId: $data['target_id'] ?? '',
-            relType: $data['rel_type'] ?? '',
+            relType: (int) ($data['rel_type'] ?? 0),
             weight: (float) ($data['weight'] ?? 1.0),
+            coActivationCount: (int) ($data['co_activation_count'] ?? 0),
+            restoredAt: isset($data['restored_at']) ? (int) $data['restored_at'] : null,
         );
     }
 }
@@ -592,8 +619,8 @@ class SessionEntry
     public function __construct(
         public readonly string $id,
         public readonly string $concept,
-        public readonly string $action,
-        public readonly ?int $timestamp = null,
+        public readonly string $content = '',
+        public readonly int $createdAt = 0,
     ) {}
 
     public static function fromArray(array $data): self
@@ -601,8 +628,8 @@ class SessionEntry
         return new self(
             id: $data['id'] ?? '',
             concept: $data['concept'] ?? '',
-            action: $data['action'] ?? '',
-            timestamp: $data['timestamp'] ?? null,
+            content: $data['content'] ?? '',
+            createdAt: (int) ($data['created_at'] ?? 0),
         );
     }
 }
@@ -632,7 +659,8 @@ class HealthResponse
     public function __construct(
         public readonly string $status,
         public readonly ?string $version = null,
-        public readonly ?float $uptime = null,
+        public readonly ?int $uptimeSeconds = null,
+        public readonly bool $dbWritable = true,
     ) {}
 
     public static function fromArray(array $data): self
@@ -640,7 +668,8 @@ class HealthResponse
         return new self(
             status: $data['status'] ?? 'unknown',
             version: $data['version'] ?? null,
-            uptime: isset($data['uptime']) ? (float) $data['uptime'] : null,
+            uptimeSeconds: isset($data['uptime_seconds']) ? (int) $data['uptime_seconds'] : null,
+            dbWritable: (bool) ($data['db_writable'] ?? true),
         );
     }
 }
