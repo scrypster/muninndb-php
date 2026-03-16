@@ -54,10 +54,12 @@ const walSyncInterval = 10 * time.Millisecond
 //	  walSyncInterval (10ms) via LogData(nil, pebble.Sync), providing a bounded
 //	  durability window equivalent to MySQL innodb_flush_log_at_trx_commit=2.
 type walSyncer struct {
-	db      *pebble.DB
-	stop    chan struct{}
-	done    chan struct{}
-	stopped atomic.Bool // set true before signalling the goroutine to stop
+	db           *pebble.DB
+	stop         chan struct{}
+	done         chan struct{}
+	stopped      atomic.Bool  // set true before signalling the goroutine to stop
+	lastWALBytes atomic.Uint64 // WAL bytes written at the last sync; used to detect idle
+	syncCount    atomic.Int64  // total doSync() calls; exposed for tests
 }
 
 func newWALSyncer(db *pebble.DB) *walSyncer {
@@ -78,9 +80,22 @@ func (s *walSyncer) run() {
 	for {
 		select {
 		case <-ticker.C:
-			s.doSync()
+			// Only fsync when the WAL has grown since the last sync. Pebble's
+			// Metrics() reads atomic counters — negligible cost at 100 Hz. This
+			// eliminates ~1 MB/s of idle disk writes while preserving the same
+			// ≤10ms durability window for active write paths.
+			//
+			// lastWALBytes is updated AFTER doSync() because LogData(nil, Sync)
+			// itself appends a small record to the WAL, advancing BytesWritten.
+			// Capturing the counter before the sync would cause the following
+			// tick to see a "new" byte count and trigger a spurious re-sync.
+			if s.db.Metrics().WAL.BytesWritten != s.lastWALBytes.Load() {
+				s.doSync()
+				s.lastWALBytes.Store(s.db.Metrics().WAL.BytesWritten)
+			}
 		case <-s.stop:
-			// Final sync before shutdown.
+			// Final sync on shutdown regardless of dirty state — ensures any
+			// in-flight NoSync writes are flushed before db.Close().
 			s.doSync()
 			return
 		}
@@ -114,6 +129,7 @@ func (s *walSyncer) doSync() {
 		}
 	}()
 
+	s.syncCount.Add(1)
 	if err := s.db.LogData(nil, pebble.Sync); err != nil {
 		if s.stopped.Load() || errors.Is(err, pebble.ErrClosed) {
 			return // expected during shutdown
