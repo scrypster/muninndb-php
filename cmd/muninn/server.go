@@ -339,8 +339,16 @@ func buildEmbedder(ctx context.Context, cfg plugincfg.PluginConfig, dataDir stri
 	}
 
 	// 2. Saved config fallback
-	if cfg.EmbedProvider != "" && cfg.EmbedProvider != "none" && cfg.EmbedProvider != "local" {
+	if cfg.EmbedProvider != "" && cfg.EmbedProvider != "none" {
 		switch cfg.EmbedProvider {
+		case "local":
+			if os.Getenv(localEmbed) != "0" && embedpkg.LocalAvailable() {
+				slog.Info("initializing bundled local ONNX embedder from saved config", "data_dir", dataDir)
+				if svc := tryEmbedService("local://all-MiniLM-L6-v2", plugin.PluginConfig{DataDir: dataDir}); svc != nil {
+					return embedpkg.NewEmbedServiceAdapter(svc), svc, nil
+				}
+				slog.Warn("bundled local embedder init failed (saved config), falling back")
+			}
 		case "ollama":
 			if cfg.EmbedURL != "" {
 				slog.Info("initializing Ollama embedder from saved config", "url", cfg.EmbedURL)

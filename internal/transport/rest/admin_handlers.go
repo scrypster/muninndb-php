@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
+	"os"
 	"strings"
 	"time"
 	"unicode"
@@ -428,6 +430,20 @@ type MCPInfoResponse struct {
 
 // handleMCPInfo returns the MCP endpoint URL and token status for the Connect UI.
 func (s *Server) handleMCPInfo(w http.ResponseWriter, r *http.Request) {
+	// MUNINN_MCP_URL lets operators advertise the externally-reachable MCP URL
+	// (e.g. in Docker or remote deployments where the listen address is not the
+	// same as the address clients should connect to).
+	if override := os.Getenv("MUNINN_MCP_URL"); override != "" {
+		if u, err := url.ParseRequestURI(override); err == nil && u.Host != "" {
+			s.sendJSON(w, http.StatusOK, MCPInfoResponse{
+				URL:             override,
+				TokenConfigured: s.mcpHasToken,
+			})
+			return
+		}
+		slog.Warn("MUNINN_MCP_URL is set but not a valid URL, falling back to derived address", "value", override)
+	}
+
 	addr := s.mcpAddr
 	if addr == "" {
 		addr = ":8750"

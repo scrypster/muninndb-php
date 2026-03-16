@@ -1593,9 +1593,9 @@ document.addEventListener('alpine:init', () => {
       try {
         const data = await this.apiCall('/api/admin/embed/status');
         this.embedStatus = data;
-        // Reflect the active provider in the plugin config UI (local is default, not a plugin choice)
+        // Reflect the active provider in the plugin config UI
         const p = data?.provider;
-        if (p && p !== 'none' && p !== 'local') {
+        if (p && p !== 'none') {
           this.pluginCfg.embedProvider = p;
         }
         this.pluginCfg.embedRatePerSec = data.rate_per_sec ?? 0;
