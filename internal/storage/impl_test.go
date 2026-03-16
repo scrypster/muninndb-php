@@ -928,7 +928,7 @@ func TestWriteEngramBatch_EmptyInput(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// CacheLen / GetDB / DiskSize trivial accessors
+// CacheLen / DiskSize trivial accessors
 // ---------------------------------------------------------------------------
 
 // TestStoreCacheLen writes 3 engrams to the L1 cache (via GetEngram which
