@@ -39,6 +39,12 @@ services:
       # MUNINN_ENRICH_URL: "openai://gpt-4o-mini"
       # MUNINN_ENRICH_API_KEY: ""
 
+      # ── Listen address ───────────────────────────────────────────────────────
+      # Inside a container the server must bind to 0.0.0.0 (all interfaces);
+      # the default 127.0.0.1 is the container loopback and unreachable from
+      # the host even when ports are mapped.
+      MUNINN_LISTEN_HOST: "0.0.0.0"
+
       # ── Memory limits ─────────────────────────────────────────────────────
       MUNINN_MEM_LIMIT_GB: "4"
       MUNINN_GC_PERCENT: "200"
