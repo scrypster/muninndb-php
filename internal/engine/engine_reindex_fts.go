@@ -21,6 +21,14 @@ import (
 // NOTE: This method does NOT rebuild HNSW embeddings — it is FTS-only.
 // The vault must exist in the registered name list or ErrVaultNotFound is returned.
 func (e *Engine) ReindexFTSVault(ctx context.Context, vaultName string) (int64, error) {
+	if !e.beginVaultOp() {
+		return 0, fmt.Errorf("engine is shutting down")
+	}
+	defer e.endVaultOp()
+
+	opCtx, stop := e.vaultOpContext(ctx)
+	defer stop()
+
 	mu := e.getVaultMutex(vaultName)
 	mu.Lock()
 	defer mu.Unlock()
@@ -85,7 +93,7 @@ func (e *Engine) ReindexFTSVault(ctx context.Context, vaultName string) (int64, 
 
 	// Step 2: Re-index all engrams using the current stemmed tokenizer.
 	var indexed int64
-	scanErr := e.store.ScanEngrams(ctx, ws, func(eng *storage.Engram) error {
+	scanErr := e.store.ScanEngrams(opCtx, ws, func(eng *storage.Engram) error {
 		if e.fts != nil {
 			if err := e.fts.IndexEngram(ws, [16]byte(eng.ID), eng.Concept, eng.CreatedBy, eng.Content, eng.Tags); err != nil {
 				slog.Warn("reindex-fts: IndexEngram failed", "vault", vaultName, "id", eng.ID, "err", err)
@@ -108,4 +116,3 @@ func (e *Engine) ReindexFTSVault(ctx context.Context, vaultName string) (int64, 
 	slog.Info("reindex-fts: complete", "vault", vaultName, "engrams", indexed)
 	return indexed, nil
 }
-

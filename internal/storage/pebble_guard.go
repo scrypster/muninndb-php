@@ -20,7 +20,12 @@ import (
 // closed is treated as an expected shutdown condition.
 func IsClosedPanic(r any) bool {
 	if err, ok := r.(error); ok {
-		return errors.Is(err, pebble.ErrClosed)
+		if errors.Is(err, pebble.ErrClosed) {
+			return true
+		}
+		s := err.Error()
+		return strings.Contains(s, pebble.ErrClosed.Error()) ||
+			strings.Contains(s, "pebble/record: closed")
 	}
 	s := fmt.Sprintf("%v", r)
 	// "pebble: closed" — applyInternal / standard ErrClosed string path.

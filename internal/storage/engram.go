@@ -158,6 +158,10 @@ func (ps *PebbleStore) GetEngrams(ctx context.Context, wsPrefix [8]byte, ids []U
 func (ps *PebbleStore) GetMetadata(ctx context.Context, wsPrefix [8]byte, ids []ULID) ([]*EngramMeta, error) {
 	result := make([]*EngramMeta, len(ids))
 	for i, id := range ids {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
 		// Level 1: metadata-only cache (populated after first Pebble read).
 		if meta, ok := ps.metaCache.Get([16]byte(id)); ok {
 			result[i] = meta
@@ -870,6 +874,10 @@ func (ps *PebbleStore) ScanEngrams(ctx context.Context, ws [8]byte, fn func(*Eng
 	embedValid := embedIter.First()
 
 	for valid := iter.First(); valid; valid = iter.Next() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
 		k := iter.Key()
 		if len(k) < 25 { // 1 prefix + 8 ws + 16 ULID minimum
 			continue

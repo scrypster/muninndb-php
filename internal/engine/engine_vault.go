@@ -28,6 +28,18 @@ var ErrVaultNameCollision = errors.New("vault name already exists")
 // It evicts all in-memory state (HNSW, FTS IDF cache, novelty fingerprints, coherence
 // counters, activity tracking) and adjusts the global engramCount.
 func (e *Engine) ClearVault(ctx context.Context, vaultName string) error {
+	if !e.beginVaultOp() {
+		return fmt.Errorf("engine is shutting down")
+	}
+	defer e.endVaultOp()
+
+	opCtx, stop := e.vaultOpContext(ctx)
+	defer stop()
+
+	return e.clearVault(opCtx, vaultName)
+}
+
+func (e *Engine) clearVault(ctx context.Context, vaultName string) error {
 	mu := e.getVaultMutex(vaultName)
 	mu.Lock()
 	defer mu.Unlock()
@@ -112,6 +124,18 @@ var ErrVaultJobActive = fmt.Errorf("vault has an active clone/merge job in progr
 // store.VaultPrefix would still return the SipHash but the name is no longer
 // registered — DeleteVaultNameOnly needs the ws captured before eviction.
 func (e *Engine) DeleteVault(ctx context.Context, vaultName string) error {
+	if !e.beginVaultOp() {
+		return fmt.Errorf("engine is shutting down")
+	}
+	defer e.endVaultOp()
+
+	opCtx, stop := e.vaultOpContext(ctx)
+	defer stop()
+
+	return e.deleteVault(opCtx, vaultName)
+}
+
+func (e *Engine) deleteVault(ctx context.Context, vaultName string) error {
 	// Reject deletion if a clone/merge job is actively writing into this vault
 	// (i.e., the vault is the Target of a running job). Deleting a vault that is
 	// a Source is allowed — the merge's own post-copy cleanup calls DeleteVault
@@ -123,7 +147,7 @@ func (e *Engine) DeleteVault(ctx context.Context, vaultName string) error {
 	// Capture ws BEFORE ClearVault evicts the in-memory name cache.
 	ws := e.store.VaultPrefix(vaultName)
 
-	if err := e.ClearVault(ctx, vaultName); err != nil {
+	if err := e.clearVault(ctx, vaultName); err != nil {
 		return fmt.Errorf("delete vault (clear phase): %w", err)
 	}
 
@@ -158,6 +182,11 @@ func (e *Engine) DeleteVault(ctx context.Context, vaultName string) error {
 // doesn't exist, ErrVaultJobActive if a clone/merge job targets the vault,
 // or an error if newName already exists.
 func (e *Engine) RenameVault(ctx context.Context, oldName, newName string) error {
+	if !e.beginVaultOp() {
+		return fmt.Errorf("engine is shutting down")
+	}
+	defer e.endVaultOp()
+
 	e.vaultOpsMu.Lock()
 	defer e.vaultOpsMu.Unlock()
 

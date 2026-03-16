@@ -171,6 +171,10 @@ func (ps *PebbleStore) UpsertEntityRecord(ctx context.Context, record EntityReco
 
 // GetEntityRecord reads a global entity record by name. Returns nil, nil if not found.
 func (ps *PebbleStore) GetEntityRecord(ctx context.Context, name string) (*EntityRecord, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	nameHash := keys.EntityNameHash(name)
 	key := keys.EntityKey(nameHash)
 	val, err := Get(ps.db, key)
@@ -466,6 +470,10 @@ func (ps *PebbleStore) ScanRelationships(ctx context.Context, ws [8]byte, fn fun
 	defer iter.Close()
 
 	for valid := iter.First(); valid; valid = iter.Next() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
 		val := iter.Value()
 		var rec RelationshipRecord
 		if err := msgpack.Unmarshal(val, &rec); err != nil {
@@ -474,6 +482,9 @@ func (ps *PebbleStore) ScanRelationships(ctx context.Context, ws [8]byte, fn fun
 		if err := fn(rec); err != nil {
 			return err
 		}
+	}
+	if err := iter.Error(); err != nil {
+		return fmt.Errorf("scan relationships: iter: %w", err)
 	}
 	return nil
 }

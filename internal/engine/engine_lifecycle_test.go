@@ -2,12 +2,14 @@ package engine
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"os"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/scrypster/muninndb/internal/engine/vaultjob"
 	"github.com/scrypster/muninndb/internal/transport/mbp"
@@ -35,6 +37,101 @@ func TestEngine_SpawnAfterStop(t *testing.T) {
 	}
 	if launched {
 		t.Error("spawnJob: goroutine was launched after Stop()")
+	}
+}
+
+// TestEngine_VaultOpsAfterStop verifies that synchronous vault-operation
+// entrypoints fail fast once Stop() begins rather than touching Pebble during
+// shutdown.
+func TestEngine_VaultOpsAfterStop(t *testing.T) {
+	eng, cleanup := testEnv(t)
+	defer cleanup()
+
+	eng.Stop()
+	ctx := context.Background()
+
+	tests := []struct {
+		name string
+		run  func() error
+	}{
+		{
+			name: "ClearVault",
+			run:  func() error { return eng.ClearVault(ctx, "stopped") },
+		},
+		{
+			name: "DeleteVault",
+			run:  func() error { return eng.DeleteVault(ctx, "stopped") },
+		},
+		{
+			name: "RenameVault",
+			run:  func() error { return eng.RenameVault(ctx, "old", "new") },
+		},
+		{
+			name: "ExportGraph",
+			run: func() error {
+				_, err := eng.ExportGraph(ctx, "stopped", true)
+				return err
+			},
+		},
+		{
+			name: "ExportVault",
+			run: func() error {
+				var buf bytes.Buffer
+				_, err := eng.ExportVault(ctx, "stopped", "model", 1536, false, &buf)
+				return err
+			},
+		},
+		{
+			name: "StartImport",
+			run: func() error {
+				_, err := eng.StartImport(ctx, "stopped", "model", 1536, false, strings.NewReader(""))
+				return err
+			},
+		},
+		{
+			name: "StartClone",
+			run: func() error {
+				_, err := eng.StartClone(ctx, "source", "target")
+				return err
+			},
+		},
+		{
+			name: "StartMerge",
+			run: func() error {
+				_, err := eng.StartMerge(ctx, "source", "target", false)
+				return err
+			},
+		},
+		{
+			name: "StartReembedVault",
+			run: func() error {
+				_, err := eng.StartReembedVault(ctx, "stopped", "model")
+				return err
+			},
+		},
+		{
+			name: "ReindexFTSVault",
+			run: func() error {
+				_, err := eng.ReindexFTSVault(ctx, "stopped")
+				return err
+			},
+		},
+		{
+			name: "PruneVault",
+			run: func() error {
+				_, err := eng.PruneVault(ctx, "stopped")
+				return err
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.run()
+			if err == nil || !strings.Contains(err.Error(), "engine is shutting down") {
+				t.Fatalf("err = %v, want engine is shutting down", err)
+			}
+		})
 	}
 }
 
@@ -100,11 +197,88 @@ func TestEngine_StopDrainsJobs(t *testing.T) {
 		}
 
 		// Trigger a clone job just before Stop. Either the job runs or
-		// spawnJob returns false — both are correct. Must not panic or hang.
+		// the setup path notices shutdown and returns "engine is shutting down" —
+		// both are correct. Must not panic or hang.
+		done := make(chan error, 1)
 		go func() {
-			eng.StartClone(ctx, src, src+"_clone")
+			_, err := eng.StartClone(ctx, src, src+"_clone")
+			done <- err
 		}()
 		cleanup()
+
+		select {
+		case err := <-done:
+			if err != nil && !strings.Contains(err.Error(), "engine is shutting down") {
+				t.Fatalf("unexpected StartClone error during shutdown: %v", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("StartClone did not return after engine shutdown")
+		}
+	}
+}
+
+// TestEngine_StopRacesVaultOps exercises the beginVaultOp admission path while
+// Stop is running, ensuring callers either complete or fail fast without
+// tripping WaitGroup misuse or hanging shutdown.
+func TestEngine_StopRacesVaultOps(t *testing.T) {
+	ctx := context.Background()
+	for i := range 20 {
+		eng, cleanup := testEnv(t)
+
+		sourceVault := fmt.Sprintf("race-source-%d", i)
+		targetVault := fmt.Sprintf("race-target-%d", i)
+		if _, err := eng.Write(ctx, &mbp.WriteRequest{
+			Vault:   sourceVault,
+			Concept: "race source",
+			Content: "source content",
+		}); err != nil {
+			cleanup()
+			t.Fatalf("Write source: %v", err)
+		}
+		if _, err := eng.Write(ctx, &mbp.WriteRequest{
+			Vault:   targetVault,
+			Concept: "race target",
+			Content: "target content",
+		}); err != nil {
+			cleanup()
+			t.Fatalf("Write target: %v", err)
+		}
+
+		start := make(chan struct{})
+		done := make(chan error, 4)
+		go func() {
+			<-start
+			done <- eng.ClearVault(ctx, sourceVault)
+		}()
+		go func() {
+			<-start
+			_, err := eng.ExportGraph(ctx, sourceVault, true)
+			done <- err
+		}()
+		go func() {
+			<-start
+			_, err := eng.StartClone(ctx, sourceVault, fmt.Sprintf("race-clone-%d", i))
+			done <- err
+		}()
+		go func() {
+			<-start
+			_, err := eng.StartMerge(ctx, sourceVault, targetVault, false)
+			done <- err
+		}()
+
+		close(start)
+		cleanup()
+
+		for range 4 {
+			select {
+			case err := <-done:
+				if err != nil && !strings.Contains(err.Error(), "engine is shutting down") {
+					t.Fatalf("unexpected vault-op error during shutdown: %v", err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("vault op did not return after engine shutdown")
+			}
+		}
 	}
 }
 

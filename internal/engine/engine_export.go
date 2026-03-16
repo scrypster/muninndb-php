@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -8,13 +9,20 @@ import (
 	"github.com/scrypster/muninndb/internal/engine/vaultjob"
 	"github.com/scrypster/muninndb/internal/metrics"
 	"github.com/scrypster/muninndb/internal/storage"
-	"golang.org/x/net/context"
 )
 
 // ExportVault synchronously exports the named vault to w as a .muninn archive.
 // Returns an ExportResult with engram count and total key count.
 // Returns ErrVaultNotFound if the vault does not exist.
 func (e *Engine) ExportVault(ctx context.Context, vaultName, embedderModel string, dimension int, resetMeta bool, w io.Writer) (*storage.ExportResult, error) {
+	if !e.beginVaultOp() {
+		return nil, fmt.Errorf("engine is shutting down")
+	}
+	defer e.endVaultOp()
+
+	opCtx, stop := e.vaultOpContext(ctx)
+	defer stop()
+
 	names, err := e.store.ListVaultNames()
 	if err != nil {
 		return nil, fmt.Errorf("export vault: list vaults: %w", err)
@@ -36,7 +44,7 @@ func (e *Engine) ExportVault(ctx context.Context, vaultName, embedderModel strin
 		Dimension:     dimension,
 		ResetMetadata: resetMeta,
 	}
-	result, err := e.store.ExportVaultData(ctx, ws, vaultName, opts, w)
+	result, err := e.store.ExportVaultData(opCtx, ws, vaultName, opts, w)
 	if err != nil {
 		return nil, fmt.Errorf("export vault %q: %w", vaultName, err)
 	}
@@ -48,6 +56,11 @@ func (e *Engine) ExportVault(ctx context.Context, vaultName, embedderModel strin
 // Returns the job immediately (202 pattern).
 // Returns an error if vaultName already exists.
 func (e *Engine) StartImport(ctx context.Context, vaultName, embedderModel string, dimension int, resetMeta bool, r io.Reader) (*vaultjob.Job, error) {
+	if !e.beginVaultOp() {
+		return nil, fmt.Errorf("engine is shutting down")
+	}
+	defer e.endVaultOp()
+
 	e.vaultOpsMu.Lock()
 
 	names, err := e.store.ListVaultNames()

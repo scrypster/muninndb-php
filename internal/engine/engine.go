@@ -43,13 +43,13 @@ type CognitiveForwarder interface {
 
 // Engine is the cognitive database engine implementing mbp.EngineAPI.
 type Engine struct {
-	store            *storage.PebbleStore
-	authStore        *auth.Store // nil = use Plasticity defaults (e.g. in tests)
-	fts              *fts.Index
-	ftsWorker        *fts.Worker  // async FTS indexing — decoupled from write hot path
-	activation       *activation.ActivationEngine
-	triggers         *trigger.TriggerSystem
-	engramCount      atomic.Int64
+	store       *storage.PebbleStore
+	authStore   *auth.Store // nil = use Plasticity defaults (e.g. in tests)
+	fts         *fts.Index
+	ftsWorker   *fts.Worker // async FTS indexing — decoupled from write hot path
+	activation  *activation.ActivationEngine
+	triggers    *trigger.TriggerSystem
+	engramCount atomic.Int64
 	// ──────────────────────────────────────────────────────────────────
 	// Cognitive Worker Subsystem
 	// ──────────────────────────────────────────────────────────────────
@@ -106,26 +106,26 @@ type Engine struct {
 	// code (or server.go in standalone) is responsible for calling
 	// hebbianWorker.Stop(), etc. before the process exits.
 	// ──────────────────────────────────────────────────────────────────
-	cogMu              sync.RWMutex
-	hebbianWorker      *cognitive.HebbianWorker
-	contradictWorker   *cognitive.Worker[cognitive.ContradictItem]
-	confidenceWorker   *cognitive.Worker[cognitive.ConfidenceUpdate]
-	transitionWorker   *cognitive.TransitionWorker
+	cogMu            sync.RWMutex
+	hebbianWorker    *cognitive.HebbianWorker
+	contradictWorker *cognitive.Worker[cognitive.ContradictItem]
+	confidenceWorker *cognitive.Worker[cognitive.ConfidenceUpdate]
+	transitionWorker *cognitive.TransitionWorker
 	activity         *cognitive.ActivityTracker
-	embedder activation.Embedder // optional embedder for embedding-based brief scoring
+	embedder         activation.Embedder // optional embedder for embedding-based brief scoring
 	// Feature subsystems (all optional, nil-safe)
-	autoAssoc      *autoassoc.Worker    // write-time automatic tag-based associations
-	neighborWorker *autoassoc.NeighborWorker // semantic neighbor auto-linking
-	goalLinkWorker *autoassoc.GoalLinkWorker  // goal-aware semantic auto-linking
-	noveltyDet           *novelty.Detector // write-time near-duplicate detection
-	noveltyJobs          chan noveltyJob    // async novelty work queue
-	noveltyDone          chan struct{}      // signals novelty worker shutdown
-	pruneDone            chan struct{}      // signals prune worker shutdown
-	idempotencySweepDone chan struct{}      // signals idempotency sweep worker shutdown
-	archiveGCDone        chan struct{}      // signals archive GC worker shutdown
-	coherence   *coherence.Registry // per-vault incremental coherence counters
-	scoring     *scoring.Store      // per-vault learnable scoring weights
-	prov        *provenance.Store   // audit trail per-engram
+	autoAssoc            *autoassoc.Worker         // write-time automatic tag-based associations
+	neighborWorker       *autoassoc.NeighborWorker // semantic neighbor auto-linking
+	goalLinkWorker       *autoassoc.GoalLinkWorker // goal-aware semantic auto-linking
+	noveltyDet           *novelty.Detector         // write-time near-duplicate detection
+	noveltyJobs          chan noveltyJob           // async novelty work queue
+	noveltyDone          chan struct{}             // signals novelty worker shutdown
+	pruneDone            chan struct{}             // signals prune worker shutdown
+	idempotencySweepDone chan struct{}             // signals idempotency sweep worker shutdown
+	archiveGCDone        chan struct{}             // signals archive GC worker shutdown
+	coherence            *coherence.Registry       // per-vault incremental coherence counters
+	scoring              *scoring.Store            // per-vault learnable scoring weights
+	prov                 *provenance.Store         // audit trail per-engram
 
 	// Fix 5: coherence persistence lifecycle
 	coherenceFlushStop chan struct{}
@@ -185,10 +185,10 @@ type Engine struct {
 	stopOnce sync.Once
 
 	// Vault lifecycle fields
-	vaultOpsMu   sync.Mutex     // guards name reservation in StartClone/StartMerge
-	jobManager   *vaultjob.Manager  // tracks async clone/merge jobs
-	stopCtx      context.Context    // cancelled on Stop() to signal goroutines
-	stopCancel   context.CancelFunc
+	vaultOpsMu sync.Mutex        // guards name reservation in StartClone/StartMerge
+	jobManager *vaultjob.Manager // tracks async clone/merge jobs
+	stopCtx    context.Context   // cancelled on Stop() to signal goroutines
+	stopCancel context.CancelFunc
 
 	// Goroutine lifecycle tracking — see spawnFireAndForget and spawnJob.
 	// Per-request fire-and-forget goroutines (Read, RecordAccess).
@@ -197,8 +197,16 @@ type Engine struct {
 	// Long-running vault job goroutines (clone, merge, reembed, import).
 	jobWG      sync.WaitGroup
 	jobStopped atomic.Bool
+	// Synchronous vault-operation entrypoints (clone/import/export setup, vault
+	// maintenance, graph export, pruning) can still touch Pebble before they hand
+	// work off to a tracked background goroutine, or without spawning one at all.
+	// Fence and drain them separately so Stop() does not return while one of
+	// these direct Pebble-touching paths is still racing DB teardown.
+	vaultOpMu      sync.RWMutex
+	vaultOpWG      sync.WaitGroup
+	vaultOpStopped atomic.Bool
 
-	hnswRegistry *hnsw.Registry     // per-vault HNSW indexes (shared with activation)
+	hnswRegistry *hnsw.Registry // per-vault HNSW indexes (shared with activation)
 
 	// vaultMu provides per-vault mutual exclusion for destructive vault operations
 	// (PruneVault, ReindexFTSVault, ClearVault). Maps string vault name → *sync.Mutex.
@@ -462,6 +470,9 @@ func (e *Engine) Stop() {
 		// so goroutines see a cancelled context, and before wg.Wait() calls below.
 		e.fireAndForgetStopped.Store(true)
 		e.jobStopped.Store(true)
+		e.vaultOpMu.Lock()
+		e.vaultOpStopped.Store(true)
+		e.vaultOpMu.Unlock()
 
 		if e.autoAssoc != nil {
 			e.autoAssoc.Stop()
@@ -509,6 +520,17 @@ func (e *Engine) Stop() {
 			case <-time.After(5 * time.Second):
 				slog.Warn("engine: coherence flush worker did not exit within 5s")
 			}
+		}
+		// Drain synchronous vault-operation setup paths before waiting on jobWG or
+		// closing the job manager. These entrypoints can still create/fail jobs and
+		// touch Pebble while Stop() is in progress.
+		vaultOpDone := make(chan struct{})
+		// engine:spawn-ok — local inline drain helper; closes vaultOpDone after vaultOpWG drains
+		go func() { e.vaultOpWG.Wait(); close(vaultOpDone) }()
+		select {
+		case <-vaultOpDone:
+		case <-time.After(30 * time.Second):
+			slog.Warn("engine: vault operation setup paths did not drain within 30s")
 		}
 		// Drain job goroutines BEFORE closing the job manager. Job goroutines
 		// call jobManager.Fail() / jobManager.Complete() — closing the manager
@@ -568,9 +590,9 @@ func (e *Engine) Stop() {
 //
 // MUST be used instead of bare `go` for all per-request goroutines.
 func (e *Engine) spawnFireAndForget(fn func()) bool {
-	e.fireAndForgetWG.Add(1)            // Add FIRST — visible to wg.Wait() in Stop()
+	e.fireAndForgetWG.Add(1) // Add FIRST — visible to wg.Wait() in Stop()
 	if e.fireAndForgetStopped.Load() {
-		e.fireAndForgetWG.Done()         // Undo — engine is shutting down
+		e.fireAndForgetWG.Done() // Undo — engine is shutting down
 		return false
 	}
 	// engine:spawn-ok — tracked by fireAndForgetWG, drained in Stop() before store.Close()
@@ -587,9 +609,9 @@ func (e *Engine) spawnFireAndForget(fn func()) bool {
 //
 // MUST be used instead of bare `go` for all vault job goroutines.
 func (e *Engine) spawnJob(fn func()) bool {
-	e.jobWG.Add(1)                      // Add FIRST — visible to wg.Wait() in Stop()
+	e.jobWG.Add(1) // Add FIRST — visible to wg.Wait() in Stop()
 	if e.jobStopped.Load() {
-		e.jobWG.Done()                   // Undo — engine is shutting down
+		e.jobWG.Done() // Undo — engine is shutting down
 		return false
 	}
 	// engine:spawn-ok — tracked by jobWG, drained in Stop() before jobManager.Close()
@@ -598,6 +620,47 @@ func (e *Engine) spawnJob(fn func()) bool {
 		fn()
 	}()
 	return true
+}
+
+// beginVaultOp tracks synchronous vault-operation setup work that can still
+// touch Pebble before handing off to a tracked background job. Returns false if
+// the engine is shutting down and the caller should fail fast.
+func (e *Engine) beginVaultOp() bool {
+	e.vaultOpMu.RLock()
+	if e.vaultOpStopped.Load() || (e.stopCtx != nil && e.stopCtx.Err() != nil) {
+		e.vaultOpMu.RUnlock()
+		return false
+	}
+	e.vaultOpWG.Add(1)
+	e.vaultOpMu.RUnlock()
+	return true
+}
+
+func (e *Engine) endVaultOp() {
+	e.vaultOpWG.Done()
+}
+
+// vaultOpContext returns a context that is cancelled when either the caller's
+// context is done or the engine begins shutting down. Long-running synchronous
+// vault operations should use this so Stop() can actively interrupt them rather
+// than only waiting for the fixed vaultOpWG drain timeout.
+func (e *Engine) vaultOpContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		if e.stopCtx != nil {
+			return e.stopCtx, func() {}
+		}
+		return context.Background(), func() {}
+	}
+	if e.stopCtx == nil || ctx == e.stopCtx {
+		return ctx, func() {}
+	}
+
+	opCtx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(e.stopCtx, cancel)
+	return opCtx, func() {
+		stop()
+		cancel()
+	}
 }
 
 // SetCoordinator wires the Lobe's ClusterCoordinator so Activate() can forward
@@ -1006,7 +1069,6 @@ func (e *Engine) Write(ctx context.Context, req *mbp.WriteRequest) (*mbp.WriteRe
 		})
 	}
 
-
 	// Write-time semantic neighbor linking: find semantically similar engrams via HNSW.
 	if e.neighborWorker != nil && len(eng.Embedding) > 0 {
 		e.neighborWorker.EnqueueNeighborJob(autoassoc.NeighborJob{
@@ -1070,15 +1132,15 @@ var ErrBatchTooLarge = fmt.Errorf("batch size exceeds maximum of %d", MaxBatchSi
 // the prepared engram plus post-commit metadata. This avoids re-deriving
 // vault prefixes and enrichment fields after the batch commits.
 type preparedBatchItem struct {
-	wsPrefix                [8]byte
-	vaultName               string
-	eng                     *storage.Engram
-	inlineMode              string
-	callerSummary           string
-	callerEntities          []mbp.InlineEntity
-	callerRelationships     []mbp.InlineRelationship
+	wsPrefix                  [8]byte
+	vaultName                 string
+	eng                       *storage.Engram
+	inlineMode                string
+	callerSummary             string
+	callerEntities            []mbp.InlineEntity
+	callerRelationships       []mbp.InlineRelationship
 	callerEntityRelationships []mbp.InlineEntityRelationship
-	skipBackgroundEnrich    bool
+	skipBackgroundEnrich      bool
 }
 
 // WriteBatch writes multiple engrams in a single Pebble batch commit, then
@@ -2615,6 +2677,14 @@ func (e *Engine) ResolveVaultPlasticity(vaultName string) auth.ResolvedPlasticit
 // persist in the relevance bucket index and cause an infinite prune loop.
 // Returns the number of engrams pruned.
 func (e *Engine) PruneVault(ctx context.Context, vaultName string) (int64, error) {
+	if !e.beginVaultOp() {
+		return 0, fmt.Errorf("engine is shutting down")
+	}
+	defer e.endVaultOp()
+
+	opCtx, stop := e.vaultOpContext(ctx)
+	defer stop()
+
 	mu := e.getVaultMutex(vaultName)
 	mu.Lock()
 	defer mu.Unlock()
@@ -2627,7 +2697,7 @@ func (e *Engine) PruneVault(ctx context.Context, vaultName string) (int64, error
 	// MaxEngrams: two-phase prune — use stale relevance index as pre-filter, then
 	// re-rank candidates by real ACT-R base-level score to delete the worst engrams.
 	if resolved.MaxEngrams > 0 {
-		count := e.store.GetVaultCount(ctx, ws)
+		count := e.store.GetVaultCount(opCtx, ws)
 		excess := count - int64(resolved.MaxEngrams)
 		if excess > 0 {
 			// Phase 1: fetch heuristic candidates from the relevance bucket index.
@@ -2635,7 +2705,7 @@ func (e *Engine) PruneVault(ctx context.Context, vaultName string) (int64, error
 			topK := int(excess) * 2
 			var candidates []storage.ULID
 			for attempt := 0; attempt < 2; attempt++ {
-				ids, err := e.store.LowestRelevanceIDs(ctx, ws, topK)
+				ids, err := e.store.LowestRelevanceIDs(opCtx, ws, topK)
 				if err != nil {
 					return pruned, fmt.Errorf("prune vault %s (max_engrams scan): %w", vaultName, err)
 				}
@@ -2658,7 +2728,7 @@ func (e *Engine) PruneVault(ctx context.Context, vaultName string) (int64, error
 			scored := make([]scoredCandidate, 0, len(candidates))
 
 			if len(candidates) > 0 {
-				metas, err := e.store.GetMetadata(ctx, ws, candidates)
+				metas, err := e.store.GetMetadata(opCtx, ws, candidates)
 				if err != nil {
 					// Fall back: delete candidates in index order without rescoring.
 					metas = nil
@@ -2690,7 +2760,7 @@ func (e *Engine) PruneVault(ctx context.Context, vaultName string) (int64, error
 			}
 			for i := 0; i < toDelete; i++ {
 				id := scored[i].id
-				if err := e.store.DeleteEngram(ctx, ws, id); err != nil {
+				if err := e.store.DeleteEngram(opCtx, ws, id); err != nil {
 					slog.Debug("prune vault: hard-delete failed", "vault", vaultName, "id", id, "err", err)
 					continue
 				}
@@ -2716,12 +2786,12 @@ func (e *Engine) PruneVault(ctx context.Context, vaultName string) (int64, error
 		// EngramIDsByCreatedRange with epoch→cutoff returns IDs of old engrams.
 		const retentionBatchSize = 500
 		epoch := time.Unix(0, 0)
-		ids, err := e.store.EngramIDsByCreatedRange(ctx, ws, epoch, cutoff, retentionBatchSize)
+		ids, err := e.store.EngramIDsByCreatedRange(opCtx, ws, epoch, cutoff, retentionBatchSize)
 		if err != nil {
 			return pruned, fmt.Errorf("prune vault %s (retention scan): %w", vaultName, err)
 		}
 		for _, id := range ids {
-			if err := e.store.DeleteEngram(ctx, ws, id); err != nil {
+			if err := e.store.DeleteEngram(opCtx, ws, id); err != nil {
 				slog.Debug("prune vault: retention hard-delete failed", "vault", vaultName, "id", id, "err", err)
 				continue
 			}
@@ -2964,4 +3034,3 @@ func (e *Engine) RecordFeedback(ctx context.Context, vault, engramID string, use
 	})
 	return nil
 }
-

@@ -324,7 +324,6 @@ func (ps *PebbleStore) ListByCreatorInRange(ctx context.Context, wsPrefix [8]byt
 	return ids, nil
 }
 
-
 // EngramIDsByCreatedRange returns engram IDs created between since and until,
 // ordered by creation time (ULID order). Returns at most limit IDs.
 // This is used for time-bounded candidate injection in the activation pipeline
@@ -366,6 +365,10 @@ func (ps *PebbleStore) EngramIDsByCreatedRange(ctx context.Context, wsPrefix [8]
 
 	var ids []ULID
 	for valid := iter.First(); valid && len(ids) < limit; valid = iter.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
 		key := iter.Key()
 		if len(key) < 25 { // 1 prefix + 8 ws + 16 ulid
 			continue
@@ -548,6 +551,10 @@ func (ps *PebbleStore) LowestRelevanceIDs(ctx context.Context, wsPrefix [8]byte,
 	var ids []ULID
 	seen := make(map[ULID]struct{})
 	for valid := iter.Last(); valid && len(ids) < topK; valid = iter.Prev() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
 		key := iter.Key()
 		// Key format: 0x10 | wsPrefix(8) | storedBucket(1) | id(16) = 26 bytes
 		if len(key) < 26 {
@@ -559,6 +566,9 @@ func (ps *PebbleStore) LowestRelevanceIDs(ctx context.Context, wsPrefix [8]byte,
 			seen[id] = struct{}{}
 			ids = append(ids, id)
 		}
+	}
+	if err := iter.Error(); err != nil {
+		return nil, fmt.Errorf("lowest relevance iter scan: %w", err)
 	}
 	return ids, nil
 }

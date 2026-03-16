@@ -12,9 +12,9 @@ import (
 // Streamer streams replication log entries to a replica over a channel.
 // Used by the primary to push entries to connected replicas.
 type Streamer struct {
-	log         *ReplicationLog
-	entries     chan ReplicationEntry
-	done        chan struct{}
+	log          *ReplicationLog
+	entries      chan ReplicationEntry
+	done         chan struct{}
 	pollInterval time.Duration
 }
 
@@ -115,16 +115,24 @@ func (s *NetworkStreamer) Stream(ctx context.Context) error {
 	notify, unsub := s.log.Subscribe()
 	defer unsub()
 
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-notify:
+	drainAvailable := func() error {
+		for {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+
 			entries, err := s.log.ReadSince(s.lastSeq, 1000)
 			if err != nil {
 				return err
 			}
+			if len(entries) == 0 {
+				return nil
+			}
 			for _, entry := range entries {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+
 				payload, err := msgpack.Marshal(mbp.ReplEntry{
 					Seq:         entry.Seq,
 					Op:          uint8(entry.Op),
@@ -139,6 +147,23 @@ func (s *NetworkStreamer) Stream(ctx context.Context) error {
 					return err
 				}
 				s.lastSeq = entry.Seq
+			}
+		}
+	}
+
+	// Catch up immediately after subscribing so entries already present in the
+	// log are streamed even if no new append arrives to trigger a notification.
+	if err := drainAvailable(); err != nil {
+		return err
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-notify:
+			if err := drainAvailable(); err != nil {
+				return err
 			}
 		}
 	}

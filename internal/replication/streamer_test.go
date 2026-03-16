@@ -2,6 +2,7 @@ package replication
 
 import (
 	"context"
+	"io"
 	"net"
 	"testing"
 	"time"
@@ -10,6 +11,63 @@ import (
 	"github.com/scrypster/muninndb/internal/transport/mbp"
 	"github.com/vmihailenco/msgpack/v5"
 )
+
+type blockingWriteConn struct {
+	firstWriteStarted chan struct{}
+	releaseFirstWrite chan struct{}
+	secondWrite       chan struct{}
+	closed            chan struct{}
+}
+
+func newBlockingWriteConn() *blockingWriteConn {
+	return &blockingWriteConn{
+		firstWriteStarted: make(chan struct{}),
+		releaseFirstWrite: make(chan struct{}),
+		secondWrite:       make(chan struct{}, 1),
+		closed:            make(chan struct{}),
+	}
+}
+
+func (c *blockingWriteConn) Read(_ []byte) (int, error)         { <-c.closed; return 0, io.EOF }
+func (c *blockingWriteConn) LocalAddr() net.Addr                { return dummyAddr("local") }
+func (c *blockingWriteConn) RemoteAddr() net.Addr               { return dummyAddr("remote") }
+func (c *blockingWriteConn) SetDeadline(_ time.Time) error      { return nil }
+func (c *blockingWriteConn) SetReadDeadline(_ time.Time) error  { return nil }
+func (c *blockingWriteConn) SetWriteDeadline(_ time.Time) error { return nil }
+func (c *blockingWriteConn) Close() error {
+	select {
+	case <-c.closed:
+	default:
+		close(c.closed)
+	}
+	return nil
+}
+
+func (c *blockingWriteConn) Write(p []byte) (int, error) {
+	select {
+	case <-c.firstWriteStarted:
+		select {
+		case c.secondWrite <- struct{}{}:
+		default:
+		}
+		<-c.closed
+		return 0, net.ErrClosed
+	default:
+		close(c.firstWriteStarted)
+		<-c.releaseFirstWrite
+		select {
+		case <-c.closed:
+			return 0, net.ErrClosed
+		default:
+			return len(p), nil
+		}
+	}
+}
+
+type dummyAddr string
+
+func (a dummyAddr) Network() string { return "test" }
+func (a dummyAddr) String() string  { return string(a) }
 
 // newTestLog opens a temporary Pebble database and returns a ReplicationLog
 // backed by it. The caller owns cleanup via t.Cleanup.
@@ -105,7 +163,8 @@ func TestNetworkStreamer_PushLatency(t *testing.T) {
 	defer cancel()
 
 	ns := NewNetworkStreamer(log, pc, 0)
-	go ns.Stream(ctx) //nolint:errcheck
+	streamErr := make(chan error, 1)
+	go func() { streamErr <- ns.Stream(ctx) }()
 
 	// Append one entry and measure how long until the frame arrives.
 	start := time.Now()
@@ -126,6 +185,9 @@ func TestNetworkStreamer_PushLatency(t *testing.T) {
 	t.Logf("push latency = %v (includes Pebble fsync)", elapsed)
 
 	cancel()
+	if err := <-streamErr; err != nil && err != context.Canceled {
+		t.Fatalf("Stream returned %v, want nil/context.Canceled", err)
+	}
 }
 
 // TestNetworkStreamer_ResumeFromSeq verifies that starting a streamer at
@@ -167,6 +229,39 @@ func TestNetworkStreamer_ResumeFromSeq(t *testing.T) {
 	<-streamErr
 }
 
+// TestNetworkStreamer_CatchesUpExistingEntries verifies that the network
+// streamer sends entries that were already present in the replication log when
+// the streamer starts, without requiring a fresh append notification.
+func TestNetworkStreamer_CatchesUpExistingEntries(t *testing.T) {
+	log := newTestLog(t)
+
+	for i := 0; i < 3; i++ {
+		if _, err := log.Append(OpSet, []byte("existing"), []byte("v")); err != nil {
+			t.Fatalf("Append %d: %v", i, err)
+		}
+	}
+
+	pc, server := pipeConn(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	ns := NewNetworkStreamer(log, pc, 0)
+	streamErr := make(chan error, 1)
+	go func() { streamErr <- ns.Stream(ctx) }()
+
+	for want := uint64(1); want <= 3; want++ {
+		entry := readReplEntry(t, server)
+		if entry.Seq != want {
+			t.Errorf("seq = %d, want %d", entry.Seq, want)
+		}
+	}
+
+	cancel()
+	if err := <-streamErr; err != nil && err != context.Canceled && err != context.DeadlineExceeded {
+		t.Fatalf("Stream returned unexpected error: %v", err)
+	}
+}
+
 // TestNetworkStreamer_ContextCancel verifies that Stream() returns promptly
 // when the context is cancelled.
 func TestNetworkStreamer_ContextCancel(t *testing.T) {
@@ -188,6 +283,50 @@ func TestNetworkStreamer_ContextCancel(t *testing.T) {
 		}
 	case <-time.After(500 * time.Millisecond):
 		t.Error("Stream did not return within 500ms after cancel")
+	}
+}
+
+// TestNetworkStreamer_CancelDuringCatchup verifies that cancellation stops the
+// initial backlog drain before a second send is attempted.
+func TestNetworkStreamer_CancelDuringCatchup(t *testing.T) {
+	log := newTestLog(t)
+	for i := 0; i < 3; i++ {
+		if _, err := log.Append(OpSet, []byte("existing"), []byte("v")); err != nil {
+			t.Fatalf("Append %d: %v", i, err)
+		}
+	}
+
+	conn := newBlockingWriteConn()
+	pc := &PeerConn{nodeID: "test-peer", addr: "blocking", conn: conn}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ns := NewNetworkStreamer(log, pc, 0)
+	streamErr := make(chan error, 1)
+	go func() { streamErr <- ns.Stream(ctx) }()
+
+	select {
+	case <-conn.firstWriteStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first catchup send did not start")
+	}
+
+	cancel()
+	close(conn.releaseFirstWrite)
+
+	select {
+	case err := <-streamErr:
+		if err != context.Canceled {
+			t.Fatalf("Stream returned %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stream did not return after cancel during catchup")
+	}
+
+	select {
+	case <-conn.secondWrite:
+		t.Fatal("stream attempted a second backlog send after cancellation")
+	default:
 	}
 }
 

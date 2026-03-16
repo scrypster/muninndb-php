@@ -2,7 +2,6 @@ package engine
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"testing"
 
@@ -440,10 +439,9 @@ func TestEngineRenameVault_VaultMuMoved(t *testing.T) {
 	}
 }
 
-// TestEngineRenameVault_ClosedDB verifies that RenameVault fails when the
-// underlying Pebble DB is closed. Pebble panics with ErrClosed rather than
-// returning an error, so we recover and verify the panic value.
-func TestEngineRenameVault_ClosedDB(t *testing.T) {
+// TestEngineRenameVault_AfterStop verifies that RenameVault fails fast once the
+// engine is shutting down, even if Pebble has already been closed underneath it.
+func TestEngineRenameVault_AfterStop(t *testing.T) {
 	eng, cleanup := testEnv(t)
 	defer cleanup() // safe — PebbleStore.Close is idempotent via sync.Once
 	ctx := context.Background()
@@ -456,29 +454,13 @@ func TestEngineRenameVault_ClosedDB(t *testing.T) {
 
 	// Stop background workers first to avoid panics from closed DB.
 	eng.Stop()
-	// Close the underlying Pebble DB so that ListVaultNames will fail.
+	// Close the underlying Pebble DB after Stop() to simulate teardown. The
+	// shutdown guard should fail fast before the code touches Pebble again.
 	eng.store.Close()
 
-	// Pebble panics (rather than returning an error) when the DB is closed,
-	// so we recover the panic and verify it contains the expected message.
-	var panicked bool
-	var panicVal any
-	func() {
-		defer func() {
-			if r := recover(); r != nil {
-				panicked = true
-				panicVal = r
-			}
-		}()
-		eng.RenameVault(ctx, "db-close-vault", "new-vault")
-	}()
-
-	if !panicked {
-		t.Fatal("expected panic on closed DB, but RenameVault returned normally")
-	}
-	msg := fmt.Sprintf("%v", panicVal)
-	if !strings.Contains(msg, "closed") {
-		t.Errorf("expected panic message containing 'closed', got: %v", panicVal)
+	err := eng.RenameVault(ctx, "db-close-vault", "new-vault")
+	if err == nil || !strings.Contains(err.Error(), "engine is shutting down") {
+		t.Fatalf("err = %v, want engine is shutting down", err)
 	}
 }
 

@@ -27,6 +27,8 @@ func TestIsClosedPanic(t *testing.T) {
 		{"record closed LogWriter", "pebble/record: closed LogWriter", true},
 		// String path — partial match within longer message.
 		{"pebble/record prefix only", "pebble/record: closed", true},
+		// Error path — record package LogWriter teardown as an error value.
+		{"record closed LogWriter error", errors.New("pebble/record: closed LogWriter"), true},
 		// Unrelated error — must not be swallowed.
 		{"unrelated error", errors.New("some other error"), false},
 		// Unrelated string — must not be swallowed.
