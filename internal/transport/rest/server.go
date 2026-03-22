@@ -245,7 +245,7 @@ func NewServer(addr string, engine EngineAPI, authStore *auth.Store, sessionSecr
 	mux.HandleFunc("GET /api/admin/vaults/{name}/job-status", s.withAdminMiddleware(s.handleVaultJobStatus))
 	mux.HandleFunc("GET /api/admin/vaults/{name}/export", s.withAdminMiddleware(s.handleExportVault))
 	mux.HandleFunc("GET /api/admin/vaults/{name}/export-markdown", s.withAdminMiddleware(s.handleExportVaultMarkdown))
-	mux.HandleFunc("POST /api/admin/vaults/import", s.withAdminMiddleware(s.withLargeBody(s.handleImportVault)))
+	mux.HandleFunc("POST /api/admin/vaults/import", s.withAdminMiddlewareNoSizeLimit(s.withLargeBody(s.handleImportVault)))
 	mux.HandleFunc("POST /api/admin/vaults/{name}/reindex-fts", s.withAdminMiddleware(s.handleReindexFTSVault))
 	mux.HandleFunc("POST /api/admin/vaults/{name}/reembed", s.withAdminMiddleware(s.handleReembedVault))
 	mux.HandleFunc("POST /api/admin/vaults/{name}/rename", s.withAdminMiddleware(s.handleRenameVault))
@@ -523,6 +523,16 @@ func (s *Server) withAdminMiddleware(handler http.HandlerFunc) http.HandlerFunc 
 		return s.withPublicMiddleware(s.bodySizeMiddleware(handler))
 	}
 	return s.withPublicMiddleware(s.bodySizeMiddleware(s.authStore.AdminAPIMiddleware(s.sessionSecret, handler)))
+}
+
+// withAdminMiddlewareNoSizeLimit is like withAdminMiddleware but omits the
+// default 4 MB body cap. Use this for routes that apply their own body limit
+// (e.g. withLargeBody) so the two MaxBytesReader wrappers don't compound.
+func (s *Server) withAdminMiddlewareNoSizeLimit(handler http.HandlerFunc) http.HandlerFunc {
+	if s.authStore == nil || len(s.sessionSecret) == 0 {
+		return s.withPublicMiddleware(handler)
+	}
+	return s.withPublicMiddleware(s.authStore.AdminAPIMiddleware(s.sessionSecret, handler))
 }
 
 // bodySizeMiddleware limits request bodies to 4 MB to prevent resource exhaustion.

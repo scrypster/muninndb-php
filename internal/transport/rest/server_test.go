@@ -194,6 +194,10 @@ func (m *MockEngine) ExportVault(ctx context.Context, vaultName, embedderModel s
 	return &storage.ExportResult{EngramCount: 0, TotalKeys: 0}, nil
 }
 func (m *MockEngine) StartImport(ctx context.Context, vaultName, embedderModel string, dimension int, resetMeta bool, r io.Reader) (*vaultjob.Job, error) {
+	// Drain the reader in a goroutine, mirroring the real engine's spawnJob
+	// behaviour. Without this, the handler's io.Copy(pw, r.Body) will block
+	// indefinitely waiting for a concurrent reader on the pipe.
+	go io.Copy(io.Discard, r) //nolint:errcheck
 	return &vaultjob.Job{ID: "mock-import-job", Operation: "import", Target: vaultName}, nil
 }
 
